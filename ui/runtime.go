@@ -1,0 +1,269 @@
+package ui
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	lua "github.com/yuin/gopher-lua"
+)
+
+// ScriptError records one Lua load or runtime failure with the chunk name it
+// occurred in, mirroring what the original client writes to its glue log.
+type ScriptError struct {
+	Source  string
+	Message string
+}
+
+func (e ScriptError) Error() string { return e.Source + ": " + e.Message }
+
+// Runtime owns the Lua state, widget registry, virtual template registry,
+// cvar store, and glue event dispatch for one interface session.
+type Runtime struct {
+	L *lua.LState
+
+	widgets      map[string]*widget
+	virtuals     map[string]*xmlNode
+	fonts        map[string]*Font
+	events       map[string][]*widget
+	cvars        map[string]string
+	cvarDefaults map[string]string
+	scriptErrors []ScriptError
+	chunkSource  string
+	nested       int
+
+	// Glue carries the connection-flow state surfaced by the realm and
+	// character list API functions.
+	Glue GlueState
+
+	// Host hooks supply client state that lives outside the interface
+	// runtime: screen size, audio, login actions, realm and character
+	// data. Nil hooks behave as an idle, unconnected client.
+	Host Host
+
+	// ScriptBudget bounds each script execution. The original client
+	// aborts runaway scripts through a Lua debug hook; this runtime uses
+	// the VM's context deadline as the equivalent guard.
+	ScriptBudget time.Duration
+}
+
+// Host is implemented by the client shell to back glue API functions that
+// touch audio, the platform, or connection state.
+type Host interface {
+	ScreenSize() (width, height float64)
+	PlaySound(id string)
+	PlayMusic(name string)
+	PlayAmbience(name string)
+	StopMusic()
+	StopAmbience()
+	StopAllSFX()
+	LaunchURL(url string)
+	Quit(runLauncher bool)
+	ConsoleExec(command string)
+	Screenshot()
+}
+
+// Font is a named font object created from a <Font> element.
+type Font struct {
+	Name     string
+	FontFile string
+	Height   float64
+	Color    color
+	Outline  string
+	Shadow   bool
+}
+
+// NewRuntime creates the Lua state and registers the glue API and widget
+// method tables. Callers must Close it when done.
+func NewRuntime(host Host) *Runtime {
+	rt := &Runtime{
+		L:            lua.NewState(lua.Options{SkipOpenLibs: false}),
+		widgets:      make(map[string]*widget),
+		virtuals:     make(map[string]*xmlNode),
+		fonts:        make(map[string]*Font),
+		events:       make(map[string][]*widget),
+		cvars:        make(map[string]string),
+		cvarDefaults: make(map[string]string),
+		Host:         host,
+		ScriptBudget: 10 * time.Second,
+	}
+	registerWidgetMethods(rt.L, rt)
+	registerGlueAPI(rt)
+	registerStringHelpers(rt.L)
+	return rt
+}
+
+// Close releases the Lua state.
+func (rt *Runtime) Close() { rt.L.Close() }
+
+// ScriptErrors returns the script failures recorded so far.
+func (rt *Runtime) ScriptErrors() []ScriptError { return rt.scriptErrors }
+
+func (rt *Runtime) recordScriptError(source, message string) {
+	rt.scriptErrors = append(rt.scriptErrors, ScriptError{Source: source, Message: message})
+}
+
+// lookup returns a registered widget by name (getglobal equivalent backing).
+func (rt *Runtime) lookup(name string) *widget { return rt.widgets[name] }
+
+func (rt *Runtime) register(w *widget) {
+	if w.name != "" {
+		rt.widgets[w.name] = w
+		if w.luaObj == nil {
+			rt.L.SetGlobal(w.name, w.luaValue(rt.L))
+		} else {
+			rt.L.SetGlobal(w.name, w.luaObj)
+		}
+	}
+}
+
+// Execute runs Lua source with the given chunk name, recording errors the
+// way the original client logs them. Inline XML bodies pass their enclosing
+// file as the chunk source for error attribution.
+func (rt *Runtime) Execute(source, chunkName string) bool {
+	rt.nested++
+	outer := rt.chunkSource
+	if rt.nested == 1 {
+		rt.chunkSource = chunkName
+	}
+	if err := rt.doChunk(source, chunkName); err != nil {
+		rt.recordScriptError(chunkName, err.Error())
+		rt.nested--
+		rt.chunkSource = outer
+		return false
+	}
+	rt.nested--
+	if rt.nested == 0 {
+		rt.chunkSource = outer
+	}
+	return true
+}
+
+func (rt *Runtime) doChunk(source, chunkName string) error {
+	if rt.ScriptBudget > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), rt.ScriptBudget)
+		defer cancel()
+		rt.L.SetContext(ctx)
+		defer rt.L.SetContext(nil)
+	}
+	fn, err := rt.L.LoadString(source)
+	if err != nil {
+		return err
+	}
+	rt.L.Push(fn)
+	if err := rt.L.PCall(0, lua.MultRet, rt.errorHandler()); err != nil {
+		return err
+	}
+	return nil
+}
+
+// errorHandler builds the function the runtime installs for pcall, matching
+// the original client's registry error handler that reports source and line.
+func (rt *Runtime) errorHandler() *lua.LFunction {
+	return rt.L.NewFunction(func(L *lua.LState) int {
+		msg := L.Get(1)
+		source := rt.chunkSource
+		if source == "" {
+			source = "?"
+		}
+		L.Push(lua.LString(source + ": " + msg.String()))
+		return 1
+	})
+}
+
+// doFileBody executes file content with the file-chunk convention:
+// the chunk name is "@" plus the interface path, so error positions carry
+// the file they came from.
+func (rt *Runtime) doFileBody(source, interfacePath string) bool {
+	chunk := "@" + interfacePath
+	return rt.Execute(source, chunk)
+}
+
+// fireHandler invokes a widget script handler if set, with only the widget
+// argument (used for OnShow/OnHide style handlers).
+func (rt *Runtime) fireHandler(w *widget, handler string) {
+	if fn, ok := w.scripts[handler]; ok {
+		rt.L.Push(fn)
+		rt.L.Push(w.luaValue(rt.L))
+		if err := rt.L.PCall(1, 0, nil); err != nil {
+			rt.recordScriptError(w.name+"/"+handler, err.Error())
+		}
+	}
+}
+
+// fire invokes a widget handler with explicit arguments.
+func (rt *Runtime) fire(w *widget, handler string, args []lua.LValue) {
+	fn, ok := w.scripts[handler]
+	if !ok {
+		return
+	}
+	rt.L.Push(fn)
+	for _, a := range args {
+		rt.L.Push(a)
+	}
+	if err := rt.L.PCall(len(args), 0, nil); err != nil {
+		rt.recordScriptError(w.name+"/"+handler, err.Error())
+	}
+}
+
+// registerEventWidget subscribes a widget to a glue event by name.
+func (rt *Runtime) registerEventWidget(event string, w *widget) {
+	w.events[event] = true
+	for _, existing := range rt.events[event] {
+		if existing == w {
+			return
+		}
+	}
+	rt.events[event] = append(rt.events[event], w)
+}
+
+func (rt *Runtime) unregisterEventWidget(event string, w *widget) {
+	delete(w.events, event)
+	kept := rt.events[event][:0]
+	for _, existing := range rt.events[event] {
+		if existing != w {
+			kept = append(kept, existing)
+		}
+	}
+	rt.events[event] = kept
+}
+
+// FireEvent dispatches a glue event to every subscribed widget, passing the
+// event name and payload after the widget argument, matching the OnEvent
+// calling convention the interface scripts expect.
+func (rt *Runtime) FireEvent(event string, payload ...lua.LValue) int {
+	count := 0
+	for _, w := range append([]*widget(nil), rt.events[event]...) {
+		args := make([]lua.LValue, 0, len(payload)+2)
+		args = append(args, w.luaValue(rt.L), lua.LString(event))
+		args = append(args, payload...)
+		rt.fire(w, "OnEvent", args)
+		count++
+	}
+	return count
+}
+
+// GetCVar reads a cvar through the same case-insensitive lookup the client
+// uses for console variables.
+func (rt *Runtime) GetCVar(name string) (string, bool) {
+	v, ok := rt.cvars[strings.ToLower(name)]
+	return v, ok
+}
+
+func (rt *Runtime) SetCVar(name, value string) {
+	rt.cvars[strings.ToLower(name)] = value
+}
+
+// SetCVarDefault registers the default value returned by GetCVarDefault.
+func (rt *Runtime) SetCVarDefault(name, value string) {
+	rt.cvarDefaults[strings.ToLower(name)] = value
+}
+
+var _ = fmt.Sprintf
+
+// sprintf formats using the Lua string.format-compatible subset of Go
+// verbs used by the interface scripts (%s, %d, %f, and %.Nf).
+func sprintf(format string, args []interface{}) string {
+	return fmt.Sprintf(format, args...)
+}

@@ -1,0 +1,682 @@
+package ui
+
+import (
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	lua "github.com/yuin/gopher-lua"
+)
+
+// Loader reads interface files from a directory tree laid out like the
+// client's Interface data (Interface\GlueXML\...). File lookups are
+// case-insensitive with forward or back slashes, matching the client's
+// MPQ-backed path handling.
+type Loader struct {
+	Root string
+	rt   *Runtime
+}
+
+// NewLoader creates a loader rooted at the given data directory.
+func NewLoader(root string, rt *Runtime) *Loader {
+	return &Loader{Root: root, rt: rt}
+}
+
+// resolve maps an interface path (e.g. Interface\GlueXML\GlueXML.toc) to a
+// file under the loader root, tolerating case and separator differences.
+func (l *Loader) resolve(interfacePath string) (string, error) {
+	clean := filepath.FromSlash(strings.ReplaceAll(interfacePath, "/", "\\"))
+	candidate := filepath.Join(l.Root, clean)
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return candidate, nil
+	}
+	parts := strings.Split(strings.Trim(clean, "\\"), "\\")
+	dir := l.Root
+	for i, part := range parts {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return "", err
+		}
+		found := ""
+		for _, e := range entries {
+			if strings.EqualFold(e.Name(), part) {
+				found = filepath.Join(dir, e.Name())
+				break
+			}
+		}
+		if found == "" {
+			return "", fs.ErrNotExist
+		}
+		if i == len(parts)-1 {
+			info, err := os.Stat(found)
+			if err == nil && info.IsDir() {
+				return "", fs.ErrNotExist
+			}
+			return found, nil
+		}
+		dir = found
+	}
+	return "", fs.ErrNotExist
+}
+
+// read resolves and reads an interface file.
+func (l *Loader) read(interfacePath string) ([]byte, error) {
+	path, err := l.resolve(interfacePath)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+}
+
+// normalizePath collapses standalone ".." segments between separators, the
+// way the client's interface file loader does before opening a file.
+func normalizePath(p string) string {
+	p = strings.ReplaceAll(p, "/", "\\")
+	for {
+		idx := strings.Index(p, "\\..\\")
+		dotdot := -1
+		if idx >= 0 {
+			dotdot = idx + 1
+		} else if strings.HasSuffix(p, "\\..") {
+			dotdot = len(p) - 2
+		}
+		if dotdot < 0 {
+			break
+		}
+		prev := strings.LastIndex(p[:dotdot-1], "\\")
+		if prev < 0 {
+			break
+		}
+		end := dotdot + 2
+		if end < len(p) {
+			p = p[:prev+1] + p[end+1:]
+		} else {
+			p = p[:prev]
+		}
+	}
+	return p
+}
+
+// LoadTOC executes a table of contents: every non-comment line names a file
+// relative to the TOC's own directory, entries load in order, and the
+// optional progress callback reports (done, total) after each entry. Entry
+// counting matches the client: non-empty lines that do not start with '#'.
+func (l *Loader) LoadTOC(interfaceTOC string, progress func(done, total int)) error {
+	data, err := l.read(interfaceTOC)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", interfaceTOC, err)
+	}
+	content := strings.TrimPrefix(string(data), "\xEF\xBB\xBF")
+	lines := strings.Split(content, "\n")
+	entries := make([]string, 0, len(lines))
+	for _, raw := range lines {
+		line := strings.TrimRight(raw, "\r")
+		if line == "" || strings.HasPrefix(strings.TrimLeft(line, " \t"), "#") {
+			continue
+		}
+		entries = append(entries, strings.TrimRight(line, " \t"))
+	}
+	for i, entry := range entries {
+		path := entry
+		if !isInterfacePath(entry) {
+			path = dirOf(interfaceTOC) + entry
+		}
+		path = normalizePath(path)
+		if err := l.LoadInterfaceFile(path); err != nil {
+			return fmt.Errorf("%s: entry %q: %w", interfaceTOC, entry, err)
+		}
+		if progress != nil {
+			progress(i+1, len(entries))
+		}
+	}
+	return nil
+}
+
+func isInterfacePath(p string) bool {
+	return strings.HasPrefix(strings.ToLower(p), "interface\\") || strings.HasPrefix(strings.ToLower(p), "interface/")
+}
+
+// LoadInterfaceFile dispatches one interface file by extension: .lua files
+// execute as script chunks, anything else parses as interface XML. Include
+// elements recurse through this function with paths resolved against the
+// including file's directory.
+func (l *Loader) LoadInterfaceFile(interfacePath string) error {
+	interfacePath = normalizePath(interfacePath)
+	data, err := l.read(interfacePath)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", interfacePath, err)
+	}
+	if strings.HasSuffix(strings.ToLower(interfacePath), ".lua") {
+		l.rt.doFileBody(string(data), interfacePath)
+		return nil
+	}
+	root, err := parseXML(data)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", interfacePath, err)
+	}
+	if root.name != "Ui" {
+		return fmt.Errorf("%s: root element is %s, want Ui", interfacePath, root.name)
+	}
+	return l.loadUiChildren(root, interfacePath)
+}
+
+// loadUiChildren walks the children of a Ui element: Script and Include
+// load files, Font defines a named font object, and widget elements either
+// register a virtual template or create a live widget.
+func (l *Loader) loadUiChildren(ui *xmlNode, interfacePath string) error {
+	for _, child := range ui.children {
+		switch child.name {
+		case "Script":
+			if file, ok := child.attr("file"); ok {
+				resolved := resolveRelative(interfacePath, file)
+				data, err := l.read(resolved)
+				if err != nil {
+					return fmt.Errorf("open %s: %w", resolved, err)
+				}
+				l.rt.doFileBody(string(data), resolved)
+			} else if body := strings.TrimSpace(child.text.String()); body != "" {
+				// Inline script body directly under Ui.
+				l.rt.Execute(body, "@"+interfacePath+":<Script>")
+			} else {
+				return fmt.Errorf("%s: Element 'Script' without file attribute", interfacePath)
+			}
+		case "Include":
+			file, ok := child.attr("file")
+			if !ok {
+				return fmt.Errorf("%s: Element 'Include' without file attribute", interfacePath)
+			}
+			resolved := resolveRelative(interfacePath, file)
+			if err := l.LoadInterfaceFile(resolved); err != nil {
+				return err
+			}
+		case "Font":
+			name := child.attrDefault("name", "")
+			if name == "" {
+				return fmt.Errorf("%s: Unnamed font node at top level", interfacePath)
+			}
+			font := &Font{Name: name}
+			if inherits, ok := child.attr("inherits"); ok && inherits != "" {
+				if parent, ok := l.rt.fonts[inherits]; ok {
+					*font = *parent
+				}
+			}
+			font.Name = name
+			if v, ok := child.attr("font"); ok {
+				font.FontFile = v
+			}
+			if v, ok := child.attr("outline"); ok {
+				font.Outline = v
+			}
+			if h := child.child("FontHeight"); h != nil {
+				font.Height = attrFloat(h.child("AbsValue"), "val", font.Height)
+			}
+			if c := child.child("Color"); c != nil {
+				font.Color = color{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), 1}
+			}
+			l.rt.fonts[name] = font
+		default:
+			if isWidgetElement(child.name) {
+				if err := l.instantiateTopLevel(child, interfacePath); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// instantiateTopLevel handles a widget element directly under Ui: virtual
+// widgets register as templates by name, live widgets are created.
+func (l *Loader) instantiateTopLevel(node *xmlNode, interfacePath string) error {
+	virtual := parseBool(node.attrDefault("virtual", "false"), false)
+	name := node.attrDefault("name", "")
+	if virtual {
+		if name == "" {
+			return fmt.Errorf("%s: Unnamed virtual node at top level", interfacePath)
+		}
+		l.rt.virtuals[name] = node
+		return nil
+	}
+	_, err := l.buildWidget(node, nil, interfacePath)
+	return err
+}
+
+func isWidgetElement(name string) bool {
+	switch name {
+	case "Frame", "Button", "CheckButton", "EditBox", "Slider", "ScrollFrame",
+		"SimpleHTML", "Model", "ModelFFX", "MovieFrame":
+		return true
+	}
+	return false
+}
+
+// buildWidget constructs a widget from its XML node, applying template
+// inheritance first, then the node's own definition. Regions, child frames,
+// and scripts are built depth-first; OnLoad fires after the whole subtree
+// exists, which is the order scripts rely on when they look up named
+// subregions from OnLoad.
+func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string) (*widget, error) {
+	merged := node
+	if inherits, ok := node.attr("inherits"); ok && inherits != "" {
+		tpl, ok := l.rt.virtuals[inherits]
+		if !ok {
+			return nil, fmt.Errorf("%s: template %q not found", interfacePath, inherits)
+		}
+		merged = mergeTemplate(tpl, node)
+	}
+
+	kind := kindFromObjectType(node.name)
+	name := node.attrDefault("name", "")
+	if parent != nil {
+		name = resolveParentName(name, parent.name)
+	}
+	w := newWidget(kind, name)
+	w.parent = parent
+	l.applyWidgetAttrs(w, merged)
+
+	for _, group := range merged.children {
+		switch group.name {
+		case "Size":
+			if d := group.child("AbsDimension"); d != nil {
+				w.width = attrFloat(d, "x", w.width)
+				w.height = attrFloat(d, "y", w.height)
+			}
+		case "Anchors":
+			w.points = append(w.points, parseAnchors(group)...)
+		case "Backdrop":
+			w.backdrop = parseBackdrop(group)
+		case "Layers":
+			for _, layerEl := range group.children {
+				for _, region := range layerEl.children {
+					if region.name == "Texture" || region.name == "FontString" {
+						if _, err := l.buildRegion(region, w, interfacePath); err != nil {
+							return nil, err
+						}
+					}
+				}
+			}
+		case "Frames":
+			for _, frameEl := range group.children {
+				if isWidgetElement(frameEl.name) {
+					child, err := l.buildWidget(frameEl, w, interfacePath)
+					if err != nil {
+						return nil, err
+					}
+					w.children = append(w.children, child)
+				}
+			}
+		case "Scripts":
+			for _, scriptEl := range group.children {
+				handler := scriptEl.name
+				body := strings.TrimSpace(scriptEl.text.String())
+				if body == "" {
+					continue
+				}
+				source := "@" + interfacePath + ":" + handler
+				if fn := l.compileScript(body, handler, source); fn != nil {
+					w.scripts[handler] = fn
+				}
+			}
+		case "NormalTexture", "PushedTexture", "HighlightTexture", "DisabledTexture",
+			"CheckedTexture", "DisabledCheckedTexture", "ThumbTexture":
+			texture := l.buildButtonTexture(group, w, interfacePath)
+			switch group.name {
+			case "NormalTexture":
+				w.normalTexture = texture
+			case "PushedTexture":
+				w.pushedTexture = texture
+			case "HighlightTexture":
+				w.highlightTexture = texture
+			}
+			if texture.name != "" {
+				l.rt.register(texture)
+			}
+		case "NormalFont":
+			w.normalFont = group.attrDefault("style", "")
+		case "HighlightFont":
+			w.highlightFont = group.attrDefault("style", "")
+		case "DisabledFont":
+			w.disabledFont = group.attrDefault("style", "")
+		case "ButtonText":
+			if text := group.attrDefault("text", ""); text != "" {
+				w.text = text
+			}
+		default:
+			// Remaining child elements (insets, scroll children, model
+			// tuning) carry visual state the headless runtime does not
+			// consume yet.
+		}
+	}
+	l.rt.register(w)
+	l.rt.fireHandler(w, "OnLoad")
+	return w, nil
+}
+
+// buildButtonTexture creates an unnamed texture region from a button
+// texture element.
+func (l *Loader) buildButtonTexture(node *xmlNode, parent *widget, interfacePath string) *widget {
+	w := newWidget(kindTexture, resolveParentName(node.attrDefault("name", ""), parent.name))
+	w.parent = parent
+	w.textureFile = node.attrDefault("file", "")
+	if a := node.child("Anchors"); a != nil {
+		w.points = parseAnchors(a)
+	}
+	if s := node.child("Size"); s != nil {
+		if d := s.child("AbsDimension"); d != nil {
+			w.width = attrFloat(d, "x", 0)
+			w.height = attrFloat(d, "y", 0)
+		}
+	}
+	return w
+}
+
+// buildRegion creates a Texture or FontString region under a frame.
+func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string) (*widget, error) {
+	kind := kindTexture
+	if node.name == "FontString" {
+		kind = kindFontString
+	}
+	w := newWidget(kind, resolveParentName(node.attrDefault("name", ""), parent.name))
+	w.parent = parent
+	if kind == kindTexture {
+		w.textureFile = node.attrDefault("file", "")
+		if tc := node.child("TexCoords"); tc != nil {
+			w.texCoordL = attrFloat(tc, "left", 0)
+			w.texCoordR = attrFloat(tc, "right", 1)
+			w.texCoordT = attrFloat(tc, "top", 0)
+			w.texCoordB = attrFloat(tc, "bottom", 1)
+		}
+		if c := node.child("Color"); c != nil {
+			w.vertexColor = color{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), attrFloat(c, "a", 1)}
+		}
+	} else {
+		w.text = node.attrDefault("text", "")
+		w.fontObject = node.attrDefault("inherits", "")
+		w.justifyH = node.attrDefault("justifyH", "")
+		w.justifyV = node.attrDefault("justifyV", "")
+		if c := node.child("Color"); c != nil {
+			w.textColor = color{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), 1}
+		}
+	}
+	if s := node.child("Size"); s != nil {
+		if d := s.child("AbsDimension"); d != nil {
+			w.width = attrFloat(d, "x", 0)
+			w.height = attrFloat(d, "y", 0)
+		}
+	}
+	if a := node.child("Anchors"); a != nil {
+		w.points = parseAnchors(a)
+	}
+	if hidden, ok := node.attr("hidden"); ok {
+		w.shown = !parseBool(hidden, false)
+	}
+	parent.children = append(parent.children, w)
+	l.rt.register(w)
+	return w, nil
+}
+
+// applyWidgetAttrs reads the merged widget element attributes.
+func (l *Loader) applyWidgetAttrs(w *widget, node *xmlNode) {
+	if id, ok := node.attr("id"); ok {
+		if n, err := strconv.Atoi(id); err == nil {
+			w.id = n
+		}
+	}
+	if parentName, ok := node.attr("parent"); ok && parentName != "" {
+		if p := l.rt.lookup(parentName); p != nil {
+			w.parent = p
+		}
+	}
+	if v, ok := node.attr("hidden"); ok {
+		w.shown = !parseBool(v, false)
+	}
+	if v, ok := node.attr("toplevel"); ok {
+		w.topLevel = parseBool(v, false)
+	}
+	if v, ok := node.attr("movable"); ok {
+		w.movable = parseBool(v, false)
+	}
+	if v, ok := node.attr("enableMouse"); ok {
+		w.enableMouse = parseBool(v, false)
+	}
+	if v, ok := node.attr("enableKeyboard"); ok {
+		w.enableKeyboard = parseBool(v, false)
+	}
+	if v, ok := node.attr("clampedToScreen"); ok {
+		w.clampedToScreen = parseBool(v, false)
+	}
+	if v, ok := node.attr("frameLevel"); ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			w.frameLevel = n
+		}
+	}
+	if v, ok := node.attr("scale"); ok {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			w.scale = f
+		}
+	}
+	if v, ok := node.attr("alpha"); ok {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			w.alpha = f
+		}
+	}
+	if v, ok := node.attr("setAllPoints"); ok && parseBool(v, false) {
+		w.points = []anchorPoint{
+			{point: "TOPLEFT", relativePoint: "TOPLEFT"},
+			{point: "BOTTOMRIGHT", relativePoint: "BOTTOMRIGHT"},
+		}
+	}
+	switch w.kind {
+	case kindModel, kindModelFFX:
+		if v, ok := node.attr("file"); ok {
+			w.modelFile = v
+		}
+		if v, ok := node.attr("fogNear"); ok {
+			w.fogNear, _ = strconv.ParseFloat(v, 64)
+			w.hasFog = true
+		}
+		if v, ok := node.attr("fogFar"); ok {
+			w.fogFar, _ = strconv.ParseFloat(v, 64)
+			w.hasFog = true
+		}
+	case kindEditBox:
+		if v, ok := node.attr("letters"); ok {
+			w.maxLetters, _ = strconv.Atoi(v)
+		}
+		if v, ok := node.attr("bytes"); ok {
+			w.maxBytes, _ = strconv.Atoi(v)
+		}
+		if v, ok := node.attr("historyLines"); ok {
+			w.historyLines, _ = strconv.Atoi(v)
+		}
+		if v, ok := node.attr("password"); ok {
+			w.password = parseBool(v, false)
+		}
+		if v, ok := node.attr("autoFocus"); ok {
+			w.autoFocus = parseBool(v, false)
+		}
+	case kindSlider:
+		if v, ok := node.attr("orientation"); ok {
+			w.orientation = v
+		}
+		if v, ok := node.attr("valueStep"); ok {
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				w.valueStep = f
+			}
+		}
+		if mm := node.child("MinMaxValues"); mm != nil {
+			if av := mm.child("AbsValue"); av != nil {
+				w.minValue = attrFloat(av, "min", 0)
+				w.maxValue = attrFloat(av, "max", 0)
+			}
+		}
+		if d := node.child("DefaultValue"); d != nil {
+			if av := d.child("AbsValue"); av != nil {
+				w.value = attrFloat(av, "val", 0)
+			}
+		}
+	}
+}
+
+// compileScript loads an XML script body as a function with the implicit
+// parameter list the client compiles script handlers with. The chunk name
+// carries the file and handler so error positions attribute correctly.
+func (l *Loader) compileScript(body, handler, chunkName string) *lua.LFunction {
+	L := l.rt.L
+	source := "return function(" + scriptParams(handler) + ") " + body + "\nend"
+	fn, err := L.LoadString(source)
+	if err != nil {
+		l.rt.recordScriptError(strings.TrimPrefix(chunkName, "@"), err.Error())
+		return nil
+	}
+	L.Push(fn)
+	if err := L.PCall(0, 1, nil); err != nil {
+		l.rt.recordScriptError(strings.TrimPrefix(chunkName, "@"), err.Error())
+		return nil
+	}
+	value := L.Get(-1)
+	L.Pop(1)
+	fn, ok := value.(*lua.LFunction)
+	if !ok {
+		return nil
+	}
+	return fn
+}
+
+func parseAnchors(node *xmlNode) []anchorPoint {
+	var points []anchorPoint
+	for _, a := range node.children {
+		if a.name != "Anchor" {
+			continue
+		}
+		p := anchorPoint{point: a.attrDefault("point", "CENTER")}
+		if v, ok := a.attr("relativeTo"); ok {
+			p.relativeTo = v
+		}
+		if v, ok := a.attr("relativePoint"); ok {
+			p.relativePoint = v
+		}
+		if off := a.child("Offset"); off != nil {
+			if d := off.child("AbsDimension"); d != nil {
+				p.x = attrFloat(d, "x", 0)
+				p.y = attrFloat(d, "y", 0)
+			}
+		}
+		points = append(points, p)
+	}
+	return points
+}
+
+func parseBackdrop(node *xmlNode) *backdrop {
+	bd := &backdrop{}
+	bd.bgFile = node.attrDefault("bgFile", "")
+	bd.edgeFile = node.attrDefault("edgeFile", "")
+	bd.tile = parseBool(node.attrDefault("tile", "false"), false)
+	if ts := node.child("TileSize"); ts != nil {
+		bd.tileSize = attrFloat(ts, "val", 0)
+	}
+	if es := node.child("EdgeSize"); es != nil {
+		bd.edgeSize = attrFloat(es, "val", 0)
+	}
+	if ins := node.child("BackgroundInsets"); ins != nil {
+		if ai := ins.child("AbsInset"); ai != nil {
+			bd.insetL = attrFloat(ai, "left", 0)
+			bd.insetR = attrFloat(ai, "right", 0)
+			bd.insetT = attrFloat(ai, "top", 0)
+			bd.insetB = attrFloat(ai, "bottom", 0)
+		}
+	}
+	for _, c := range node.children {
+		if c.name == "Color" {
+			bd.bgColor = color{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), attrFloat(c, "a", 1)}
+		}
+		if c.name == "EdgeColor" {
+			bd.edgeColor = color{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), attrFloat(c, "a", 1)}
+		}
+	}
+	return bd
+}
+
+func attrFloat(n *xmlNode, key string, def float64) float64 {
+	if v, ok := n.attr(key); ok {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return def
+}
+
+func parseBool(v string, def bool) bool {
+	switch strings.ToLower(v) {
+	case "true", "1":
+		return true
+	case "false", "0":
+		return false
+	}
+	return def
+}
+
+// resolveRelative resolves a file attribute against the including file's
+// directory, the rule the client uses for Include and Script elements.
+func resolveRelative(includingFile, file string) string {
+	joined := dirOf(includingFile) + file
+	if strings.Contains(joined, "..") {
+		return normalizePath(joined)
+	}
+	return joined
+}
+
+func dirOf(path string) string {
+	if idx := strings.LastIndex(path, "\\"); idx >= 0 {
+		return path[:idx+1]
+	}
+	return ""
+}
+
+// mergeTemplate overlays an instance definition onto its template:
+// instance attributes win, Size/Anchors/Backdrop from the instance replace
+// the template's groups, all other template children (regions, nested
+// frames, scripts) are kept ahead of the instance's, and instance script
+// handlers replace same-named template handlers.
+func mergeTemplate(tpl, instance *xmlNode) *xmlNode {
+	merged := &xmlNode{name: instance.name, attrs: make(map[string]string)}
+	for k, v := range tpl.attrs {
+		merged.attrs[k] = v
+	}
+	for k, v := range instance.attrs {
+		merged.attrs[k] = v
+	}
+	replaced := map[string]bool{}
+	for _, group := range []string{"Size", "Anchors", "Backdrop"} {
+		if instance.child(group) != nil {
+			replaced[group] = true
+		}
+	}
+	for _, c := range tpl.children {
+		if !replaced[c.name] {
+			merged.children = append(merged.children, c)
+		}
+	}
+	merged.children = append(merged.children, instance.children...)
+	if scripts := merged.child("Scripts"); scripts != nil {
+		if instScripts := instance.child("Scripts"); instScripts != nil {
+			for _, s := range instScripts.children {
+				removeHandler(scripts, s.name)
+			}
+		}
+	}
+	return merged
+}
+
+func removeHandler(scripts *xmlNode, handler string) {
+	kept := scripts.children[:0]
+	for _, c := range scripts.children {
+		if c.name != handler {
+			kept = append(kept, c)
+		}
+	}
+	scripts.children = kept
+}
