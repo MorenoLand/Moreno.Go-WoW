@@ -581,6 +581,9 @@ func (l *Loader) applyWidgetAttrs(w *widget, node *xmlNode) {
 			w.id = n
 		}
 	}
+	if v, ok := node.attr("text"); ok {
+		w.text = v
+	}
 	if parentName, ok := node.attr("parent"); ok && parentName != "" {
 		if p := l.rt.lookup(parentName); p != nil {
 			w.parent = p
@@ -809,6 +812,7 @@ func resolveRelative(includingFile, file string) string {
 }
 
 func dirOf(path string) string {
+	path = strings.ReplaceAll(path, "/", "\\")
 	if idx := strings.LastIndex(path, "\\"); idx >= 0 {
 		return path[:idx+1]
 	}

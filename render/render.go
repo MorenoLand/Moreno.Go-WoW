@@ -11,6 +11,7 @@ import (
 	"github.com/g3n/engine/gls"
 	"github.com/g3n/engine/gui"
 	"github.com/g3n/engine/renderer"
+	"github.com/g3n/engine/texture"
 	"github.com/g3n/engine/window"
 )
 
@@ -34,13 +35,16 @@ func Run(clientConfig network.Config, dataPath, interfacePath, lastCharacter, co
 	scene := core.NewNode()
 	gui.Manager().Set(scene)
 	
+	var uiEngine *ui.UIEngine
 	var uiImage *gui.Image
 	if interfacePath != "" {
 		glue := filepath.Join(interfacePath, "GlueXML")
 		frame := filepath.Join(interfacePath, "FrameXML")
 		assets := filepath.Join(interfacePath, "Interface-tree")
-		if rgba, err := ui.SoftwareRenderLogin(glue, frame, assets); err == nil {
-			uiImage = gui.NewImageFromRGBA(rgba)
+		eng, err := ui.LoadUIEngine(glue, frame, assets)
+		if err == nil {
+			uiEngine = eng
+			uiImage = gui.NewImageFromRGBA(eng.Render(960, 640))
 			uiImage.SetPosition(0, 0)
 			scene.Add(uiImage)
 		} else {
@@ -58,7 +62,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, lastCharacter, co
 		if height > 0 {
 			cam.SetAspect(float32(width) / float32(height))
 		}
-		if uiImage != nil {
+		if uiImage != nil && uiEngine != nil {
+			rgba := uiEngine.Render(width, height)
+			tex := texture.NewTexture2DFromRGBA(rgba)
+			uiImage.SetTexture(tex)
 			uiImage.SetSize(float32(width), float32(height))
 		}
 	}

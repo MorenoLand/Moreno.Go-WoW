@@ -15,13 +15,18 @@ import (
 	xdraw "golang.org/x/image/draw"
 )
 
-// SoftwareRenderLogin runs the login render pipeline used in tests and returns the resulting RGBA.
-func SoftwareRenderLogin(glue, frame, assets string) (*image.RGBA, error) {
+type UIEngine struct {
+	Rt          *Runtime
+	FontObj     *opentype.Font
+	AssetLoader *Loader
+	Cache       map[string]image.Image
+}
+
+func LoadUIEngine(glue, frame, assets string) (*UIEngine, error) {
 	root, err := os.MkdirTemp("", "wow-ui-root-*")
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(root)
 
 	stageTree := func(rel, source string) error {
 		dir := filepath.Join(root, filepath.FromSlash(rel))
@@ -46,35 +51,29 @@ func SoftwareRenderLogin(glue, frame, assets string) (*image.RGBA, error) {
 		}
 		return nil
 	}
+
 	if err := stageTree("Interface/GlueXML", glue); err != nil {
 		return nil, err
 	}
 	if err := stageTree("Interface/FrameXML", frame); err != nil {
 		return nil, err
 	}
+	
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if !d.IsDir() && filepath.Base(path) == "GlueStrings.lua" {
+			log.Printf("STAGED FILE: %s", path)
+		}
+		return nil
+	})
 
-	const screenWidth, screenHeight = 960, 640
-	rt := NewRuntime(hostScreen{w: screenWidth, h: screenHeight})
-	defer rt.Close()
-	loader := NewLoader(root, rt)
-	if err := loader.LoadTOC(`Interface\GlueXML\GlueXML.toc`, nil); err != nil {
-		return nil, fmt.Errorf("LoadTOC: %v", err)
-	}
+	rt := NewRuntime(&hostScreen{})
 
-	if errs := rt.ScriptErrors(); len(errs) != 0 {
-		return nil, fmt.Errorf("%d script errors before rendering", len(errs))
+	l := NewLoader(root, rt)
+	if err := l.LoadTOC("Interface/GlueXML/GlueXML.toc", nil); err != nil {
+		return nil, err
 	}
 
 	rt.Execute("GlueParent_OnEvent('SET_GLUE_SCREEN', 'login')", "@render.lua")
-
-	glueParent := rt.widgets["GlueParent"]
-	if glueParent == nil {
-		return nil, fmt.Errorf("GlueParent missing")
-	}
-	login := rt.widgets["AccountLogin"]
-	if login == nil {
-		return nil, fmt.Errorf("AccountLogin missing")
-	}
 
 	fontData, err := os.ReadFile(filepath.Join(assets, "Fonts", "FRIZQT__.TTF"))
 	if err != nil {
@@ -84,31 +83,59 @@ func SoftwareRenderLogin(glue, frame, assets string) (*image.RGBA, error) {
 	if err != nil {
 		return nil, fmt.Errorf("font parse: %v", err)
 	}
-	face, err := opentype.NewFace(fontObj, &opentype.FaceOptions{Size: 16, DPI: 72})
-	if err != nil {
-		return nil, fmt.Errorf("font face: %v", err)
-	}
-	defer face.Close()
-
-	canvas := image.NewRGBA(image.Rect(0, 0, screenWidth, screenHeight))
-	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: color.RGBA{R: 8, G: 10, B: 14, A: 255}}, image.Point{}, draw.Src)
-
 	assetLoader := NewLoader(assets, rt)
 	cache := map[string]image.Image{}
 
-	screen := Rect{X0: 0, Y0: 0, X1: screenWidth, Y1: screenHeight}
+	return &UIEngine{
+		Rt:          rt,
+		FontObj:     fontObj,
+		AssetLoader: assetLoader,
+		Cache:       cache,
+	}, nil
+}
+
+func (eng *UIEngine) Close() {
+}
+
+func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
+	canvas := image.NewRGBA(image.Rect(0, 0, screenWidth, screenHeight))
+	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: color.RGBA{R: 8, G: 10, B: 14, A: 255}}, image.Point{}, draw.Src)
+
+	uiScale := float64(screenHeight) / 768.0
+	
+	face, _ := opentype.NewFace(eng.FontObj, &opentype.FaceOptions{Size: 16 * uiScale, DPI: 72})
+	defer face.Close()
+
+	virtualWidth := float64(screenWidth) / uiScale
+	virtualHeight := 768.0
+
+	// Update host screen dimensions dynamically before layout evaluation
+	if host, ok := eng.Rt.Host.(*hostScreen); ok {
+		host.w = virtualWidth
+		host.h = virtualHeight
+	}
+
+	screen := Rect{X0: 0, Y0: 0, X1: virtualWidth, Y1: virtualHeight}
 
 	var paint func(w *widget, parent Rect)
 	paint = func(w *widget, parent Rect) {
 		rect := ResolveRect(w, parent)
+
+		// Scale UI coordinates to the window resolution based on a 768p reference height.
+		scaledRect := Rect{
+			X0: rect.X0 * uiScale,
+			Y0: rect.Y0 * uiScale,
+			X1: rect.X1 * uiScale,
+			Y1: rect.Y1 * uiScale,
+		}
+
 		switch w.kind {
 		case kindTexture:
 			if w.textureFile != "" {
 				tc := [4]float64{w.texCoordL, w.texCoordR, w.texCoordT, w.texCoordB}
-				log.Printf("Painting texture: %s (Rect: %v) tc: %v", w.textureFile, rect, tc)
-				img, ok := cache[w.textureFile]
+				img, ok := eng.Cache[w.textureFile]
 				if !ok {
-					data, err := assetLoader.ReadAsset(w.textureFile)
+					data, err := eng.AssetLoader.ReadAsset(w.textureFile)
 					if err == nil {
 						decoded, derr := DecodeBLP(data)
 						if derr == nil {
@@ -119,17 +146,16 @@ func SoftwareRenderLogin(glue, frame, assets string) (*image.RGBA, error) {
 					} else {
 						log.Printf("Read error for %s: %v", w.textureFile, err)
 					}
-					cache[w.textureFile] = img
+					eng.Cache[w.textureFile] = img
 				}
 				if img != nil {
-					tc := [4]float64{w.texCoordL, w.texCoordR, w.texCoordT, w.texCoordB}
 					if tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0 {
 						tc = [4]float64{0, 1, 0, 1}
 					}
-					drawSub(canvas, img, rect, screenHeight, tc)
+					drawSub(canvas, img, scaledRect, float64(screenHeight), tc)
 				}
 			}
-		case kindFontString:
+		case kindFontString, kindButton:
 			if text := w.text; text != "" {
 				var c color.Color = color.RGBA{R: 255, G: 255, B: 255, A: 255}
 				if !w.textColor.isZero() {
@@ -139,56 +165,57 @@ func SoftwareRenderLogin(glue, frame, assets string) (*image.RGBA, error) {
 						B: uint8(w.textColor.b * 255),
 						A: uint8(w.textColor.a * 255),
 					}
+				} else if w.kind == kindButton {
+					c = color.RGBA{R: 255, G: 200, B: 0, A: 255}
 				}
-				drawText(canvas, face, text, rect, screenHeight, c)
+				drawText(canvas, face, text, scaledRect, float64(screenHeight), c, w.kind == kindButton)
 			}
 		}
-		if w.backdrop != nil {
-			if w.backdrop.bgFile != "" {
-				bgImg, ok := cache[w.backdrop.bgFile]
-				if !ok {
-					data, err := assetLoader.ReadAsset(w.backdrop.bgFile)
-					if err == nil {
-						decoded, derr := DecodeBLP(data)
-						if derr == nil {
-							bgImg = decoded
-						}
+
+		if w.backdrop != nil && w.backdrop.bgFile != "" {
+			img, ok := eng.Cache[w.backdrop.bgFile]
+			if !ok {
+				data, err := eng.AssetLoader.ReadAsset(w.backdrop.bgFile)
+				if err == nil {
+					decoded, derr := DecodeBLP(data)
+					if derr == nil {
+						img = decoded
 					}
-					cache[w.backdrop.bgFile] = bgImg
 				}
-				if bgImg != nil {
-					tc := [4]float64{0, 1, 0, 1}
-					drawSub(canvas, bgImg, rect, screenHeight, tc)
-				}
+				eng.Cache[w.backdrop.bgFile] = img
 			}
-			if !w.backdrop.bgColor.isZero() {
-				c := color.RGBA{
-					R: uint8(w.backdrop.bgColor.r * 255),
-					G: uint8(w.backdrop.bgColor.g * 255),
-					B: uint8(w.backdrop.bgColor.b * 255),
-					A: uint8(w.backdrop.bgColor.a * 255),
-				}
-				dst := ScreenRect(rect, screenHeight)
-				draw.Draw(canvas, dst, &image.Uniform{C: c}, image.Point{}, draw.Over)
+			if img != nil {
+				drawSub(canvas, img, scaledRect, float64(screenHeight), [4]float64{0, 1, 0, 1})
 			}
 		}
-		
-		if w.normalTexture != nil {
+
+		if w.normalTexture != nil && w.normalTexture.shown {
 			paint(w.normalTexture, rect)
 		}
+		if w.pushedTexture != nil && w.pushedTexture.shown {
+			paint(w.pushedTexture, rect)
+		}
+		if w.highlightTexture != nil && w.highlightTexture.shown {
+			paint(w.highlightTexture, rect)
+		}
+
 		for _, child := range w.children {
 			if child.shown {
 				paint(child, rect)
 			}
 		}
 	}
-	for _, child := range glueParent.children {
-		if child.shown {
-			paint(child, screen)
+
+	glueParent := eng.Rt.widgets["GlueParent"]
+	if glueParent != nil {
+		for _, child := range glueParent.children {
+			if child.shown {
+				paint(child, screen)
+			}
 		}
 	}
 
-	return canvas, nil
+	return canvas
 }
 
 
@@ -196,17 +223,18 @@ type hostScreen struct {
 	w, h float64
 }
 
-func (h hostScreen) ScreenSize() (float64, float64) { return h.w, h.h }
-func (h hostScreen) PlaySound(string)               {}
-func (h hostScreen) PlayMusic(string)               {}
-func (h hostScreen) PlayAmbience(string)            {}
-func (h hostScreen) StopMusic()                     {}
-func (h hostScreen) StopAmbience()                  {}
-func (h hostScreen) StopAllSFX()                    {}
-func (h hostScreen) LaunchURL(string)               {}
-func (h hostScreen) Quit(bool)                      {}
-func (h hostScreen) ConsoleExec(string)             {}
-func (h hostScreen) Screenshot()                    {}
+func (h *hostScreen) ScreenSize() (float64, float64) { return h.w, h.h }
+func (h *hostScreen) PlaySound(string)               {}
+func (h *hostScreen) PlayMusic(string)               {}
+func (h *hostScreen) PlayAmbience(string)            {}
+func (h *hostScreen) StopMusic()                     {}
+func (h *hostScreen) StopAmbience()                  {}
+func (h *hostScreen) StopAllSFX()                    {}
+func (h *hostScreen) LaunchURL(string)               {}
+func (h *hostScreen) Quit(bool)                      {}
+func (h *hostScreen) ConsoleExec(string)             {}
+func (h *hostScreen) Screenshot()                    {}
+
 
 func drawSub(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64) {
 	b := img.Bounds()
@@ -227,27 +255,23 @@ func drawSub(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, 
 	xdraw.BiLinear.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
 }
 
-func drawText(canvas *image.RGBA, face font.Face, text string, r Rect, screenHeight float64, c color.Color) {
+func drawText(canvas *image.RGBA, face font.Face, text string, r Rect, screenHeight float64, c color.Color, center bool) {
 	dst := ScreenRect(r, screenHeight)
+	if dst.Dx() <= 0 || dst.Dy() <= 0 {
+		return
+	}
+	
+	dotX := dst.Min.X
+	if center {
+		width := font.MeasureString(face, text).Ceil()
+		dotX = dst.Min.X + (dst.Dx() - width) / 2
+	}
+	
 	d := &font.Drawer{
 		Dst:  canvas,
 		Src:  image.NewUniform(c),
 		Face: face,
+		Dot:  fixed.P(dotX, dst.Min.Y+face.Metrics().Ascent.Ceil()+(dst.Dy()-face.Metrics().Height.Ceil())/2),
 	}
-	adv := d.MeasureString(text).Round()
-	x := dst.Min.X
-	y := dst.Min.Y
-
-	if dst.Dx() <= 0 && dst.Dy() <= 0 {
-		x -= adv / 2
-		y += 5
-	} else {
-		if adv < dst.Dx() {
-			x = dst.Min.X + (dst.Dx()-adv)/2
-		}
-		y = dst.Min.Y + (dst.Dy()+16)/2 - 3
-	}
-
-	d.Dot = fixed.P(x, y)
 	d.DrawString(text)
 }
