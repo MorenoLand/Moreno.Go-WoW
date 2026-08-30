@@ -29,6 +29,11 @@ type Session struct {
 	connection *world.Connection
 }
 
+type Authenticated struct {
+	SessionKey [auth.SessionKeyLen]byte
+	Realms     []auth.Realm
+}
+
 func DefaultConfig() Config {
 	return Config{AuthAddress: "127.0.0.1:3724", Locale: "enUS", Timeout: 8 * time.Second}
 }
@@ -48,30 +53,42 @@ func ConfigFromEnvironment() Config {
 }
 
 func Login(config Config) (*Session, error) {
+	authenticated, err := Authenticate(config)
+	if err != nil {
+		return nil, err
+	}
+	realm, err := selectRealm(authenticated.Realms, config.Realm)
+	if err != nil {
+		return nil, err
+	}
+	return OpenRealm(authenticated, config.Account, realm, config.Timeout, config.Debug)
+}
+
+func Authenticate(config Config) (Authenticated, error) {
 	if config.Account == "" || config.Password == "" {
-		return nil, fmt.Errorf("WOW_ACCOUNT and WOW_PASSWORD are required")
+		return Authenticated{}, fmt.Errorf("account and password are required")
 	}
 	authHost, authPort, err := splitEndpoint(config.AuthAddress, auth.DefaultPort)
 	if err != nil {
-		return nil, err
+		return Authenticated{}, err
 	}
 	debugf(config, "auth: connecting to %s:%d", authHost, authPort)
 	loggedIn, err := auth.Login(authHost, authPort, config.Account, config.Password, config.Locale, config.Timeout)
 	if err != nil {
-		return nil, err
+		return Authenticated{}, err
 	}
 	debugf(config, "auth: received %d realm(s)", len(loggedIn.Realms))
-	realm, err := selectRealm(loggedIn.Realms, config.Realm)
-	if err != nil {
-		return nil, err
-	}
+	return Authenticated{SessionKey: loggedIn.SessionKey, Realms: loggedIn.Realms}, nil
+}
+
+func OpenRealm(authenticated Authenticated, account string, realm auth.Realm, timeout time.Duration, debug bool) (*Session, error) {
 	worldHost, worldPort, err := world.SplitRealmAddress(realm.Address)
 	if err != nil {
 		return nil, err
 	}
-	debugf(config, "world: selected realm %q at %s", realm.Name, realm.Address)
+	debugf(Config{Debug: debug}, "world: selected realm %q at %s", realm.Name, realm.Address)
 	address := net.JoinHostPort(worldHost, strconv.Itoa(int(worldPort)))
-	connection, err := world.Open(address, config.Account, realm.ID, loggedIn.SessionKey, config.Timeout)
+	connection, err := world.Open(address, account, realm.ID, authenticated.SessionKey, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +97,7 @@ func Login(config Config) (*Session, error) {
 		_ = connection.Close()
 		return nil, err
 	}
-	debugf(config, "world: received %d character(s)", len(characters))
+	debugf(Config{Debug: debug}, "world: received %d character(s)", len(characters))
 	return &Session{Realm: realm, Characters: characters, connection: connection}, nil
 }
 
