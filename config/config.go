@@ -17,11 +17,19 @@ type Options struct {
 	Locale      string `json:"locale"`
 	Realm       string `json:"realm"`
 	Character   string `json:"character"`
-	DataPath    string `json:"data_path"`
-	RememberMe  bool   `json:"remember_me"`
+	DataPath      string `json:"data_path"`
+	InterfacePath string `json:"interface_path"`
+	RememberMe    bool   `json:"remember_me"`
 }
 
-func Defaults() Options { return Options{AuthAddress: "127.0.0.1:3724", Locale: "enUS"} }
+func Defaults() Options {
+	return Options{
+		AuthAddress:   "127.0.0.1:3724",
+		Locale:        "enUS",
+		DataPath:      `F:\Games\Wrath of the Lich King\Data`,
+		InterfacePath: `G:\Development\Rust\Warcraft\Research\mpq-extract`,
+	}
+}
 
 func Path() (string, error) {
 	root, err := os.UserConfigDir()
@@ -49,6 +57,12 @@ func Load(path string) (Options, error) {
 	}
 	if options.Locale == "" {
 		options.Locale = defaults.Locale
+	}
+	if options.DataPath == "" {
+		options.DataPath = defaults.DataPath
+	}
+	if options.InterfacePath == "" {
+		options.InterfacePath = defaults.InterfacePath
 	}
 	return options, nil
 }

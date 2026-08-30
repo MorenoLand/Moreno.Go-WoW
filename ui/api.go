@@ -85,6 +85,14 @@ func registerGlueAPI(rt *Runtime) {
 	reg("GetAccountExpansionLevel", func(L *lua.LState) int { L.Push(lua.LNumber(2)); return 1 })
 	reg("IsShiftKeyDown", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
 
+	// Screen state transitions.
+	reg("SetCurrentScreen", func(L *lua.LState) int {
+		// SetCurrentScreen is called by the interface layer to notify the C engine
+		// that the screen changed. It should NOT fire SET_GLUE_SCREEN because that
+		// would cause an infinite loop.
+		return 0
+	})
+
 	// Screen geometry.
 	screen := func() (float64, float64) {
 		if rt.Host != nil {

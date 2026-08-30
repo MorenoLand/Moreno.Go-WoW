@@ -77,7 +77,7 @@ type Font struct {
 	Name     string
 	FontFile string
 	Height   float64
-	Color    color
+	Color    rgba
 	Outline  string
 	Shadow   bool
 }

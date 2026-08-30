@@ -33,6 +33,8 @@ func NewLoader(root string, rt *Runtime) *Loader {
 		for _, group := range merged.children {
 			switch group.name {
 			case "Size":
+				w.width = attrFloat(group, "x", w.width)
+				w.height = attrFloat(group, "y", w.height)
 				if d := group.child("AbsDimension"); d != nil {
 					w.width = attrFloat(d, "x", w.width)
 					w.height = attrFloat(d, "y", w.height)
@@ -143,6 +145,16 @@ func (l *Loader) resolve(interfacePath string) (string, error) {
 		dir = found
 	}
 	return "", fs.ErrNotExist
+}
+
+// ReadAsset resolves and reads an interface asset path, tolerating a
+// missing .blp extension the way the client's texture loader does.
+func (l *Loader) ReadAsset(path string) ([]byte, error) {
+	data, err := l.read(path)
+	if err == nil {
+		return data, nil
+	}
+	return l.read(path + ".blp")
 }
 
 // read resolves and reads an interface file.
@@ -297,7 +309,7 @@ func (l *Loader) loadUiChildren(ui *xmlNode, interfacePath string) error {
 				font.Height = attrFloat(h.child("AbsValue"), "val", font.Height)
 			}
 			if c := child.child("Color"); c != nil {
-				font.Color = color{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), 1}
+				font.Color = rgba{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), 1}
 			}
 			l.rt.fonts[name] = font
 			fontTable := l.rt.L.NewTable()
@@ -368,6 +380,8 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 	for _, group := range merged.children {
 		switch group.name {
 		case "Size":
+			w.width = attrFloat(group, "x", w.width)
+			w.height = attrFloat(group, "y", w.height)
 			if d := group.child("AbsDimension"); d != nil {
 				w.width = attrFloat(d, "x", w.width)
 				w.height = attrFloat(d, "y", w.height)
@@ -473,9 +487,11 @@ func (l *Loader) buildButtonTexture(node *xmlNode, parent *widget, interfacePath
 		w.points = parseAnchors(a)
 	}
 	if s := node.child("Size"); s != nil {
+		w.width = attrFloat(s, "x", w.width)
+		w.height = attrFloat(s, "y", w.height)
 		if d := s.child("AbsDimension"); d != nil {
-			w.width = attrFloat(d, "x", 0)
-			w.height = attrFloat(d, "y", 0)
+			w.width = attrFloat(d, "x", w.width)
+			w.height = attrFloat(d, "y", w.height)
 		}
 	}
 	return w
@@ -498,7 +514,7 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 			w.texCoordB = attrFloat(tc, "bottom", 1)
 		}
 		if c := node.child("Color"); c != nil {
-			w.vertexColor = color{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), attrFloat(c, "a", 1)}
+			w.vertexColor = rgba{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), attrFloat(c, "a", 1)}
 		}
 	} else {
 		w.text = node.attrDefault("text", "")
@@ -506,13 +522,15 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 		w.justifyH = node.attrDefault("justifyH", "")
 		w.justifyV = node.attrDefault("justifyV", "")
 		if c := node.child("Color"); c != nil {
-			w.textColor = color{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), 1}
+			w.textColor = rgba{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), 1}
 		}
 	}
 	if s := node.child("Size"); s != nil {
+		w.width = attrFloat(s, "x", w.width)
+		w.height = attrFloat(s, "y", w.height)
 		if d := s.child("AbsDimension"); d != nil {
-			w.width = attrFloat(d, "x", 0)
-			w.height = attrFloat(d, "y", 0)
+			w.width = attrFloat(d, "x", w.width)
+			w.height = attrFloat(d, "y", w.height)
 		}
 	}
 	if a := node.child("Anchors"); a != nil {
@@ -536,6 +554,7 @@ func (l *Loader) applyWidgetAttrs(w *widget, node *xmlNode) {
 	if parentName, ok := node.attr("parent"); ok && parentName != "" {
 		if p := l.rt.lookup(parentName); p != nil {
 			w.parent = p
+			p.children = append(p.children, w)
 		}
 	}
 	if v, ok := node.attr("hidden"); ok {
@@ -721,10 +740,10 @@ func parseBackdrop(node *xmlNode) *backdrop {
 	}
 	for _, c := range node.children {
 		if c.name == "Color" {
-			bd.bgColor = color{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), attrFloat(c, "a", 1)}
+			bd.bgColor = rgba{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), attrFloat(c, "a", 1)}
 		}
 		if c.name == "EdgeColor" {
-			bd.edgeColor = color{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), attrFloat(c, "a", 1)}
+			bd.edgeColor = rgba{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), attrFloat(c, "a", 1)}
 		}
 	}
 	return bd

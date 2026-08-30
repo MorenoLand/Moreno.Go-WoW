@@ -54,9 +54,9 @@ func (k widgetKind) objectType() string {
 	return "Region"
 }
 
-type color struct{ r, g, b, a float64 }
+type rgba struct{ r, g, b, a float64 }
 
-func (c color) isZero() bool { return c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0 }
+func (c rgba) isZero() bool { return c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0 }
 
 type anchorPoint struct {
 	point, relativeTo, relativePoint string
@@ -68,7 +68,7 @@ type backdrop struct {
 	tile                           bool
 	tileSize, edgeSize             float64
 	insetL, insetR, insetT, insetB float64
-	bgColor, edgeColor             color
+	bgColor, edgeColor             rgba
 }
 
 // widget holds the state of one frame or region created from XML or the API.
@@ -141,13 +141,13 @@ type widget struct {
 	// Texture state.
 	textureFile                                string
 	texCoordL, texCoordR, texCoordT, texCoordB float64
-	vertexColor                                color
+	vertexColor                                rgba
 
 	// FontString state.
 	fontObject string
 	justifyH   string
 	justifyV   string
-	textColor  color
+	textColor  rgba
 	textWidth  float64
 
 	// Tooltip/HTML text lines.
@@ -738,14 +738,14 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			if w.backdrop == nil {
 				w.backdrop = &backdrop{}
 			}
-			w.backdrop.bgColor = color{float64(L.CheckNumber(2)), float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), 1}
+			w.backdrop.bgColor = rgba{float64(L.CheckNumber(2)), float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), 1}
 			return 0
 		},
 		"SetBackdropBorderColor": func(L *lua.LState, w *widget) int {
 			if w.backdrop == nil {
 				w.backdrop = &backdrop{}
 			}
-			w.backdrop.edgeColor = color{float64(L.CheckNumber(2)), float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), 1}
+			w.backdrop.edgeColor = rgba{float64(L.CheckNumber(2)), float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), 1}
 			return 0
 		},
 		"SetSequence": func(L *lua.LState, w *widget) int {
