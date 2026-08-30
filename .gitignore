@@ -1,0 +1,19 @@
+# Local agent instructions
+AGENTS.md
+
+.env
+.env.*
+*.local
+Data/
+data/
+client-data/
+bin/
+build/
+dist/
+out/
+target/
+captures/
+*.log
+*.exe
+*.dll
+*.pdb
