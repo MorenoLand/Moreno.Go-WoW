@@ -49,7 +49,14 @@ type CharacterEntry struct {
 func registerGlueAPI(rt *Runtime) {
 	L := rt.L
 	reg := func(name string, fn func(L *lua.LState) int) {
-		L.SetGlobal(name, L.NewFunction(fn))
+		L.SetGlobal(name, L.NewFunction(func(L *lua.LState) int {
+			defer func() {
+				if r := recover(); r != nil {
+					L.RaiseError("go panic in %s: %v", name, r)
+				}
+			}()
+			return fn(L)
+		}))
 	}
 
 	// Global helpers.
@@ -407,7 +414,81 @@ func registerGlueAPI(rt *Runtime) {
 	reg("MatrixCommit", func(L *lua.LState) int { return 0 })
 	reg("MatrixRevert", func(L *lua.LState) int { return 0 })
 
-	// Frame creation for script-driven widgets (dropdown menus).
+	// Error reporting hooks the glue scripts install.
+	reg("seterrorhandler", func(L *lua.LState) int {
+		if L.Get(1).Type() == lua.LTFunction {
+			rt.scriptErrorHandler = L.Get(1).(*lua.LFunction)
+		}
+		return 0
+	})
+	reg("debuginfo", func(L *lua.LState) int { return 0 })
+	reg("message", func(L *lua.LState) int { return 0 })
+
+	// Format globals (string library aliases).
+	reg("format", func(L *lua.LState) int {
+		n := L.GetTop()
+		fmtFn := L.GetGlobal("string").(*lua.LTable).RawGetString("format")
+		L.Push(fmtFn)
+		for i := 1; i <= n; i++ {
+			L.Push(L.Get(i))
+		}
+		L.Call(n, 1)
+		return 1
+	})
+	L.SetGlobal("gsub", L.GetGlobal("string").(*lua.LTable).RawGetString("gsub"))
+
+	// Video system queries. The original client answers from the graphics
+	// device; an unconnected host reports one fixed mode.
+	reg("GetScreenResolutions", func(L *lua.LState) int {
+		L.Push(lua.LString("1280x960"))
+		return 1
+	})
+	reg("GetCurrentResolution", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
+	reg("GetRefreshRates", func(L *lua.LState) int { L.Push(lua.LNumber(60)); return 1 })
+	reg("GetMultisampleFormats", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
+	reg("GetCurrentMultisampleFormat", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
+	reg("SetMultisampleFormat", func(L *lua.LState) int { return 0 })
+	reg("SetScreenResolution", func(L *lua.LState) int { return 0 })
+	reg("IsPlayerResolutionAvailable", func(L *lua.LState) int { L.Push(lua.LBool(true)); return 1 })
+	reg("IsStereoVideoAvailable", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
+	reg("GetVideoCaps", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+
+	// Account and trial state.
+	reg("IsStreamingTrial", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
+	reg("IsTrialAccount", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
+	reg("IsInvalidLocale", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
+	reg("IsTournamentRealmCategory", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
+	reg("IsInvalidTournamentRealmCategory", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
+	reg("GetRealmCategories", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+
+	// Character creation and selection scene control.
+	reg("SetCharSelectModelFrame", func(L *lua.LState) int { rt.SetCVar("charSelectModel", L.CheckString(1)); return 0 })
+	reg("SetCharCustomizeFrame", func(L *lua.LState) int { rt.SetCVar("charCustomizeModel", L.CheckString(1)); return 0 })
+	reg("SetRaceSelectFrame", func(L *lua.LState) int { rt.SetCVar("raceSelectModel", L.CheckString(1)); return 0 })
+	reg("GetSelectedRace", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("SetSelectedRace", func(L *lua.LState) int { return 0 })
+	reg("GetSelectedSex", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
+	reg("SetSelectedSex", func(L *lua.LState) int { return 0 })
+	reg("GetSelectedClass", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("SetSelectedClass", func(L *lua.LState) int { return 0 })
+	reg("GetSelectedCategory", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("GetNameForRace", func(L *lua.LState) int { L.Push(lua.LString("")); L.Push(lua.LString("")); return 2 })
+	reg("GetFactionForRace", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("GetAvailableRaces", func(L *lua.LState) int { return 0 })
+	reg("GetAvailableClasses", func(L *lua.LState) int { return 0 })
+	reg("GetClassesForRace", func(L *lua.LState) int { return 0 })
+	reg("IsRaceClassValid", func(L *lua.LState) int { L.Push(lua.LBool(true)); return 1 })
+	reg("GetFacialHairCustomization", func(L *lua.LState) int { L.Push(lua.LString("")); L.Push(lua.LString("")); return 2 })
+	reg("GetHairCustomization", func(L *lua.LState) int { L.Push(lua.LString("")); L.Push(lua.LString("")); return 2 })
+	reg("RandomName", func(L *lua.LState) int { L.Push(lua.LString("")); return 1 })
+	reg("CreateCharacter", func(L *lua.LState) int { return 0 })
+	reg("DeleteCharacter", func(L *lua.LState) int { return 0 })
+	reg("RenameCharacter", func(L *lua.LState) int { return 0 })
+	reg("CustomizeExistingCharacter", func(L *lua.LState) int { return 0 })
+	reg("GetCharacterListUpdate", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
+
+	// Frame creation for script-driven widgets (dropdown menus). The fourth
+	// argument names a virtual template the new frame inherits.
 	reg("CreateFrame", func(L *lua.LState) int {
 		frameType := L.CheckString(1)
 		name := ""
@@ -420,12 +501,23 @@ func registerGlueAPI(rt *Runtime) {
 				parent = p
 			}
 		}
+		template := ""
+		if L.Get(4).Type() == lua.LTString {
+			template = L.CheckString(4)
+		}
+		if parent != nil {
+			name = resolveParentName(name, parent.name)
+		}
 		w := newWidget(kindFromObjectType(frameType), name)
 		w.parent = parent
 		if parent != nil {
 			parent.children = append(parent.children, w)
 		}
+		if template != "" && rt.instantiateTemplate != nil {
+			rt.instantiateTemplate(w, template)
+		}
 		rt.register(w)
+		rt.fireHandler(w, "OnLoad")
 		L.Push(w.luaValue(L))
 		return 1
 	})
@@ -539,5 +631,54 @@ func registerStringHelpers(L *lua.LState) {
 		}
 		L.Push(lua.LString(strings.Join(parts, sep)))
 		return 1
+	}))
+	// Math library aliases, the set the embedded compat layer provides.
+	math := L.GetGlobal("math").(*lua.LTable)
+	for _, name := range []string{"floor", "ceil", "abs", "min", "max", "sqrt",
+		"sin", "cos", "tan", "asin", "acos", "atan", "deg", "rad", "exp",
+		"log", "log10", "fmod", "modf"} {
+		if fn := math.RawGetString(name); fn.Type() == lua.LTFunction {
+			L.SetGlobal(name, fn)
+		}
+	}
+
+	// Sound device enumeration.
+	L.SetGlobal("Sound_GameSystem_GetNumOutputDrivers", L.NewFunction(func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 }))
+	L.SetGlobal("Sound_GameSystem_GetOutputDriverNameByIndex", L.NewFunction(func(L *lua.LState) int { L.Push(lua.LString("")); return 1 }))
+	L.SetGlobal("Sound_RestartSoundEngine", L.NewFunction(func(L *lua.LState) int { return 0 }))
+
+	// Table library aliases the interface scripts rely on.
+	L.SetGlobal("tinsert", L.GetGlobal("table").(*lua.LTable).RawGetString("insert"))
+	L.SetGlobal("tremove", L.GetGlobal("table").(*lua.LTable).RawGetString("remove"))
+	// SecureNext pairs with next for secure iteration; the glue scripts use
+	// it as a plain iterator.
+	L.SetGlobal("SecureNext", L.GetGlobal("next"))
+	L.SetGlobal("issecure", L.NewFunction(func(L *lua.LState) int {
+		L.Push(lua.LBool(true))
+		return 1
+	}))
+	// securecall invokes a function with its arguments and propagates the
+	// results; the first argument may also be a global function name.
+	L.SetGlobal("securecall", L.NewFunction(func(L *lua.LState) int {
+		n := L.GetTop()
+		if n == 0 {
+			return 0
+		}
+		fn := L.Get(1)
+		if fn.Type() == lua.LTString {
+			fn = L.GetGlobal(fn.String())
+		}
+		if fn.Type() != lua.LTFunction {
+			return 0
+		}
+		L.Push(fn)
+		for i := 2; i <= n; i++ {
+			L.Push(L.Get(i))
+		}
+		if err := L.PCall(n-1, lua.MultRet, nil); err != nil {
+			return 0
+		}
+		// Entry top was n; the call consumed n stack slots above it.
+		return L.GetTop() - n
 	}))
 }

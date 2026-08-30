@@ -22,7 +22,90 @@ type Loader struct {
 
 // NewLoader creates a loader rooted at the given data directory.
 func NewLoader(root string, rt *Runtime) *Loader {
-	return &Loader{Root: root, rt: rt}
+	l := &Loader{Root: root, rt: rt}
+	rt.instantiateTemplate = func(w *widget, template string) {
+		tpl, ok := l.rt.virtuals[template]
+		if !ok {
+			return
+		}
+		merged := mergeTemplate(tpl, &xmlNode{name: w.objectType(), attrs: map[string]string{}})
+		l.applyWidgetAttrs(w, merged)
+		for _, group := range merged.children {
+			switch group.name {
+			case "Size":
+				if d := group.child("AbsDimension"); d != nil {
+					w.width = attrFloat(d, "x", w.width)
+					w.height = attrFloat(d, "y", w.height)
+				}
+			case "Anchors":
+				w.points = append(w.points, parseAnchors(group)...)
+			case "Backdrop":
+				w.backdrop = parseBackdrop(group)
+			case "Layers":
+				for _, layerEl := range group.children {
+					for _, region := range layerEl.children {
+						if region.name == "Texture" || region.name == "FontString" {
+							l.buildRegion(region, w, "CreateFrame:"+template)
+						}
+					}
+				}
+			case "Frames":
+				for _, frameEl := range group.children {
+					if isWidgetElement(frameEl.name) {
+						if child, err := l.buildWidget(frameEl, w, "CreateFrame:"+template); err == nil {
+							w.children = append(w.children, child)
+						}
+					}
+				}
+			case "NormalTexture", "PushedTexture", "HighlightTexture", "DisabledTexture",
+				"CheckedTexture", "DisabledCheckedTexture", "ThumbTexture":
+				texture := l.buildButtonTexture(group, w, "CreateFrame:"+template)
+				switch group.name {
+				case "NormalTexture":
+					w.normalTexture = texture
+				case "PushedTexture":
+					w.pushedTexture = texture
+				case "HighlightTexture":
+					w.highlightTexture = texture
+				}
+				if texture.name != "" {
+					l.rt.register(texture)
+				}
+			case "NormalFont":
+				w.normalFont = group.attrDefault("style", "")
+			case "HighlightFont":
+				w.highlightFont = group.attrDefault("style", "")
+			case "DisabledFont":
+				w.disabledFont = group.attrDefault("style", "")
+			case "ButtonText":
+				label := &xmlNode{name: "FontString", attrs: map[string]string{}}
+				if name := group.attrDefault("name", ""); name != "" {
+					label.attrs["name"] = name
+				}
+				if text := group.attrDefault("text", ""); text != "" {
+					label.attrs["text"] = text
+				}
+				l.buildRegion(label, w, "CreateFrame:"+template)
+			case "Scripts":
+				for _, scriptEl := range group.children {
+					handler := scriptEl.name
+					if fnName, ok := scriptEl.attr("function"); ok {
+						w.scripts[handler] = l.namedHandler(fnName)
+						continue
+					}
+					body := strings.TrimSpace(scriptEl.text.String())
+					if body == "" {
+						continue
+					}
+					source := "@" + "CreateFrame:" + template + ":" + handler
+					if fn := l.compileScript(body, handler, source); fn != nil {
+						w.scripts[handler] = fn
+					}
+				}
+			}
+		}
+	}
+	return l
 }
 
 // resolve maps an interface path (e.g. Interface\GlueXML\GlueXML.toc) to a
@@ -217,6 +300,11 @@ func (l *Loader) loadUiChildren(ui *xmlNode, interfacePath string) error {
 				font.Color = color{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), 1}
 			}
 			l.rt.fonts[name] = font
+			fontTable := l.rt.L.NewTable()
+			fontTable.RawSetString("name", lua.LString(name))
+			fontTable.RawSetString("height", lua.LNumber(font.Height))
+			fontTable.RawSetString("font", lua.LString(font.FontFile))
+			l.rt.L.SetGlobal(name, fontTable)
 		default:
 			if isWidgetElement(child.name) {
 				if err := l.instantiateTopLevel(child, interfacePath); err != nil {
@@ -311,6 +399,11 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 		case "Scripts":
 			for _, scriptEl := range group.children {
 				handler := scriptEl.name
+				if fnName, ok := scriptEl.attr("function"); ok {
+					// Handler bound to a named global function.
+					w.scripts[handler] = l.namedHandler(fnName)
+					continue
+				}
 				body := strings.TrimSpace(scriptEl.text.String())
 				if body == "" {
 					continue
@@ -343,6 +436,21 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 		case "ButtonText":
 			if text := group.attrDefault("text", ""); text != "" {
 				w.text = text
+			}
+			if name := group.attrDefault("name", ""); name != "" || true {
+				label := &xmlNode{
+					name:  "FontString",
+					attrs: map[string]string{},
+				}
+				if name != "" {
+					label.attrs["name"] = name
+				}
+				if text := group.attrDefault("text", ""); text != "" {
+					label.attrs["text"] = text
+				}
+				if _, err := l.buildRegion(label, w, interfacePath); err != nil {
+					return nil, err
+				}
 			}
 		default:
 			// Remaining child elements (insets, scroll children, model
@@ -524,26 +632,48 @@ func (l *Loader) applyWidgetAttrs(w *widget, node *xmlNode) {
 // compileScript loads an XML script body as a function with the implicit
 // parameter list the client compiles script handlers with. The chunk name
 // carries the file and handler so error positions attribute correctly.
+// namedHandler returns a function value that dispatches to the named
+// global at call time, matching the function="..." script attribute.
+func (l *Loader) namedHandler(fnName string) *lua.LFunction {
+	return l.rt.L.NewFunction(func(L *lua.LState) int {
+		fn := L.GetGlobal(fnName)
+		if fn.Type() != lua.LTFunction {
+			return 0
+		}
+		n := L.GetTop()
+		L.Push(fn)
+		for i := 1; i <= n; i++ {
+			L.Push(L.Get(i))
+		}
+		L.Call(n, lua.MultRet)
+		return 0
+	})
+}
+
 func (l *Loader) compileScript(body, handler, chunkName string) *lua.LFunction {
 	L := l.rt.L
+	top := L.GetTop()
+	defer L.SetTop(top)
 	source := "return function(" + scriptParams(handler) + ") " + body + "\nend"
 	fn, err := L.LoadString(source)
 	if err != nil {
+		fmt.Printf("COMPILE DEBUG [%s]: %v\nSOURCE: %q\n", chunkName, err, source)
 		l.rt.recordScriptError(strings.TrimPrefix(chunkName, "@"), err.Error())
 		return nil
 	}
 	L.Push(fn)
 	if err := L.PCall(0, 1, nil); err != nil {
+		fmt.Printf("PCALL DEBUG [%s]: %v\nSOURCE: %q\n", chunkName, err, source)
 		l.rt.recordScriptError(strings.TrimPrefix(chunkName, "@"), err.Error())
 		return nil
 	}
 	value := L.Get(-1)
 	L.Pop(1)
-	fn, ok := value.(*lua.LFunction)
+	result, ok := value.(*lua.LFunction)
 	if !ok {
 		return nil
 	}
-	return fn
+	return result
 }
 
 func parseAnchors(node *xmlNode) []anchorPoint {

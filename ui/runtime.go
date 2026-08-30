@@ -1,10 +1,8 @@
 package ui
 
 import (
-	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	lua "github.com/yuin/gopher-lua"
 )
@@ -37,15 +35,25 @@ type Runtime struct {
 	// character list API functions.
 	Glue GlueState
 
+	// scriptErrorHandler is the function scripts install through
+	// seterrorhandler; the client invokes it for script errors.
+	scriptErrorHandler *lua.LFunction
+
+	// instantiateTemplate applies a named virtual template to a widget
+	// created through CreateFrame; the loader installs it.
+	instantiateTemplate func(w *widget, template string)
+
+	traceInvocations []string
+
 	// Host hooks supply client state that lives outside the interface
 	// runtime: screen size, audio, login actions, realm and character
 	// data. Nil hooks behave as an idle, unconnected client.
 	Host Host
 
-	// ScriptBudget bounds each script execution. The original client
-	// aborts runaway scripts through a Lua debug hook; this runtime uses
-	// the VM's context deadline as the equivalent guard.
-	ScriptBudget time.Duration
+	// The original client aborts runaway scripts through a Lua debug hook
+	// with a 110-instruction budget. The Go VM in use exposes no debug-hook
+	// API, and its context deadline corrupts state on error unwinding, so
+	// no instruction budget is enforced yet.
 }
 
 // Host is implemented by the client shell to back glue API functions that
@@ -86,7 +94,6 @@ func NewRuntime(host Host) *Runtime {
 		cvars:        make(map[string]string),
 		cvarDefaults: make(map[string]string),
 		Host:         host,
-		ScriptBudget: 10 * time.Second,
 	}
 	registerWidgetMethods(rt.L, rt)
 	registerGlueAPI(rt)
@@ -141,13 +148,9 @@ func (rt *Runtime) Execute(source, chunkName string) bool {
 }
 
 func (rt *Runtime) doChunk(source, chunkName string) error {
-	if rt.ScriptBudget > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), rt.ScriptBudget)
-		defer cancel()
-		rt.L.SetContext(ctx)
-		defer rt.L.SetContext(nil)
-	}
-	fn, err := rt.L.LoadString(source)
+	top := rt.L.GetTop()
+	defer rt.L.SetTop(top)
+	fn, err := rt.L.Load(strings.NewReader(source), chunkName)
 	if err != nil {
 		return err
 	}
@@ -184,13 +187,24 @@ func (rt *Runtime) doFileBody(source, interfacePath string) bool {
 // argument (used for OnShow/OnHide style handlers).
 func (rt *Runtime) fireHandler(w *widget, handler string) {
 	if fn, ok := w.scripts[handler]; ok {
+		rt.traceInvocations = append(rt.traceInvocations, w.name+"|"+handler)
+		top := rt.L.GetTop()
+		defer rt.L.SetTop(top)
+		// Handlers compiled from older interface code address their frame
+		// through the legacy implicit `this` global.
+		prevThis := rt.L.GetGlobal("this")
+		rt.L.SetGlobal("this", w.luaValue(rt.L))
 		rt.L.Push(fn)
 		rt.L.Push(w.luaValue(rt.L))
 		if err := rt.L.PCall(1, 0, nil); err != nil {
 			rt.recordScriptError(w.name+"/"+handler, err.Error())
 		}
+		rt.L.SetGlobal("this", prevThis)
 	}
 }
+
+// TraceInvocations records handler dispatches for diagnostics.
+func (rt *Runtime) TraceInvocations() []string { return rt.traceInvocations }
 
 // fire invokes a widget handler with explicit arguments.
 func (rt *Runtime) fire(w *widget, handler string, args []lua.LValue) {
@@ -198,6 +212,10 @@ func (rt *Runtime) fire(w *widget, handler string, args []lua.LValue) {
 	if !ok {
 		return
 	}
+	top := rt.L.GetTop()
+	defer rt.L.SetTop(top)
+	prevThis := rt.L.GetGlobal("this")
+	rt.L.SetGlobal("this", w.luaValue(rt.L))
 	rt.L.Push(fn)
 	for _, a := range args {
 		rt.L.Push(a)
@@ -205,6 +223,7 @@ func (rt *Runtime) fire(w *widget, handler string, args []lua.LValue) {
 	if err := rt.L.PCall(len(args), 0, nil); err != nil {
 		rt.recordScriptError(w.name+"/"+handler, err.Error())
 	}
+	rt.L.SetGlobal("this", prevThis)
 }
 
 // registerEventWidget subscribes a widget to a glue event by name.
