@@ -3,7 +3,7 @@ package world
 import (
 	"testing"
 
-	"moreno.warcraft/auth"
+	"github.com/MorenoLand/Moreno.WoW/auth"
 )
 
 func TestHeaderCryptRoundTrip(t *testing.T) {

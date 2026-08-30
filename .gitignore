@@ -13,6 +13,7 @@ dist/
 out/
 target/
 captures/
+config.json
 *.log
 *.exe
 *.dll

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"moreno.warcraft/auth"
+	"github.com/MorenoLand/Moreno.WoW/auth"
 )
 
 func TestConnectionCompletesHandshakeAndReadsCharacters(t *testing.T) {
@@ -37,6 +37,10 @@ func TestConnectionCompletesHandshakeAndReadsCharacters(t *testing.T) {
 		t.Fatal(err)
 	}
 	characters, err := connection.Characters()
+	if err != nil {
+		t.Fatal(err)
+	}
+	position, err := connection.EnterWorld(characters[0].GUID)
 	closeErr := connection.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -47,8 +51,32 @@ func TestConnectionCompletesHandshakeAndReadsCharacters(t *testing.T) {
 	if len(characters) != 1 || characters[0].Name != "Tester" || characters[0].Level != 10 {
 		t.Fatalf("unexpected characters: %+v", characters)
 	}
+	if position.Map != 12 || position.X != 1 || position.Y != 2 || position.Z != 3 || position.Orientation != 0.5 {
+		t.Fatalf("unexpected world position: %+v", position)
+	}
 	if err := <-serverErrors; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSplitRealmAddress(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		host  string
+		port  uint16
+	}{
+		{input: "127.0.0.1:8085", host: "127.0.0.1", port: 8085},
+		{input: "realm.example", host: "realm.example", port: DefaultPort},
+		{input: "[::1]:8085", host: "::1", port: 8085},
+		{input: "::1", host: "::1", port: DefaultPort},
+	} {
+		host, port, err := SplitRealmAddress(test.input)
+		if err != nil || host != test.host || port != test.port {
+			t.Fatalf("%q -> %q %d %v", test.input, host, port, err)
+		}
+	}
+	if _, _, err := SplitRealmAddress("realm:not-a-port"); err == nil {
+		t.Fatal("accepted malformed realm port")
 	}
 }
 
@@ -77,7 +105,22 @@ func serveWorldHandshake(connection net.Conn, key [auth.SessionKeyLen]byte) erro
 	if packet.Opcode != uint32(CharEnum) {
 		return fmt.Errorf("expected CMSG_CHAR_ENUM, got %#x", packet.Opcode)
 	}
-	return writeServerPacket(connection, serverCrypt, CharEnumResponse, characterBody())
+	if err := writeServerPacket(connection, serverCrypt, CharEnumResponse, characterBody()); err != nil {
+		return err
+	}
+	packet, err = readClientPacket(connection, serverCrypt)
+	if err != nil {
+		return err
+	}
+	if packet.Opcode != uint32(PlayerLogin) || len(packet.Body) != 8 || binary.LittleEndian.Uint64(packet.Body) != 0x0102030405060708 {
+		return fmt.Errorf("unexpected player login: %#v", packet)
+	}
+	position := make([]byte, 20)
+	binary.LittleEndian.PutUint32(position[:4], 12)
+	for i, value := range []float32{1, 2, 3, .5} {
+		binary.LittleEndian.PutUint32(position[4+i*4:], math.Float32bits(value))
+	}
+	return writeServerPacket(connection, serverCrypt, LoginVerifyWorld, position)
 }
 
 func readClientPacket(connection net.Conn, crypt *HeaderCrypt) (struct {

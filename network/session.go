@@ -2,14 +2,15 @@ package network
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"moreno.warcraft/auth"
-	"moreno.warcraft/world"
+	"github.com/MorenoLand/Moreno.WoW/auth"
+	"github.com/MorenoLand/Moreno.WoW/world"
 )
 
 type Config struct {
@@ -19,11 +20,13 @@ type Config struct {
 	Locale      string
 	Realm       string
 	Timeout     time.Duration
+	Debug       bool
 }
 
-type Result struct {
+type Session struct {
 	Realm      auth.Realm
 	Characters []world.Character
+	connection *world.Connection
 }
 
 func DefaultConfig() Config {
@@ -44,37 +47,64 @@ func ConfigFromEnvironment() Config {
 	return config
 }
 
-func Login(config Config) (Result, error) {
+func Login(config Config) (*Session, error) {
 	if config.Account == "" || config.Password == "" {
-		return Result{}, fmt.Errorf("WOW_ACCOUNT and WOW_PASSWORD are required")
+		return nil, fmt.Errorf("WOW_ACCOUNT and WOW_PASSWORD are required")
 	}
 	authHost, authPort, err := splitEndpoint(config.AuthAddress, auth.DefaultPort)
 	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
+	debugf(config, "auth: connecting to %s:%d", authHost, authPort)
 	loggedIn, err := auth.Login(authHost, authPort, config.Account, config.Password, config.Locale, config.Timeout)
 	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
+	debugf(config, "auth: received %d realm(s)", len(loggedIn.Realms))
 	realm, err := selectRealm(loggedIn.Realms, config.Realm)
 	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
 	worldHost, worldPort, err := world.SplitRealmAddress(realm.Address)
 	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
+	debugf(config, "world: selected realm %q at %s", realm.Name, realm.Address)
 	address := net.JoinHostPort(worldHost, strconv.Itoa(int(worldPort)))
 	connection, err := world.Open(address, config.Account, realm.ID, loggedIn.SessionKey, config.Timeout)
 	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
-	defer connection.Close()
 	characters, err := connection.Characters()
 	if err != nil {
-		return Result{}, err
+		_ = connection.Close()
+		return nil, err
 	}
-	return Result{Realm: realm, Characters: characters}, nil
+	debugf(config, "world: received %d character(s)", len(characters))
+	return &Session{Realm: realm, Characters: characters, connection: connection}, nil
+}
+
+func (s *Session) Close() error {
+	if s == nil || s.connection == nil {
+		return nil
+	}
+	return s.connection.Close()
+}
+
+func (s *Session) EnterWorld(index int) (world.WorldPosition, error) {
+	if s == nil || s.connection == nil {
+		return world.WorldPosition{}, fmt.Errorf("world session is closed")
+	}
+	if index < 0 || index >= len(s.Characters) {
+		return world.WorldPosition{}, fmt.Errorf("character index %d is out of range", index)
+	}
+	return s.connection.EnterWorld(s.Characters[index].GUID)
+}
+
+func debugf(config Config, format string, args ...interface{}) {
+	if config.Debug {
+		log.Printf(format, args...)
+	}
 }
 
 func selectRealm(realms []auth.Realm, selector string) (auth.Realm, error) {
@@ -115,10 +145,30 @@ func splitEndpoint(address string, defaultPort uint16) (string, uint16, error) {
 		}
 		return host, uint16(value), nil
 	}
-	if index := strings.LastIndexByte(address, ':'); index >= 0 && !strings.Contains(address[index+1:], ":") {
-		if value, err := strconv.ParseUint(address[index+1:], 10, 16); err == nil && value != 0 {
-			return address[:index], uint16(value), nil
+	if strings.HasPrefix(address, "[") {
+		close := strings.IndexByte(address, ']')
+		if close < 0 {
+			return "", 0, fmt.Errorf("invalid bracketed auth address %q", address)
 		}
+		if len(address) == close+1 {
+			return address[1:close], defaultPort, nil
+		}
+		if address[close+1] != ':' {
+			return "", 0, fmt.Errorf("invalid auth address %q", address)
+		}
+		value, err := strconv.ParseUint(address[close+2:], 10, 16)
+		if err != nil || value == 0 {
+			return "", 0, fmt.Errorf("invalid auth port in %q", address)
+		}
+		return address[1:close], uint16(value), nil
+	}
+	if strings.Count(address, ":") == 1 {
+		index := strings.LastIndexByte(address, ':')
+		value, err := strconv.ParseUint(address[index+1:], 10, 16)
+		if err != nil || value == 0 {
+			return "", 0, fmt.Errorf("invalid auth port in %q", address)
+		}
+		return address[:index], uint16(value), nil
 	}
 	return strings.Trim(address, "[]"), defaultPort, nil
 }

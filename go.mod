@@ -1,4 +1,4 @@
-module moreno.warcraft
+module github.com/MorenoLand/Moreno.WoW
 
 go 1.26
 

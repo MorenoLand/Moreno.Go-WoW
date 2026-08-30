@@ -9,7 +9,7 @@ import (
 	"math"
 	"strings"
 
-	"moreno.warcraft/auth"
+	"github.com/MorenoLand/Moreno.WoW/auth"
 )
 
 const (
@@ -24,6 +24,7 @@ type ClientOpcode uint32
 
 const (
 	CharEnum         ClientOpcode = 0x0037
+	PlayerLogin      ClientOpcode = 0x003D
 	AuthSession      ClientOpcode = 0x01ED
 	TimeSyncResponse ClientOpcode = 0x0391
 )
@@ -62,6 +63,9 @@ func ServerHeaderLenForFirstByte(first byte) int {
 }
 
 func ParseServerHeader(header []byte) (ServerHeader, error) {
+	if len(header) == 0 {
+		return ServerHeader{}, fmt.Errorf("server header is empty")
+	}
 	need := ServerHeaderLenForFirstByte(header[0])
 	if len(header) < need {
 		return ServerHeader{}, fmt.Errorf("server header truncated: need %d bytes, got %d", need, len(header))
@@ -333,6 +337,14 @@ type Character struct {
 	Equipment      [EquipmentSlots]Equipment
 }
 
+type WorldPosition struct {
+	Map         uint32
+	X           float32
+	Y           float32
+	Z           float32
+	Orientation float32
+}
+
 func (c Character) NeedsRename() bool { return c.Flags&0x4000 != 0 }
 
 func ParseCharEnum(body []byte) ([]Character, error) {
@@ -416,6 +428,37 @@ func ParseResultCode(body []byte, what string) (uint8, error) {
 		return 0, err
 	}
 	return code, nil
+}
+
+func BuildPlayerLogin(guid uint64) []byte {
+	body := make([]byte, 8)
+	binary.LittleEndian.PutUint64(body, guid)
+	return body
+}
+
+func ParseLoginVerifyWorld(body []byte) (WorldPosition, error) {
+	r := NewReader(body, "SMSG_LOGIN_VERIFY_WORLD")
+	mapID, err := r.U32()
+	if err != nil {
+		return WorldPosition{}, err
+	}
+	position := WorldPosition{Map: mapID}
+	if position.X, err = r.F32(); err != nil {
+		return WorldPosition{}, err
+	}
+	if position.Y, err = r.F32(); err != nil {
+		return WorldPosition{}, err
+	}
+	if position.Z, err = r.F32(); err != nil {
+		return WorldPosition{}, err
+	}
+	if position.Orientation, err = r.F32(); err != nil {
+		return WorldPosition{}, err
+	}
+	if err := r.Finish(); err != nil {
+		return WorldPosition{}, err
+	}
+	return position, nil
 }
 
 func ParseTimeSyncRequest(body []byte) (uint32, error) {

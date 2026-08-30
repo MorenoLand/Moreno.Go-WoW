@@ -2,6 +2,9 @@ package render
 
 import (
 	"fmt"
+	"log"
+	"os"
+	"os/signal"
 
 	"github.com/g3n/engine/app"
 	"github.com/g3n/engine/camera"
@@ -16,13 +19,30 @@ import (
 	"github.com/g3n/engine/renderer"
 	"github.com/g3n/engine/window"
 
-	"moreno.warcraft/network"
-	"moreno.warcraft/world"
+	"github.com/MorenoLand/Moreno.WoW/network"
+	"github.com/MorenoLand/Moreno.WoW/world"
 	"time"
 )
 
-func Run(config network.Config) {
+func Run(config network.Config, dataPath string, debug bool) {
 	a := app.App()
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt)
+	done := make(chan struct{})
+	defer func() {
+		signal.Stop(signals)
+		close(done)
+	}()
+	go func() {
+		select {
+		case <-signals:
+			if debug {
+				log.Print("shutdown: Ctrl+C received")
+			}
+			a.Exit()
+		case <-done:
+		}
+	}()
 	scene := core.NewNode()
 	gui.Manager().Set(scene)
 	cam := camera.New(1)
@@ -44,7 +64,7 @@ func Run(config network.Config) {
 	a.Subscribe(window.OnWindowSize, onResize)
 	onResize("", nil)
 	a.Gls().ClearColor(.5, .5, .5, 1)
-	title := gui.NewLabel("Moreno Warcraft")
+	title := gui.NewLabel("MorenoWoW")
 	title.SetFontSize(24)
 	title.SetPosition(24, 24)
 	scene.Add(title)
@@ -54,12 +74,20 @@ func Run(config network.Config) {
 	realmLabel := gui.NewLabel("")
 	realmLabel.SetPosition(24, 94)
 	scene.Add(realmLabel)
+	if dataPath == "" {
+		dataPath = "not configured"
+	}
+	dataLabel := gui.NewLabel(fmt.Sprintf("MPQ data: %s", dataPath))
+	dataLabel.SetPosition(24, 122)
+	scene.Add(dataLabel)
 	charactersLabel := gui.NewLabel("Characters")
 	charactersLabel.SetFontSize(18)
-	charactersLabel.SetPosition(24, 132)
+	charactersLabel.SetPosition(24, 154)
 	scene.Add(charactersLabel)
-	resultChannel := make(chan network.Result, 1)
+	resultChannel := make(chan *network.Session, 1)
 	errorChannel := make(chan error, 1)
+	entryChannel := make(chan world.WorldPosition, 1)
+	entryErrorChannel := make(chan error, 1)
 	if config.Account == "" || config.Password == "" {
 		status.SetText("Set WOW_ACCOUNT and WOW_PASSWORD, then run again.")
 	} else {
@@ -82,13 +110,36 @@ func Run(config network.Config) {
 				charactersLabel.SetText("Characters\nNo characters returned")
 			} else {
 				for i, character := range result.Characters {
-					row := gui.NewLabel(fmt.Sprintf("%s  Level %d  %s %s", character.Name, character.Level, world.RaceName(character.Race), world.ClassName(character.Class)))
-					row.SetPosition(40, float32(166+i*28))
+					index := i
+					row := gui.NewButton(fmt.Sprintf("%s  Level %d  %s %s", character.Name, character.Level, world.RaceName(character.Race), world.ClassName(character.Class)))
+					row.SetPosition(40, float32(188+i*28))
+					row.Subscribe(gui.OnClick, func(name string, ev interface{}) {
+						status.SetText(fmt.Sprintf("Entering %s...", result.Characters[index].Name))
+						if debug {
+							log.Printf("world: entering character %q", result.Characters[index].Name)
+						}
+						go func() {
+							position, err := result.EnterWorld(index)
+							if err != nil {
+								entryErrorChannel <- err
+								return
+							}
+							entryChannel <- position
+						}()
+					})
 					scene.Add(row)
 				}
 			}
 		case err := <-errorChannel:
 			status.SetText(fmt.Sprintf("Login failed: %s", err))
+		case position := <-entryChannel:
+			status.SetText(fmt.Sprintf("Entered map %d at %.2f, %.2f, %.2f", position.Map, position.X, position.Y, position.Z))
+			if debug {
+				log.Printf("world: entered map %d at %.2f, %.2f, %.2f", position.Map, position.X, position.Y, position.Z)
+			}
+		case err := <-entryErrorChannel:
+			status.SetText(fmt.Sprintf("Character login failed: %s", err))
+		default:
 		}
 		a.Gls().Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
 		r.Render(scene, cam)

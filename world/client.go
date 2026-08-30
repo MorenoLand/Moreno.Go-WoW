@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"moreno.warcraft/auth"
+	"github.com/MorenoLand/Moreno.WoW/auth"
 )
 
 const DefaultPort uint16 = 8085
@@ -91,6 +91,17 @@ func (c *Connection) Characters() ([]Character, error) {
 		return nil, err
 	}
 	return ParseCharEnum(packet.Body)
+}
+
+func (c *Connection) EnterWorld(guid uint64) (WorldPosition, error) {
+	if err := c.send(PlayerLogin, BuildPlayerLogin(guid)); err != nil {
+		return WorldPosition{}, err
+	}
+	packet, err := c.expect(LoginVerifyWorld)
+	if err != nil {
+		return WorldPosition{}, err
+	}
+	return ParseLoginVerifyWorld(packet.Body)
 }
 
 func (c *Connection) expect(opcode uint16) (Packet, error) {
@@ -204,10 +215,30 @@ func SplitRealmAddress(address string) (string, uint16, error) {
 		}
 		return host, uint16(value), nil
 	}
-	if index := strings.LastIndexByte(address, ':'); index >= 0 && !strings.Contains(address[index+1:], ":") {
-		if value, err := strconv.ParseUint(address[index+1:], 10, 16); err == nil && value != 0 {
-			return address[:index], uint16(value), nil
+	if strings.HasPrefix(address, "[") {
+		close := strings.IndexByte(address, ']')
+		if close < 0 {
+			return "", 0, fmt.Errorf("invalid bracketed realm address %q", address)
 		}
+		if len(address) == close+1 {
+			return address[1:close], DefaultPort, nil
+		}
+		if address[close+1] != ':' {
+			return "", 0, fmt.Errorf("invalid realm address %q", address)
+		}
+		value, err := strconv.ParseUint(address[close+2:], 10, 16)
+		if err != nil || value == 0 {
+			return "", 0, fmt.Errorf("invalid realm port in %q", address)
+		}
+		return address[1:close], uint16(value), nil
+	}
+	if strings.Count(address, ":") == 1 {
+		index := strings.LastIndexByte(address, ':')
+		value, err := strconv.ParseUint(address[index+1:], 10, 16)
+		if err != nil || value == 0 {
+			return "", 0, fmt.Errorf("invalid realm port in %q", address)
+		}
+		return address[:index], uint16(value), nil
 	}
 	return strings.Trim(address, "[]"), DefaultPort, nil
 }

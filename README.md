@@ -20,6 +20,10 @@ go run .
 
 Set `WOW_ACCOUNT` and `WOW_PASSWORD` before running. `WOW_AUTH` may override the default `127.0.0.1:3724` auth address, and `WOW_REALM` may select a realm by name, address, or id.
 
+Build the attached-console executable with `scripts\build.ps1` or `scripts/build.sh`; the output is `bin/MorenoWoW.exe` on Windows. Run `bin\MorenoWoW.exe --debug` from a terminal to keep text diagnostics attached to the G3N window. Ctrl+C requests shutdown of both.
+
+The client creates `config.json` in the working folder and remembers the auth address, account, locale, realm selector, and MPQ data path. It never writes the password to that file. Use `--data` or `WOW_DATA` to set the data path.
+
 ## Development
 
 Use the repository’s documented toolchain and commands as they are added. For a standard Go layout, the usual checks are:

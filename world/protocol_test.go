@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"moreno.warcraft/auth"
+	"github.com/MorenoLand/Moreno.WoW/auth"
 )
 
 func TestClientPacketHeader(t *testing.T) {
@@ -25,6 +25,9 @@ func TestClientPacketHeader(t *testing.T) {
 }
 
 func TestServerHeaderForms(t *testing.T) {
+	if _, err := ParseServerHeader(nil); err == nil {
+		t.Fatal("accepted an empty server header")
+	}
 	normal := []byte{0, 6, byte(CharEnumResponse), byte(CharEnumResponse >> 8)}
 	parsed, err := ParseServerHeader(normal)
 	if err != nil {
