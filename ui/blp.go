@@ -80,7 +80,7 @@ func decodeBLPPalette(mip []byte, width, height int, alphaDepth uint32, palette 
 			for x := 0; x < width; x++ {
 				c := palette[pixels[y*width+x]]
 				c.A = alpha[y*width+x]
-				img.SetRGBA(x, y, c)
+				img.Set(x, y, color.NRGBA{R: c.R, G: c.G, B: c.B, A: c.A})
 			}
 		}
 	} else if alphaDepth == 1 {
@@ -96,13 +96,14 @@ func decodeBLPPalette(mip []byte, width, height int, alphaDepth uint32, palette 
 				if bit&1 == 0 {
 					c.A = 0
 				}
-				img.SetRGBA(x, y, c)
+				img.Set(x, y, color.NRGBA{R: c.R, G: c.G, B: c.B, A: c.A})
 			}
 		}
 	} else {
 		for y := 0; y < height; y++ {
 			for x := 0; x < width; x++ {
-				img.SetRGBA(x, y, palette[pixels[y*width+x]])
+				c := palette[pixels[y*width+x]]
+				img.Set(x, y, color.NRGBA{R: c.R, G: c.G, B: c.B, A: c.A})
 			}
 		}
 	}
@@ -189,7 +190,7 @@ func decodeDXT1Block(block []byte, img *image.RGBA, bx, by int) {
 			if c0 <= c1 && code == 3 {
 				c.A = 0
 			}
-			img.SetRGBA(x, y, c)
+			img.Set(x, y, color.NRGBA{R: c.R, G: c.G, B: c.B, A: c.A})
 		}
 	}
 }
@@ -220,7 +221,7 @@ func decodeDXT3Block(block []byte, img *image.RGBA, bx, by int) {
 			} else {
 				a = aByte >> 4
 			}
-			img.SetRGBA(x, y, color.RGBA{R: palette[code][0], G: palette[code][1], B: palette[code][2], A: a | a<<4})
+			img.Set(x, y, color.NRGBA{R: palette[code][0], G: palette[code][1], B: palette[code][2], A: a | a<<4})
 		}
 	}
 }
@@ -231,11 +232,11 @@ func decodeDXT5Block(block []byte, img *image.RGBA, bx, by int) {
 	alpha[0], alpha[1] = a0, a1
 	if a0 > a1 {
 		for i := 0; i < 6; i++ {
-			alpha[2+i] = (uint8(6-i)*a0 + uint8(i+1)*a1) / 7
+			alpha[2+i] = uint8((uint16(6-i)*uint16(a0) + uint16(i+1)*uint16(a1)) / 7)
 		}
 	} else {
 		for i := 0; i < 4; i++ {
-			alpha[2+i] = (uint8(4-i)*a0 + uint8(i+1)*a1) / 5
+			alpha[2+i] = uint8((uint16(4-i)*uint16(a0) + uint16(i+1)*uint16(a1)) / 5)
 		}
 		alpha[6], alpha[7] = 0, 255
 	}
@@ -262,7 +263,7 @@ func decodeDXT5Block(block []byte, img *image.RGBA, bx, by int) {
 			}
 			code := uint8(bits >> (2 * uint(py*4+px)) & 3)
 			aIdx := uint8(alphaBits >> (3 * uint(py*4+px)) & 7)
-			img.SetRGBA(x, y, color.RGBA{R: palette[code][0], G: palette[code][1], B: palette[code][2], A: alpha[aIdx]})
+			img.Set(x, y, color.NRGBA{R: palette[code][0], G: palette[code][1], B: palette[code][2], A: alpha[aIdx]})
 		}
 	}
 }

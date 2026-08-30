@@ -347,7 +347,7 @@ func (l *Loader) instantiateTopLevel(node *xmlNode, interfacePath string) error 
 func isWidgetElement(name string) bool {
 	switch name {
 	case "Frame", "Button", "CheckButton", "EditBox", "Slider", "ScrollFrame",
-		"SimpleHTML", "Model", "ModelFFX", "MovieFrame":
+		"SimpleHTML", "Model", "ModelFFX", "MovieFrame", "Texture", "FontString":
 		return true
 	}
 	return false
@@ -480,18 +480,36 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 // buildButtonTexture creates an unnamed texture region from a button
 // texture element.
 func (l *Loader) buildButtonTexture(node *xmlNode, parent *widget, interfacePath string) *widget {
-	w := newWidget(kindTexture, resolveParentName(node.attrDefault("name", ""), parent.name))
+	merged := node
+	if inherits, ok := node.attr("inherits"); ok && inherits != "" {
+		if tpl, ok := l.rt.virtuals[inherits]; ok {
+			merged = mergeTemplate(tpl, node)
+		}
+	}
+	w := newWidget(kindTexture, resolveParentName(merged.attrDefault("name", ""), parent.name))
 	w.parent = parent
-	w.textureFile = node.attrDefault("file", "")
-	if a := node.child("Anchors"); a != nil {
+	w.textureFile = merged.attrDefault("file", "")
+	if tc := merged.child("TexCoords"); tc != nil {
+		w.texCoordL = attrFloat(tc, "left", 0)
+		w.texCoordR = attrFloat(tc, "right", 1)
+		w.texCoordT = attrFloat(tc, "top", 0)
+		w.texCoordB = attrFloat(tc, "bottom", 1)
+	}
+	if a := merged.child("Anchors"); a != nil {
 		w.points = parseAnchors(a)
 	}
-	if s := node.child("Size"); s != nil {
+	if s := merged.child("Size"); s != nil {
 		w.width = attrFloat(s, "x", w.width)
 		w.height = attrFloat(s, "y", w.height)
 		if d := s.child("AbsDimension"); d != nil {
 			w.width = attrFloat(d, "x", w.width)
 			w.height = attrFloat(d, "y", w.height)
+		}
+	}
+	if v, ok := merged.attr("setAllPoints"); (ok && parseBool(v, false)) || (w.width == 0 && w.height == 0 && len(w.points) == 0) {
+		w.points = []anchorPoint{
+			{point: "TOPLEFT", relativePoint: "TOPLEFT"},
+			{point: "BOTTOMRIGHT", relativePoint: "BOTTOMRIGHT"},
 		}
 	}
 	return w
@@ -499,33 +517,39 @@ func (l *Loader) buildButtonTexture(node *xmlNode, parent *widget, interfacePath
 
 // buildRegion creates a Texture or FontString region under a frame.
 func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string) (*widget, error) {
+	merged := node
+	if inherits, ok := merged.attr("inherits"); ok && inherits != "" {
+		if tpl, ok := l.rt.virtuals[inherits]; ok {
+			merged = mergeTemplate(tpl, node)
+		}
+	}
 	kind := kindTexture
-	if node.name == "FontString" {
+	if merged.name == "FontString" {
 		kind = kindFontString
 	}
-	w := newWidget(kind, resolveParentName(node.attrDefault("name", ""), parent.name))
+	w := newWidget(kind, resolveParentName(merged.attrDefault("name", ""), parent.name))
 	w.parent = parent
 	if kind == kindTexture {
-		w.textureFile = node.attrDefault("file", "")
-		if tc := node.child("TexCoords"); tc != nil {
+		w.textureFile = merged.attrDefault("file", "")
+		if tc := merged.child("TexCoords"); tc != nil {
 			w.texCoordL = attrFloat(tc, "left", 0)
 			w.texCoordR = attrFloat(tc, "right", 1)
 			w.texCoordT = attrFloat(tc, "top", 0)
 			w.texCoordB = attrFloat(tc, "bottom", 1)
 		}
-		if c := node.child("Color"); c != nil {
+		if c := merged.child("Color"); c != nil {
 			w.vertexColor = rgba{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), attrFloat(c, "a", 1)}
 		}
 	} else {
-		w.text = node.attrDefault("text", "")
-		w.fontObject = node.attrDefault("inherits", "")
-		w.justifyH = node.attrDefault("justifyH", "")
-		w.justifyV = node.attrDefault("justifyV", "")
-		if c := node.child("Color"); c != nil {
+		w.text = merged.attrDefault("text", "")
+		w.fontObject = merged.attrDefault("inherits", "")
+		w.justifyH = merged.attrDefault("justifyH", "")
+		w.justifyV = merged.attrDefault("justifyV", "")
+		if c := merged.child("Color"); c != nil {
 			w.textColor = rgba{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), 1}
 		}
 	}
-	if s := node.child("Size"); s != nil {
+	if s := merged.child("Size"); s != nil {
 		w.width = attrFloat(s, "x", w.width)
 		w.height = attrFloat(s, "y", w.height)
 		if d := s.child("AbsDimension"); d != nil {
@@ -533,10 +557,16 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 			w.height = attrFloat(d, "y", w.height)
 		}
 	}
-	if a := node.child("Anchors"); a != nil {
+	if a := merged.child("Anchors"); a != nil {
 		w.points = parseAnchors(a)
 	}
-	if hidden, ok := node.attr("hidden"); ok {
+	if v, ok := merged.attr("setAllPoints"); (ok && parseBool(v, false)) || (w.width == 0 && w.height == 0 && len(w.points) == 0 && kind == kindTexture) {
+		w.points = []anchorPoint{
+			{point: "TOPLEFT", relativePoint: "TOPLEFT"},
+			{point: "BOTTOMRIGHT", relativePoint: "BOTTOMRIGHT"},
+		}
+	}
+	if hidden, ok := merged.attr("hidden"); ok {
 		w.shown = !parseBool(hidden, false)
 	}
 	parent.children = append(parent.children, w)
@@ -590,7 +620,7 @@ func (l *Loader) applyWidgetAttrs(w *widget, node *xmlNode) {
 			w.alpha = f
 		}
 	}
-	if v, ok := node.attr("setAllPoints"); ok && parseBool(v, false) {
+	if v, ok := node.attr("setAllPoints"); (ok && parseBool(v, false)) || (w.width == 0 && w.height == 0 && len(w.points) == 0 && w.kind == kindTexture) {
 		w.points = []anchorPoint{
 			{point: "TOPLEFT", relativePoint: "TOPLEFT"},
 			{point: "BOTTOMRIGHT", relativePoint: "BOTTOMRIGHT"},
@@ -799,7 +829,7 @@ func mergeTemplate(tpl, instance *xmlNode) *xmlNode {
 		merged.attrs[k] = v
 	}
 	replaced := map[string]bool{}
-	for _, group := range []string{"Size", "Anchors", "Backdrop"} {
+	for _, group := range []string{"Size", "Anchors", "Backdrop", "TexCoords", "Color"} {
 		if instance.child(group) != nil {
 			replaced[group] = true
 		}

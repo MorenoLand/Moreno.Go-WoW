@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -103,6 +104,8 @@ func SoftwareRenderLogin(glue, frame, assets string) (*image.RGBA, error) {
 		switch w.kind {
 		case kindTexture:
 			if w.textureFile != "" {
+				tc := [4]float64{w.texCoordL, w.texCoordR, w.texCoordT, w.texCoordB}
+				log.Printf("Painting texture: %s (Rect: %v) tc: %v", w.textureFile, rect, tc)
 				img, ok := cache[w.textureFile]
 				if !ok {
 					data, err := assetLoader.ReadAsset(w.textureFile)
@@ -110,7 +113,11 @@ func SoftwareRenderLogin(glue, frame, assets string) (*image.RGBA, error) {
 						decoded, derr := DecodeBLP(data)
 						if derr == nil {
 							img = decoded
+						} else {
+							log.Printf("Decode error for %s: %v", w.textureFile, derr)
 						}
+					} else {
+						log.Printf("Read error for %s: %v", w.textureFile, err)
 					}
 					cache[w.textureFile] = img
 				}
@@ -136,15 +143,34 @@ func SoftwareRenderLogin(glue, frame, assets string) (*image.RGBA, error) {
 				drawText(canvas, face, text, rect, screenHeight, c)
 			}
 		}
-		if w.backdrop != nil && !w.backdrop.bgColor.isZero() {
-			c := color.RGBA{
-				R: uint8(w.backdrop.bgColor.r * 255),
-				G: uint8(w.backdrop.bgColor.g * 255),
-				B: uint8(w.backdrop.bgColor.b * 255),
-				A: uint8(w.backdrop.bgColor.a * 255),
+		if w.backdrop != nil {
+			if w.backdrop.bgFile != "" {
+				bgImg, ok := cache[w.backdrop.bgFile]
+				if !ok {
+					data, err := assetLoader.ReadAsset(w.backdrop.bgFile)
+					if err == nil {
+						decoded, derr := DecodeBLP(data)
+						if derr == nil {
+							bgImg = decoded
+						}
+					}
+					cache[w.backdrop.bgFile] = bgImg
+				}
+				if bgImg != nil {
+					tc := [4]float64{0, 1, 0, 1}
+					drawSub(canvas, bgImg, rect, screenHeight, tc)
+				}
 			}
-			dst := ScreenRect(rect, screenHeight)
-			draw.Draw(canvas, dst, &image.Uniform{C: c}, image.Point{}, draw.Over)
+			if !w.backdrop.bgColor.isZero() {
+				c := color.RGBA{
+					R: uint8(w.backdrop.bgColor.r * 255),
+					G: uint8(w.backdrop.bgColor.g * 255),
+					B: uint8(w.backdrop.bgColor.b * 255),
+					A: uint8(w.backdrop.bgColor.a * 255),
+				}
+				dst := ScreenRect(rect, screenHeight)
+				draw.Draw(canvas, dst, &image.Uniform{C: c}, image.Point{}, draw.Over)
+			}
 		}
 		
 		if w.normalTexture != nil {
