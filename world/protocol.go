@@ -436,3 +436,57 @@ func BuildTimeSyncResponse(counter, ticks uint32) []byte {
 	binary.LittleEndian.PutUint32(body[4:], ticks)
 	return body
 }
+
+func RaceName(race uint8) string {
+	switch race {
+	case 1:
+		return "Human"
+	case 2:
+		return "Orc"
+	case 3:
+		return "Dwarf"
+	case 4:
+		return "Night Elf"
+	case 5:
+		return "Undead"
+	case 6:
+		return "Tauren"
+	case 7:
+		return "Gnome"
+	case 8:
+		return "Troll"
+	case 10:
+		return "Blood Elf"
+	case 11:
+		return "Draenei"
+	default:
+		return "Unknown race"
+	}
+}
+
+func ClassName(class uint8) string {
+	switch class {
+	case 1:
+		return "Warrior"
+	case 2:
+		return "Paladin"
+	case 3:
+		return "Hunter"
+	case 4:
+		return "Rogue"
+	case 5:
+		return "Priest"
+	case 6:
+		return "Death Knight"
+	case 7:
+		return "Shaman"
+	case 8:
+		return "Mage"
+	case 9:
+		return "Warlock"
+	case 11:
+		return "Druid"
+	default:
+		return "Unknown class"
+	}
+}

@@ -1,6 +1,8 @@
 package render
 
 import (
+	"fmt"
+
 	"github.com/g3n/engine/app"
 	"github.com/g3n/engine/camera"
 	"github.com/g3n/engine/core"
@@ -13,10 +15,13 @@ import (
 	"github.com/g3n/engine/math32"
 	"github.com/g3n/engine/renderer"
 	"github.com/g3n/engine/window"
+
+	"moreno.warcraft/network"
+	"moreno.warcraft/world"
 	"time"
 )
 
-func Run() {
+func Run(config network.Config) {
 	a := app.App()
 	scene := core.NewNode()
 	gui.Manager().Set(scene)
@@ -39,7 +44,52 @@ func Run() {
 	a.Subscribe(window.OnWindowSize, onResize)
 	onResize("", nil)
 	a.Gls().ClearColor(.5, .5, .5, 1)
+	title := gui.NewLabel("Moreno Warcraft")
+	title.SetFontSize(24)
+	title.SetPosition(24, 24)
+	scene.Add(title)
+	status := gui.NewLabel("Preparing network session...")
+	status.SetPosition(24, 66)
+	scene.Add(status)
+	realmLabel := gui.NewLabel("")
+	realmLabel.SetPosition(24, 94)
+	scene.Add(realmLabel)
+	charactersLabel := gui.NewLabel("Characters")
+	charactersLabel.SetFontSize(18)
+	charactersLabel.SetPosition(24, 132)
+	scene.Add(charactersLabel)
+	resultChannel := make(chan network.Result, 1)
+	errorChannel := make(chan error, 1)
+	if config.Account == "" || config.Password == "" {
+		status.SetText("Set WOW_ACCOUNT and WOW_PASSWORD, then run again.")
+	} else {
+		status.SetText("Authenticating...")
+		go func() {
+			result, err := network.Login(config)
+			if err != nil {
+				errorChannel <- err
+				return
+			}
+			resultChannel <- result
+		}()
+	}
 	a.Run(func(r *renderer.Renderer, dt time.Duration) {
+		select {
+		case result := <-resultChannel:
+			status.SetText(fmt.Sprintf("Connected to %s", result.Realm.Name))
+			realmLabel.SetText(fmt.Sprintf("Realm: %s  Characters: %d", result.Realm.Name, len(result.Characters)))
+			if len(result.Characters) == 0 {
+				charactersLabel.SetText("Characters\nNo characters returned")
+			} else {
+				for i, character := range result.Characters {
+					row := gui.NewLabel(fmt.Sprintf("%s  Level %d  %s %s", character.Name, character.Level, world.RaceName(character.Race), world.ClassName(character.Class)))
+					row.SetPosition(40, float32(166+i*28))
+					scene.Add(row)
+				}
+			}
+		case err := <-errorChannel:
+			status.SetText(fmt.Sprintf("Login failed: %s", err))
+		}
 		a.Gls().Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
 		r.Render(scene, cam)
 	})

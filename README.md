@@ -18,6 +18,8 @@ Initial G3N renderer bootstrap. Interfaces and behavior may change as the client
 go run .
 ```
 
+Set `WOW_ACCOUNT` and `WOW_PASSWORD` before running. `WOW_AUTH` may override the default `127.0.0.1:3724` auth address, and `WOW_REALM` may select a realm by name, address, or id.
+
 ## Development
 
 Use the repository’s documented toolchain and commands as they are added. For a standard Go layout, the usual checks are:
