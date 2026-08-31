@@ -12,6 +12,7 @@ import (
 	"github.com/MorenoLand/Moreno.WoW/config"
 	"github.com/MorenoLand/Moreno.WoW/network"
 	"github.com/MorenoLand/Moreno.WoW/ui"
+	"github.com/MorenoLand/Moreno.WoW/world"
 	"github.com/g3n/engine/camera"
 	"github.com/g3n/engine/core"
 	"github.com/g3n/engine/gls"
@@ -27,6 +28,11 @@ type loginResult struct {
 	session  *network.Session
 	account  string
 	password string
+	err      error
+}
+
+type worldEntryResult struct {
+	position world.WorldPosition
 	err      error
 }
 
@@ -134,16 +140,19 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	scene.Add(cam)
 	host := &clientHost{width: 960, height: 640}
 	results := make(chan loginResult, 1)
+	worldResults := make(chan worldEntryResult, 1)
 	var uiEngine *ui.UIEngine
 	var activeSession *network.Session
+	worldLoading := false
 	host.enterWorld = func(index int) {
-		if activeSession == nil {
+		if activeSession == nil || worldLoading {
 			return
 		}
+		worldLoading = true
+		session := activeSession
 		go func() {
-			if _, err := activeSession.EnterWorld(index); err != nil && debug {
-				log.Printf("enter world: %v", err)
-			}
+			position, err := session.EnterWorld(index)
+			worldResults <- worldEntryResult{position: position, err: err}
 		}()
 	}
 	host.startLogin = func(account, password string) {
@@ -174,6 +183,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	debugModelLoadMS := float64(0)
 	debugUIRenderMS := float64(0)
 	debugModelError := ""
+	worldMode := false
+	var worldModel *core.Node
 	var setSceneModel func()
 	if dataPath != "" {
 		eng, err = ui.LoadUIEngineFromMPQ(dataPath, clientConfig.Locale, backgroundPath)
@@ -199,6 +210,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			uiEngine.Rt.SetCVar("lastCharacter", lastCharacter)
 		}
 		setSceneModel = func() {
+			if worldMode {
+				return
+			}
 			path := uiEngine.CurrentModelPath()
 			if path == sceneModelPath {
 				return
@@ -302,7 +316,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		if width < 1 || height < 1 {
 			return
 		}
-		if setSceneModel != nil {
+		if setSceneModel != nil && !worldMode {
 			setSceneModel()
 		}
 		uiStarted := time.Now()
@@ -434,6 +448,46 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					uiEngine.SetGlueState(glueState(result.session, uiEngine.AssetLoader))
 				}
 				refresh()
+			case entry := <-worldResults:
+				worldLoading = false
+				if entry.err != nil {
+					if debug {
+						log.Printf("enter world: %v", entry.err)
+					}
+					uiEngine.SetStatusText(entry.err.Error())
+					refresh()
+					break
+				}
+				loaded, info, loadErr := loadWorldTerrain(uiEngine.AssetLoader, entry.position)
+				if loadErr != nil {
+					if debug {
+						log.Printf("world: %v", loadErr)
+					}
+					uiEngine.SetStatusText(loadErr.Error())
+					refresh()
+					break
+				}
+				if sceneModel != nil {
+					scene.Remove(sceneModel)
+					sceneModel.Dispose()
+					sceneModel = nil
+				}
+				if worldModel != nil {
+					scene.Remove(worldModel)
+					worldModel.Dispose()
+				}
+				worldModel = loaded
+				scene.Add(worldModel)
+				worldMode = true
+				sceneModelPath = ""
+				if uiImage != nil {
+					uiImage.SetVisible(false)
+				}
+				configureWorldCamera(cam, entry.position)
+				gl.ClearColor(.08, .12, .16, 1)
+				if debug {
+					log.Printf("world: loaded %s tile %d,%d chunks=%d vertices=%d triangles=%d textures=%d wmoMeshes=%d", info.mapName, info.tileX, info.tileY, info.chunks, info.vertices, info.triangles, info.textures, info.wmoMeshes)
+				}
 			default:
 			}
 			if uiEngine.DebugPanelVisible() && (debugPanelRefresh.IsZero() || frameAt.Sub(debugPanelRefresh) >= 250*time.Millisecond) {
@@ -448,6 +502,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		}
 		win.SwapBuffers()
 		win.PollEvents()
+	}
+	if worldModel != nil {
+		scene.Remove(worldModel)
+		worldModel.Dispose()
 	}
 	if activeSession != nil {
 		_ = activeSession.Close()
@@ -555,6 +613,17 @@ func configureSceneCamera(cam *camera.Camera, model *core.Node) {
 	if info.far > info.near {
 		cam.SetFar(info.far)
 	}
+}
+
+func configureWorldCamera(cam *camera.Camera, position world.WorldPosition) {
+	cam.SetPosition(position.X, position.Y, position.Z+4)
+	cam.SetFov(70)
+	cam.SetNear(0.2)
+	cam.SetFar(6000)
+	directionX := math32.Cos(position.Orientation)
+	directionY := math32.Sin(position.Orientation)
+	target := math32.NewVector3(position.X+directionX*20, position.Y+directionY*20, position.Z+2)
+	cam.LookAt(target, math32.NewVector3(0, 0, 1))
 }
 
 func setSceneCameraFOV(cam *camera.Camera, diagonal float32) {

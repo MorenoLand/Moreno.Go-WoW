@@ -68,10 +68,43 @@ void main() {
     FragColor = vec4(result.rgb, 1.0);
 }`
 
+const worldTerrainVertexShader = `#include <attributes>
+uniform mat4 MVP;
+out vec2 FragTexcoord;
+void main() {
+    FragTexcoord = VertexTexcoord;
+    gl_Position = MVP * vec4(VertexPosition, 1.0);
+}`
+
+const worldTerrainFragmentShader = `precision highp float;
+uniform sampler2D MatTexture[MAT_TEXTURES];
+in vec2 FragTexcoord;
+out vec4 FragColor;
+void main() {
+    FragColor = texture(MatTexture[0], FragTexcoord);
+}`
+
+const worldTerrainAlphaKeyFragmentShader = `precision highp float;
+uniform sampler2D MatTexture[MAT_TEXTURES];
+in vec2 FragTexcoord;
+out vec4 FragColor;
+void main() {
+    vec4 color = texture(MatTexture[0], FragTexcoord);
+    if (color.a < 0.5) {
+        discard;
+    }
+    FragColor = vec4(color.rgb, 1.0);
+}`
+
 func installM2Shaders(r *renderer.Renderer) {
 	r.Shaman.AddShader("morenowow_m2_vertex", m2VertexShader)
 	r.Shaman.AddShader("morenowow_m2_fragment", m2FragmentShader)
 	r.Shaman.AddShader("morenowow_m2_alpha_key_fragment", m2AlphaKeyFragmentShader)
+	r.Shaman.AddShader("morenowow_world_terrain_vertex", worldTerrainVertexShader)
+	r.Shaman.AddShader("morenowow_world_terrain_fragment", worldTerrainFragmentShader)
+	r.Shaman.AddShader("morenowow_world_terrain_alpha_key_fragment", worldTerrainAlphaKeyFragmentShader)
 	r.Shaman.AddProgram("morenowow_m2", "morenowow_m2_vertex", "morenowow_m2_fragment")
 	r.Shaman.AddProgram("morenowow_m2_alpha_key", "morenowow_m2_vertex", "morenowow_m2_alpha_key_fragment")
+	r.Shaman.AddProgram("morenowow_world_terrain", "morenowow_world_terrain_vertex", "morenowow_world_terrain_fragment")
+	r.Shaman.AddProgram("morenowow_world_terrain_alpha_key", "morenowow_world_terrain_vertex", "morenowow_world_terrain_alpha_key_fragment")
 }
