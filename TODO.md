@@ -20,5 +20,5 @@
 ## Verification
 
 - [ ] Run the Go test suite and live MPQ smoke flow after each milestone.
-- [ ] Compare login, options, video, sound, realm, addon, character-select, and character-create screens with `G:\Development\Rust\Warcraft\Images`.
+- [ ] Compare login, options, video, sound, realm, addon, character-select, and character-create screens with the external visual reference set.
 - [ ] Keep temporary captures and diagnostics outside the repository and never stage credentials or reference screenshots.
