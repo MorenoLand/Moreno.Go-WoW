@@ -1562,6 +1562,16 @@ func drawSubMode(canvas *image.RGBA, img image.Image, r Rect, screenHeight float
 	}
 	src := image.NewRGBA(image.Rect(0, 0, rt-l, bm-tp))
 	draw.Draw(src, src.Bounds(), img, image.Pt(l, tp), draw.Src)
+	if additive {
+		for y := src.Bounds().Min.Y; y < src.Bounds().Max.Y; y++ {
+			for x := src.Bounds().Min.X; x < src.Bounds().Max.X; x++ {
+				r, g, b, _ := src.At(x, y).RGBA()
+				if r>>8 <= 2 && g>>8 <= 2 && b>>8 <= 8 {
+					src.SetRGBA(x, y, color.RGBA{})
+				}
+			}
+		}
+	}
 
 	dst := ScreenRect(r, screenHeight)
 	if dst.Dx() <= 0 || dst.Dy() <= 0 {
@@ -1576,7 +1586,7 @@ func drawSubMode(canvas *image.RGBA, img image.Image, r Rect, screenHeight float
 	for y := dst.Min.Y; y < dst.Max.Y; y++ {
 		for x := dst.Min.X; x < dst.Max.X; x++ {
 			sr, sg, sb, sa := blend.At(x, y).RGBA()
-			if sr == 0 && sg == 0 && sb == 0 {
+			if sa == 0 {
 				continue
 			}
 			dr, dg, db, da := canvas.At(x, y).RGBA()
