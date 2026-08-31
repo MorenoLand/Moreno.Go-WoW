@@ -151,12 +151,19 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 			mat.SetShader("morenowow_m2")
 		}
 		mat.SetShaderUnique(true)
-		mat.SetSide(material.SideDouble)
+		if part.material.flags&0x04 != 0 {
+			mat.SetSide(material.SideDouble)
+		} else {
+			mat.SetSide(material.SideFront)
+		}
 		mat.SetUseLights(material.UseLightNone)
-		mat.SetDepthTest(part.material.flags&0x08 != 0)
-		mat.SetDepthMask(part.material.flags&0x10 != 0)
+		mat.SetDepthTest(part.material.flags&0x08 == 0)
+		mat.SetDepthMask(part.material.flags&0x10 == 0)
 		switch part.material.blend {
 		case 0:
+			mat.SetTransparent(false)
+			mat.SetBlending(material.BlendNone)
+		case 1:
 			mat.SetTransparent(false)
 			mat.SetBlending(material.BlendNone)
 		case 3, 4:
@@ -450,8 +457,17 @@ func loadModelTexture(loader *ui.Loader, path string) *texture.Texture2D {
 	if err != nil {
 		return nil
 	}
-	rgba := image.NewRGBA(image.Rect(0, 0, img.Bounds().Dx(), img.Bounds().Dy()))
-	draw.Draw(rgba, rgba.Bounds(), img, img.Bounds().Min, draw.Src)
+	bounds := img.Bounds()
+	rgba := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	if src, ok := img.(*image.NRGBA); ok {
+		for y := 0; y < bounds.Dy(); y++ {
+			srcStart := (bounds.Min.Y+y)*src.Stride + bounds.Min.X*4
+			dstStart := y * rgba.Stride
+			copy(rgba.Pix[dstStart:dstStart+rgba.Stride], src.Pix[srcStart:srcStart+rgba.Stride])
+		}
+	} else {
+		draw.Draw(rgba, rgba.Bounds(), img, bounds.Min, draw.Src)
+	}
 	return texture.NewTexture2DFromRGBA(rgba)
 }
 
@@ -520,11 +536,7 @@ func readM2TrackQuaternion(data []byte, offset int) [4]float32 {
 }
 
 func decodeM2Quaternion(value uint16) float32 {
-	signed := int32(int16(value))
-	if signed < 0 {
-		return float32(signed+32768) / 32767
-	}
-	return float32(signed-32767) / 32767
+	return float32(int16(value)) / 32767
 }
 
 func poseM2Vertex(model parsedM2, skin parsedSkin, local int, vertex m2Vertex) posedM2Vertex {
@@ -609,7 +621,9 @@ func rotateM2Vector(quaternion [4]float32, value [3]float32) [3]float32 {
 	return [3]float32{value[0] + 2*(qw*ux+uux), value[1] + 2*(qw*uy+uuy), value[2] + 2*(qw*uz+uuz)}
 }
 
-func modelVector(value [3]float32) [3]float32 { return [3]float32{value[0], value[2], -value[1]} }
+func modelVector(value [3]float32) [3]float32 {
+	return [3]float32{value[0], value[2], -value[1]}
+}
 
 func modelPoint(value [3]float32, center [3]float32, scale float32) [3]float32 {
 	point := modelVector(value)
