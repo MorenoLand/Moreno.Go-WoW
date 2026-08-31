@@ -1,9 +1,9 @@
 # UI parity backlog
 
 - [ ] Separate ESRB notice and version text so neither overlaps at the reference resolution.
-- [ ] Remove unintended gaps from live input-box textures while preserving their MPQ-sourced artwork.
-- [ ] Finish edit-box behavior: click-to-caret, selection replacement, reliable navigation, deletion, and typing.
-- [ ] Repair vertical line/gap artifacts in options and other framed menus.
+- [x] Remove unintended gaps from live input-box textures while preserving their MPQ-sourced artwork.
+- [x] Finish edit-box behavior: click-to-caret, selection replacement, reliable navigation, deletion, and typing.
+- [x] Repair vertical line/gap artifacts in options and other framed menus.
 - [ ] Keep dropdowns above their owning option dialogs and route their clicks to the visible menu.
 - [x] Replace character-list numeric zone/map leftovers with the live localized location value.
 - [x] Match the reference widths for Change Realm, Create New Character, and related buttons.
