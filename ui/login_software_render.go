@@ -343,8 +343,6 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 				drawTextAlignedV(canvas, f, text, scaledRect, float64(screenHeight), c, eng.textJustify(w), eng.textVerticalJustify(w))
 			}
 
-		case kindEditBox:
-			eng.drawEditBoxBg(canvas, scaledRect)
 		case kindMovieFrame:
 			if w.movieActive {
 				if eng.movieFile != w.movieFile {
@@ -397,7 +395,7 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 			}
 		}
 		if w.kind == kindEditBox {
-			eng.drawEditText(canvas, face, w, rect, float64(screenHeight))
+			eng.drawEditText(canvas, face, faceLg, w, rect, float64(screenHeight))
 		}
 	}
 
@@ -516,13 +514,22 @@ func (eng *UIEngine) paintButtonState(w *widget, rect Rect, paint func(*widget, 
 	}
 }
 
-func (eng *UIEngine) drawEditText(canvas *image.RGBA, face font.Face, w *widget, rect Rect, screenHeight float64) {
+func (eng *UIEngine) drawEditText(canvas *image.RGBA, face, faceLg font.Face, w *widget, rect Rect, screenHeight float64) {
 	if w.text == "" {
 		return
 	}
 	text := w.text
 	if w.password {
 		text = strings.Repeat("*", len([]rune(text)))
+	}
+	textWidget := w
+	textFace := face
+	for _, child := range w.children {
+		if child.kind == kindFontString {
+			textWidget = child
+			textFace = eng.faceFor(child, face, faceLg)
+			break
+		}
 	}
 	left := w.textInsetL
 	right := w.textInsetR
@@ -539,9 +546,13 @@ func (eng *UIEngine) drawEditText(canvas *image.RGBA, face font.Face, w *widget,
 	}
 	textRect := Rect{X0: rect.X0 + left, Y0: rect.Y0 + bottom, X1: rect.X1 - right, Y1: rect.Y1 - top}
 	screenTextRect := screenScaledRect(textRect, eng.uiScale)
-	drawTextAligned(canvas, face, text, screenTextRect, screenHeight, color.RGBA{R: 235, G: 235, B: 235, A: 255}, "LEFT")
+	textColor := color.RGBA{R: 235, G: 235, B: 235, A: 255}
+	if !textWidget.textColor.isZero() {
+		textColor = color.RGBA{R: uint8(textWidget.textColor.r * 255), G: uint8(textWidget.textColor.g * 255), B: uint8(textWidget.textColor.b * 255), A: uint8(textWidget.textColor.a * 255)}
+	}
+	drawTextAlignedV(canvas, textFace, text, screenTextRect, screenHeight, textColor, eng.textJustify(textWidget), eng.textVerticalJustify(textWidget))
 	if eng.Rt.focused == w {
-		width := font.MeasureString(face, text).Ceil()
+		width := font.MeasureString(textFace, text).Ceil()
 		dst := ScreenRect(screenTextRect, screenHeight)
 		caretX := dst.Min.X + width + 1
 		caret := image.Rect(caretX, dst.Min.Y+4, caretX+1, dst.Max.Y-4)
@@ -985,27 +996,16 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 	bgImg := eng.loadBLP(bd.bgFile)
 	if bgImg != nil {
 		// Tile the background inside insets
-		inL := int(bd.insetL)
-		inR := int(bd.insetR)
-		inT := int(bd.insetT)
-		inB := int(bd.insetB)
+		inL := int(bd.insetL * eng.uiScale)
+		inR := int(bd.insetR * eng.uiScale)
+		inT := int(bd.insetT * eng.uiScale)
+		inB := int(bd.insetB * eng.uiScale)
 		inner := image.Rect(dst.Min.X+inL, dst.Min.Y+inT, dst.Max.X-inR, dst.Max.Y-inB)
 		if inner.Dx() > 0 && inner.Dy() > 0 {
-			// Apply backdrop color tint (RGBA from script)
-			bgCol := color.RGBA{
-				R: uint8(bd.bgColor.r * 255),
-				G: uint8(bd.bgColor.g * 255),
-				B: uint8(bd.bgColor.b * 255),
-				A: uint8(bd.bgColor.a * 255),
+			if !bd.bgColor.isZero() {
+				bgCol := color.RGBA{R: uint8(bd.bgColor.r * 255), G: uint8(bd.bgColor.g * 255), B: uint8(bd.bgColor.b * 255), A: uint8(bd.bgColor.a * 255)}
+				draw.Draw(canvas, inner, &image.Uniform{C: bgCol}, image.Point{}, draw.Over)
 			}
-			if bgCol.A == 0 && (bgCol.R != 0 || bgCol.G != 0 || bgCol.B != 0) {
-				bgCol.A = 255
-			}
-			if bgCol.A == 0 {
-				// Default: very dark near-transparent navy
-				bgCol = color.RGBA{R: 10, G: 20, B: 30, A: 180}
-			}
-			draw.Draw(canvas, inner, &image.Uniform{C: bgCol}, image.Point{}, draw.Over)
 			if bd.tile {
 				eng.drawTiled(canvas, inner, bgImg, bd.tileSize)
 			} else {
@@ -1020,21 +1020,103 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 	// Draw border
 	edgeImg := eng.loadBLP(bd.edgeFile)
 	if edgeImg != nil {
-		// Simple: draw a thin teal/grey outline
-		borderColor := color.RGBA{R: uint8(bd.edgeColor.r * 255), G: uint8(bd.edgeColor.g * 255), B: uint8(bd.edgeColor.b * 255), A: 255}
-		if borderColor.R == 0 && borderColor.G == 0 && borderColor.B == 0 {
-			borderColor = color.RGBA{R: 100, G: 130, B: 160, A: 200}
-		}
-		drawBorder(canvas, dst, borderColor, 1)
-	} else {
+		drawBackdropEdge(canvas, dst, edgeImg, bd.edgeSize*eng.uiScale)
+	} else if bd.edgeFile != "" {
 		drawBorder(canvas, dst, color.RGBA{R: 80, G: 120, B: 150, A: 200}, 1)
 	}
+}
+
+func drawBackdropEdge(canvas *image.RGBA, dst image.Rectangle, source image.Image, edgeSize float64) {
+	b := source.Bounds()
+	if b.Dx() < 8 || b.Dy() < 1 || dst.Dx() < 2 || dst.Dy() < 2 {
+		return
+	}
+	tileWidth := b.Dx() / 8
+	tileHeight := b.Dy()
+	if tileWidth < 1 || tileHeight < 1 {
+		return
+	}
+	edge := int(edgeSize)
+	if edge <= 0 {
+		edge = tileHeight
+	}
+	if edge > dst.Dx()/2 {
+		edge = dst.Dx() / 2
+	}
+	if edge > dst.Dy()/2 {
+		edge = dst.Dy() / 2
+	}
+	if edge < 1 {
+		return
+	}
+	drawPart := func(target image.Rectangle, index int, transpose bool, fraction float64) {
+		if target.Dx() <= 0 || target.Dy() <= 0 {
+			return
+		}
+		fraction = math.Max(0, math.Min(1, fraction))
+		mapped := image.NewNRGBA(image.Rect(0, 0, target.Dx(), target.Dy()))
+		for y := 0; y < target.Dy(); y++ {
+			for x := 0; x < target.Dx(); x++ {
+				var sourceX, sourceY int
+				if transpose {
+					sourceX = int(float64(y) / float64(target.Dy()) * float64(tileWidth))
+					sourceY = int(float64(x) / float64(target.Dx()) * float64(tileHeight) * fraction)
+				} else {
+					sourceX = int(float64(x) / float64(target.Dx()) * float64(tileWidth))
+					sourceY = int(float64(y) / float64(target.Dy()) * float64(tileHeight) * fraction)
+				}
+				if sourceX >= tileWidth {
+					sourceX = tileWidth - 1
+				}
+				if sourceY >= tileHeight {
+					sourceY = tileHeight - 1
+				}
+				mapped.Set(x, y, source.At(b.Min.X+index*tileWidth+sourceX, b.Min.Y+sourceY))
+			}
+		}
+		draw.Draw(canvas, target, mapped, image.Point{}, draw.Over)
+	}
+	run := func(index int, target image.Rectangle, vertical bool, transpose bool) {
+		span := target.Dx()
+		if vertical {
+			span = target.Dy()
+		}
+		if span <= 0 {
+			return
+		}
+		step := edge
+		if span/step > 64 {
+			step = int(math.Ceil(float64(span) / 64))
+		}
+		for at := 0; at < span; at += step {
+			length := step
+			if remaining := span - at; remaining < length {
+				length = remaining
+			}
+			fraction := float64(length) / float64(step)
+			if vertical {
+				drawPart(image.Rect(target.Min.X, target.Min.Y+at, target.Max.X, target.Min.Y+at+length), index, transpose, fraction)
+			} else {
+				drawPart(image.Rect(target.Min.X+at, target.Min.Y, target.Min.X+at+length, target.Max.Y), index, transpose, fraction)
+			}
+		}
+	}
+	tx0, tx1 := dst.Min.X, dst.Max.X
+	ty0, ty1 := dst.Min.Y, dst.Max.Y
+	run(0, image.Rect(tx0, ty0+edge, tx0+edge, ty1-edge), true, false)
+	run(1, image.Rect(tx1-edge, ty0+edge, tx1, ty1-edge), true, false)
+	run(2, image.Rect(tx0+edge, ty0, tx1-edge, ty0+edge), false, true)
+	run(3, image.Rect(tx0+edge, ty1-edge, tx1-edge, ty1), false, true)
+	drawPart(image.Rect(tx0, ty0, tx0+edge, ty0+edge), 4, false, 1)
+	drawPart(image.Rect(tx1-edge, ty0, tx1, ty0+edge), 5, false, 1)
+	drawPart(image.Rect(tx0, ty1-edge, tx0+edge, ty1), 6, false, 1)
+	drawPart(image.Rect(tx1-edge, ty1-edge, tx1, ty1), 7, false, 1)
 }
 
 func (eng *UIEngine) drawTiled(canvas *image.RGBA, dst image.Rectangle, source image.Image, tileSize float64) {
 	tile := source
 	if tileSize > 0 {
-		size := int(tileSize)
+		size := int(tileSize * eng.uiScale)
 		if size > 0 {
 			tileImage := image.NewRGBA(image.Rect(0, 0, size, size))
 			xdraw.NearestNeighbor.Scale(tileImage, tileImage.Bounds(), source, source.Bounds(), xdraw.Src, nil)
@@ -1042,24 +1124,15 @@ func (eng *UIEngine) drawTiled(canvas *image.RGBA, dst image.Rectangle, source i
 		}
 	}
 	bounds := tile.Bounds()
+	if bounds.Dx() <= 0 || bounds.Dy() <= 0 {
+		return
+	}
 	for y := dst.Min.Y; y < dst.Max.Y; y += bounds.Dy() {
 		for x := dst.Min.X; x < dst.Max.X; x += bounds.Dx() {
 			tileRect := image.Rect(x, y, x+bounds.Dx(), y+bounds.Dy())
 			draw.Draw(canvas, tileRect.Intersect(dst), tile, bounds.Min, draw.Over)
 		}
 	}
-}
-
-// drawEditBoxBg draws the standard WoW EditBox dark-panel look.
-func (eng *UIEngine) drawEditBoxBg(canvas *image.RGBA, r Rect) {
-	dst := ScreenRect(r, float64(canvas.Bounds().Dy()))
-	if dst.Dx() <= 0 || dst.Dy() <= 0 {
-		return
-	}
-	// Dark fill
-	draw.Draw(canvas, dst, &image.Uniform{C: color.RGBA{R: 10, G: 18, B: 28, A: 220}}, image.Point{}, draw.Over)
-	// Teal-ish border matching the reference
-	drawBorder(canvas, dst, color.RGBA{R: 60, G: 100, B: 140, A: 255}, 2)
 }
 
 // drawBorder draws a pixel-thick rect border.
@@ -1201,6 +1274,9 @@ func drawSubMode(canvas *image.RGBA, img image.Image, r Rect, screenHeight float
 	for y := dst.Min.Y; y < dst.Max.Y; y++ {
 		for x := dst.Min.X; x < dst.Max.X; x++ {
 			sr, sg, sb, sa := blend.At(x, y).RGBA()
+			if sr == 0 && sg == 0 && sb == 0 {
+				continue
+			}
 			dr, dg, db, da := canvas.At(x, y).RGBA()
 			canvas.SetRGBA(x, y, color.RGBA{R: addChannel(dr, scaleChannel(sr, sa)), G: addChannel(dg, scaleChannel(sg, sa)), B: addChannel(db, scaleChannel(sb, sa)), A: maxChannel(da, sa)})
 		}

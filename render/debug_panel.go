@@ -51,6 +51,7 @@ func debugPanelLines(data debugPanelData) []string {
 		fmt.Sprintf("model %d parts | %d scene nodes", data.model.parts, data.sceneParts),
 		fmt.Sprintf("geometry %d vertices | %d triangles", data.model.vertices, data.model.triangles),
 		fmt.Sprintf("batches %d opaque | %d blended | %d textures", data.model.opaqueBatches, data.model.transparentBatches, data.model.textures),
+		fmt.Sprintf("particles %d emitters | %d points", data.model.particleEmitters, data.model.particlePoints),
 		fmt.Sprintf("connection %s | auth %s", data.connection, shortenDebugPath(data.authAddress, 34)),
 		fmt.Sprintf("audio %s | cursor %s", debugEnabled(data.audio), debugEnabled(data.cursor)),
 		"live Glue UI and MPQ-backed assets",

@@ -106,6 +106,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		return
 	}
 	defer win.Destroy()
+	installAppIcon(win)
 	gl := win.Gls()
 	gpuVendor := gl.GetString(gls.VENDOR)
 	gpuRenderer := gl.GetString(gls.RENDERER)
@@ -379,7 +380,13 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		}
 		if uiEngine != nil {
 			now := time.Now()
-			uiEngine.Update(now.Sub(lastUpdate).Seconds())
+			elapsed := now.Sub(lastUpdate).Seconds()
+			if sceneModel != nil {
+				if info, ok := sceneModel.UserData().(glueModelInfo); ok && info.particles != nil {
+					info.particles.Update(elapsed)
+				}
+			}
+			uiEngine.Update(elapsed)
 			lastUpdate = now
 			select {
 			case result := <-results:

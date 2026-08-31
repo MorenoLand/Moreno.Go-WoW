@@ -22,6 +22,7 @@ const (
 	m2Version264     = 264
 	m2VertexSize     = 48
 	m2CameraSize     = 100
+	m2ParticleSize   = 476
 	m2RenderFlagSize = 4
 	skinSubmeshSize  = 48
 	skinBatchSize    = 24
@@ -100,12 +101,13 @@ type m2Camera struct {
 }
 
 type glueModelInfo struct {
-	position math32.Vector3
-	target   math32.Vector3
-	fov      float32
-	far      float32
-	near     float32
-	stats    glueModelStats
+	position  math32.Vector3
+	target    math32.Vector3
+	fov       float32
+	far       float32
+	near      float32
+	stats     glueModelStats
+	particles *m2ParticleSystem
 }
 
 type glueModelStats struct {
@@ -115,6 +117,8 @@ type glueModelStats struct {
 	textures           int
 	opaqueBatches      int
 	transparentBatches int
+	particleEmitters   int
+	particlePoints     int
 }
 
 func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
@@ -231,7 +235,12 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 	root.SetPosition(-center[0]*scale, -center[1]*scale, -center[2]*scale)
 	root.SetScale(scale, scale, scale)
 	stats.textures = len(texturePaths)
-	info := glueModelInfo{stats: stats}
+	particles := buildM2ParticleSystem(loader, model, root, scale, textures)
+	if particles != nil {
+		stats.particleEmitters = particles.emitterCount
+		stats.particlePoints = particles.pointCount
+	}
+	info := glueModelInfo{stats: stats, particles: particles}
 	if model.camera != nil {
 		position := modelPoint(model.camera.position, center, scale)
 		target := modelPoint(model.camera.target, center, scale)
@@ -248,12 +257,14 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 type parsedM2 struct {
 	vertices      []m2Vertex
 	bones         []m2Bone
+	boneLookup    []uint16
 	textures      []string
 	textureCombos []uint16
 	textureFlags  []uint32
 	textureCoords []uint16
 	renderFlags   []m2RenderFlag
 	camera        *m2Camera
+	particles     []m2ParticleEmitter
 }
 
 func parseM2(data []byte) (parsedM2, error) {
@@ -287,14 +298,25 @@ func parseM2(data []byte) (parsedM2, error) {
 	if err != nil {
 		return parsedM2{}, err
 	}
+	particles, err := readM2Array(data, 0x128, m2ParticleSize)
+	if err != nil {
+		return parsedM2{}, err
+	}
+	boneLookup, err := readM2Array(data, 0x78, 2)
+	if err != nil {
+		return parsedM2{}, err
+	}
 	bones, err := readM2Array(data, 0x2c, 88)
 	if err != nil {
 		return parsedM2{}, err
 	}
-	result := parsedM2{vertices: make([]m2Vertex, vertices.count), bones: make([]m2Bone, bones.count), textures: make([]string, textures.count), textureFlags: make([]uint32, textures.count), textureCombos: make([]uint16, combos.count), textureCoords: make([]uint16, textureCoords.count), renderFlags: make([]m2RenderFlag, renderFlags.count)}
+	result := parsedM2{vertices: make([]m2Vertex, vertices.count), bones: make([]m2Bone, bones.count), boneLookup: make([]uint16, boneLookup.count), textures: make([]string, textures.count), textureFlags: make([]uint32, textures.count), textureCombos: make([]uint16, combos.count), textureCoords: make([]uint16, textureCoords.count), renderFlags: make([]m2RenderFlag, renderFlags.count), particles: make([]m2ParticleEmitter, particles.count)}
 	for index := range result.vertices {
 		base := vertices.offset + index*m2VertexSize
 		result.vertices[index] = m2Vertex{position: [3]float32{readF32(data, base), readF32(data, base+4), readF32(data, base+8)}, weights: [4]uint8{data[base+12], data[base+13], data[base+14], data[base+15]}, bones: [4]uint8{data[base+16], data[base+17], data[base+18], data[base+19]}, normal: [3]float32{readF32(data, base+20), readF32(data, base+24), readF32(data, base+28)}, uv: [2]float32{readF32(data, base+32), readF32(data, base+36)}, uv2: [2]float32{readF32(data, base+40), readF32(data, base+44)}}
+	}
+	for index := range result.boneLookup {
+		result.boneLookup[index] = binary.LittleEndian.Uint16(data[boneLookup.offset+index*2:])
 	}
 	for index := range result.bones {
 		base := bones.offset + index*88
@@ -318,6 +340,9 @@ func parseM2(data []byte) (parsedM2, error) {
 	for index := range result.renderFlags {
 		base := renderFlags.offset + index*m2RenderFlagSize
 		result.renderFlags[index] = m2RenderFlag{flags: binary.LittleEndian.Uint16(data[base : base+2]), blend: binary.LittleEndian.Uint16(data[base+2 : base+4])}
+	}
+	for index := range result.particles {
+		result.particles[index] = parseM2ParticleEmitter(data, particles.offset+index*m2ParticleSize)
 	}
 	if cameras.count > 0 {
 		base := cameras.offset
@@ -351,10 +376,11 @@ func parseSkin(data []byte) (parsedSkin, error) {
 	if err != nil {
 		return parsedSkin{}, err
 	}
-	boneCombos, err := readSkinArray(data, 0x2c, 2)
-	if err != nil {
-		return parsedSkin{}, err
+	boneComboCount := int(binary.LittleEndian.Uint32(data[0x2c:0x30]))
+	if boneComboCount < 0 || boneComboCount > 1<<24 || boneComboCount > (len(data)-0x30)/2 {
+		return parsedSkin{}, fmt.Errorf("SKIN bone index table out of range count=%d", boneComboCount)
 	}
+	boneCombos := m2Array{count: boneComboCount, offset: 0x30}
 	submeshes, err := readSkinArray(data, 0x1c, skinSubmeshSize)
 	if err != nil {
 		return parsedSkin{}, err
@@ -582,7 +608,11 @@ func readM2TrackQuaternion(data []byte, offset int) [4]float32 {
 }
 
 func decodeM2Quaternion(value uint16) float32 {
-	return float32(int16(value)) / 32767
+	decoded := int32(int16(value))
+	if decoded < 0 {
+		return float32(decoded+32768) / 32767
+	}
+	return float32(decoded-32767) / 32767
 }
 
 func poseM2Vertex(model parsedM2, skin parsedSkin, local int, vertex m2Vertex, boneComboIndex int) posedM2Vertex {
@@ -600,6 +630,9 @@ func poseM2Vertex(model parsedM2, skin parsedSkin, local int, vertex m2Vertex, b
 		boneIndex := int(bones[slot])
 		if boneComboIndex >= 0 && boneComboIndex+boneIndex < len(skin.boneCombos) {
 			boneIndex = int(skin.boneCombos[boneComboIndex+boneIndex])
+		}
+		if boneIndex >= 0 && boneIndex < len(model.boneLookup) {
+			boneIndex = int(model.boneLookup[boneIndex])
 		}
 		if boneIndex >= len(model.bones) {
 			continue
