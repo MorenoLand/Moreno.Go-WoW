@@ -296,7 +296,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			setSceneModel()
 		}
 		uiStarted := time.Now()
-		uiImage.SetTexture(texture.NewTexture2DFromRGBA(uiEngine.Render(width, height)))
+		previous := uiImage.SetTexture(texture.NewTexture2DFromRGBA(uiEngine.Render(width, height)))
+		if previous != nil {
+			previous.Dispose()
+		}
 		debugUIRenderMS = time.Since(uiStarted).Seconds() * 1000
 		uiImage.SetSize(float32(width), float32(height))
 		lastUIRefresh = time.Now()

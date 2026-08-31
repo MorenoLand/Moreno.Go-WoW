@@ -984,7 +984,7 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 	bgImg := eng.loadBLP(bd.bgFile)
 	if bgImg != nil {
 		if !bd.bgColor.isZero() {
-			bgImg = tintImage(bgImg, bd.bgColor)
+			bgImg = eng.tintBackdropImage(bd.bgFile, bgImg, bd.bgColor)
 		}
 		// Tile the background inside insets
 		inL := int(bd.insetL * eng.uiScale)
@@ -1012,12 +1012,22 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 	edgeImg := eng.loadBLP(bd.edgeFile)
 	if edgeImg != nil {
 		if !bd.edgeColor.isZero() {
-			edgeImg = tintImage(edgeImg, bd.edgeColor)
+			edgeImg = eng.tintBackdropImage(bd.edgeFile, edgeImg, bd.edgeColor)
 		}
 		drawBackdropEdge(canvas, dst, edgeImg, bd.edgeSize*eng.uiScale)
 	} else if bd.edgeFile != "" {
 		drawBorder(canvas, dst, color.RGBA{R: 80, G: 120, B: 150, A: 200}, 1)
 	}
+}
+
+func (eng *UIEngine) tintBackdropImage(path string, source image.Image, tint rgba) image.Image {
+	key := fmt.Sprintf("backdrop:%s:%.4f:%.4f:%.4f:%.4f", path, tint.r, tint.g, tint.b, tint.a)
+	if imageData, ok := eng.Cache[key]; ok {
+		return imageData
+	}
+	imageData := tintImage(source, tint)
+	eng.Cache[key] = imageData
+	return imageData
 }
 
 func tintImage(source image.Image, tint rgba) image.Image {
