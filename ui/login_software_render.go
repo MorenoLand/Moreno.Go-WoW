@@ -268,11 +268,6 @@ func (eng *UIEngine) renderBackground(canvas *image.RGBA, w, h int) {
 	if eng.BgImagePath != "" {
 		bgPaths = append(bgPaths, eng.BgImagePath)
 	}
-	// Also try Wow.jpg on the desktop as a convenience default
-	bgPaths = append(bgPaths,
-		`C:\Users\null\Desktop\Wow.jpg`,
-		`C:\Users\null\Desktop\Wow.png`,
-	)
 
 	for _, p := range bgPaths {
 		f, err := os.Open(p)
