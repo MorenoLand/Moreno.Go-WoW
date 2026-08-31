@@ -1175,9 +1175,13 @@ func drawSubMode(canvas *image.RGBA, img image.Image, r Rect, screenHeight float
 		for x := dst.Min.X; x < dst.Max.X; x++ {
 			sr, sg, sb, sa := blend.At(x, y).RGBA()
 			dr, dg, db, da := canvas.At(x, y).RGBA()
-			canvas.SetRGBA(x, y, color.RGBA{R: addChannel(dr, sr), G: addChannel(dg, sg), B: addChannel(db, sb), A: maxChannel(da, sa)})
+			canvas.SetRGBA(x, y, color.RGBA{R: addChannel(dr, scaleChannel(sr, sa)), G: addChannel(dg, scaleChannel(sg, sa)), B: addChannel(db, scaleChannel(sb, sa)), A: maxChannel(da, sa)})
 		}
 	}
+}
+
+func scaleChannel(value, alpha uint32) uint32 {
+	return uint32((uint64(value) * uint64(alpha)) / 0xffff)
 }
 
 func addChannel(dst, src uint32) uint8 {
