@@ -66,25 +66,29 @@ type skinSubmesh struct {
 }
 
 type skinBatch struct {
+	priorityPlane     int8
 	submeshIndex      uint16
 	materialIndex     uint16
+	materialLayer     uint16
 	textureCount      uint16
 	textureComboIndex uint16
 	textureCoordIndex uint16
 }
 
 type m2Part struct {
-	texturePaths []string
-	textureFlags []uint32
-	uvSets       []int
-	positions    math32.ArrayF32
-	normals      math32.ArrayF32
-	uvs          math32.ArrayF32
-	uvs2         math32.ArrayF32
-	indices      math32.ArrayU32
-	renderOrder  int
-	uvSet        int
-	material     m2RenderFlag
+	texturePaths  []string
+	textureFlags  []uint32
+	uvSets        []int
+	positions     math32.ArrayF32
+	normals       math32.ArrayF32
+	uvs           math32.ArrayF32
+	uvs2          math32.ArrayF32
+	indices       math32.ArrayU32
+	renderOrder   int
+	priorityPlane int8
+	materialLayer uint16
+	uvSet         int
+	material      m2RenderFlag
 }
 
 type posedM2Vertex struct {
@@ -225,7 +229,7 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 			}
 		}
 		mesh := graphic.NewMesh(geom, mat)
-		mesh.SetRenderOrder(-100 + part.renderOrder)
+		mesh.SetRenderOrder(m2RenderOrder(part))
 		root.Add(mesh)
 	}
 	if len(root.Children()) == 0 {
@@ -409,7 +413,7 @@ func parseSkin(data []byte) (parsedSkin, error) {
 	}
 	for index := range result.batches {
 		base := batches.offset + index*skinBatchSize
-		result.batches[index] = skinBatch{submeshIndex: binary.LittleEndian.Uint16(data[base+4 : base+6]), textureCount: binary.LittleEndian.Uint16(data[base+14 : base+16]), textureComboIndex: binary.LittleEndian.Uint16(data[base+16 : base+18])}
+		result.batches[index] = skinBatch{priorityPlane: int8(data[base+1]), submeshIndex: binary.LittleEndian.Uint16(data[base+4 : base+6]), materialLayer: binary.LittleEndian.Uint16(data[base+12 : base+14]), textureCount: binary.LittleEndian.Uint16(data[base+14 : base+16]), textureComboIndex: binary.LittleEndian.Uint16(data[base+16 : base+18])}
 		result.batches[index].materialIndex = binary.LittleEndian.Uint16(data[base+10 : base+12])
 		result.batches[index].textureCoordIndex = binary.LittleEndian.Uint16(data[base+18 : base+20])
 	}
@@ -477,7 +481,7 @@ func buildM2Parts(model parsedM2, skin parsedSkin) map[string]*m2Part {
 		key := fmt.Sprintf("%d\x00%d\x00%d\x00%d\x00%s", batchIndex, uvSet, materialInfo.flags, materialInfo.blend, strings.Join(texturePaths, "\x00"))
 		part := parts[key]
 		if part == nil {
-			part = &m2Part{texturePaths: texturePaths, textureFlags: textureFlags, uvSets: uvSets, renderOrder: batchIndex, uvSet: uvSet, material: materialInfo}
+			part = &m2Part{texturePaths: texturePaths, textureFlags: textureFlags, uvSets: uvSets, renderOrder: batchIndex, priorityPlane: batch.priorityPlane, materialLayer: batch.materialLayer, uvSet: uvSet, material: materialInfo}
 			parts[key] = part
 		}
 		for index := start; index+2 < end; index += 3 {
@@ -518,6 +522,13 @@ func buildM2Parts(model parsedM2, skin parsedSkin) map[string]*m2Part {
 		}
 	}
 	return parts
+}
+
+func m2RenderOrder(part *m2Part) int {
+	if part.material.blend < 2 {
+		return -100 + part.renderOrder
+	}
+	return int(part.priorityPlane)*1000000 + int(part.materialLayer)*10000 + int(part.material.blend)*100 + part.renderOrder
 }
 
 func loadModelTexture(loader *ui.Loader, path string) *texture.Texture2D {
