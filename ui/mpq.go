@@ -75,18 +75,28 @@ type mpqSet struct {
 }
 
 func openMPQSet(dataPath, locale string) (*mpqSet, error) {
-	root, err := findMPQDataRoot(dataPath)
+	roots, err := findMPQDataRoots(dataPath)
 	if err != nil {
 		return nil, err
 	}
-	paths, err := discoverMPQArchives(root, locale)
-	if err != nil {
-		return nil, err
+	paths := make([]string, 0)
+	for _, root := range roots {
+		found, discoverErr := discoverMPQArchives(root, locale)
+		if discoverErr != nil {
+			continue
+		}
+		paths = append(paths, found...)
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("no recognized MPQ archives under %s", dataPath)
 	}
 	set := &mpqSet{locale: mpqLocaleID(locale), files: make(map[string]mpqFileRef), loose: make(map[string]string), missing: make(map[string]struct{})}
-	set.looseRoots = append(set.looseRoots, root)
-	if localeDir := findLocaleDirectory(root, locale); localeDir != "" {
-		set.looseRoots = append(set.looseRoots, localeDir)
+	for index := len(roots) - 1; index >= 0; index-- {
+		root := roots[index]
+		set.looseRoots = append(set.looseRoots, root)
+		if localeDir := findLocaleDirectory(root, locale); localeDir != "" {
+			set.looseRoots = append(set.looseRoots, localeDir)
+		}
 	}
 	for _, path := range paths {
 		archive, err := openMPQArchive(path)
@@ -97,7 +107,7 @@ func openMPQSet(dataPath, locale string) (*mpqSet, error) {
 		set.archives = append(set.archives, archive)
 	}
 	if len(set.archives) == 0 {
-		return nil, fmt.Errorf("no MPQ archives found under %s", root)
+		return nil, fmt.Errorf("no MPQ archives found under %s", dataPath)
 	}
 	return set, nil
 }
@@ -144,23 +154,48 @@ func (set *mpqSet) ReadFile(name string) ([]byte, error) {
 }
 
 func findMPQDataRoot(dataPath string) (string, error) {
+	roots, err := findMPQDataRoots(dataPath)
+	if err != nil {
+		return "", err
+	}
+	return roots[len(roots)-1], nil
+}
+
+func findMPQDataRoots(dataPath string) ([]string, error) {
 	dataPath = strings.TrimSpace(dataPath)
 	if dataPath == "" {
-		return "", fmt.Errorf("MPQ data path is empty")
+		return nil, fmt.Errorf("MPQ data path is empty")
 	}
 	info, err := os.Stat(dataPath)
 	if err != nil {
-		return "", fmt.Errorf("MPQ data path %s: %w", dataPath, err)
+		return nil, fmt.Errorf("MPQ data path %s: %w", dataPath, err)
 	}
+	root := dataPath
 	if !info.IsDir() {
-		return filepath.Dir(dataPath), nil
+		root = filepath.Dir(dataPath)
 	}
-	for _, candidate := range []string{dataPath, filepath.Join(dataPath, "Data")} {
-		if hasMPQFile(candidate) {
-			return candidate, nil
+	if !hasMPQFile(root) {
+		parent := filepath.Dir(root)
+		if hasMPQFile(parent) {
+			root = parent
+		} else if dataRoot := filepath.Join(root, "Data"); hasMPQFile(dataRoot) {
+			root = dataRoot
 		}
 	}
-	return "", fmt.Errorf("no MPQ archives found under %s or its Data directory", dataPath)
+	if !hasMPQFile(root) {
+		return nil, fmt.Errorf("no MPQ archives found under %s or its Data directory", dataPath)
+	}
+	roots := make([]string, 0, 2)
+	if strings.EqualFold(filepath.Base(root), "Data") {
+		if parent := filepath.Dir(root); hasMPQFile(parent) {
+			roots = append(roots, parent)
+		}
+	}
+	roots = append(roots, root)
+	if dataRoot := filepath.Join(root, "Data"); hasMPQFile(dataRoot) {
+		roots = append(roots, dataRoot)
+	}
+	return roots, nil
 }
 
 func hasMPQFile(root string) bool {
@@ -249,6 +284,9 @@ func discoverMPQArchives(root, locale string) ([]string, error) {
 	for _, name := range fixedMPQArchives {
 		appendIfPresent(rootEntries, name)
 	}
+	for _, name := range []string{"base-" + locale + ".MPQ", "locale-" + locale + ".MPQ", "speech-" + locale + ".MPQ", "expansion-locale-" + locale + ".MPQ", "lichking-locale-" + locale + ".MPQ", "expansion-speech-" + locale + ".MPQ", "lichking-speech-" + locale + ".MPQ"} {
+		appendIfPresent(rootEntries, name)
+	}
 	for _, name := range []string{"locale-" + locale + ".MPQ", "speech-" + locale + ".MPQ", "expansion-locale-" + locale + ".MPQ", "lichking-locale-" + locale + ".MPQ", "expansion-speech-" + locale + ".MPQ", "lichking-speech-" + locale + ".MPQ"} {
 		appendIfPresent(localeEntries, name)
 	}
@@ -256,6 +294,9 @@ func discoverMPQArchives(root, locale string) ([]string, error) {
 	for name, path := range rootEntries {
 		if number, ok := rootPatchNumber(name); ok {
 			patches = append(patches, mpqPatchPath{path: path, number: number})
+		}
+		if number, ok := localePatchNumber(name, locale); ok {
+			patches = append(patches, mpqPatchPath{path: path, number: 100000 + number})
 		}
 	}
 	for name, path := range localeEntries {
