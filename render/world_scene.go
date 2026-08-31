@@ -80,6 +80,17 @@ type worldWMOGroup struct {
 	batches  []worldWMOBatch
 }
 
+type worldWMOMeshKey struct {
+	material   worldWMOMaterial
+	batchFlags uint8
+}
+
+type worldWMOMeshBuilder struct {
+	positions math32.ArrayF32
+	uvs       math32.ArrayF32
+	indices   math32.ArrayU32
+}
+
 type worldSceneInfo struct {
 	mapName   string
 	tileX     int
@@ -410,27 +421,10 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 			}
 			modelCache[placement.path] = model
 		}
-		for groupIndex := 0; groupIndex < model.groupCount; groupIndex++ {
-			groupPath := worldWMOGroupPath(placement.path, groupIndex)
-			data, err := loader.ReadFile(groupPath)
-			if err != nil {
-				continue
-			}
-			group, err := parseWorldWMOGroup(data)
-			if err != nil {
-				continue
-			}
-			batches := group.batches
-			if len(batches) == 0 {
-				batches = []worldWMOBatch{{start: 0, count: len(group.indices)}}
-			}
-			for _, batch := range batches {
-				mesh := buildWorldWMOBatch(loader, group, batch, model.materials, placement, textures, placeholder)
-				if mesh != nil {
-					root.Add(mesh)
-					meshCount++
-				}
-			}
+		meshes := buildWorldWMOPlacement(loader, placement, model, textures, placeholder)
+		for _, mesh := range meshes {
+			root.Add(mesh)
+			meshCount++
 		}
 	}
 	if meshCount == 0 {
@@ -439,85 +433,112 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 	return root, meshCount
 }
 
+func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, model worldWMORoot, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) []*graphic.Mesh {
+	builders := make(map[worldWMOMeshKey]*worldWMOMeshBuilder)
+	for groupIndex := 0; groupIndex < model.groupCount; groupIndex++ {
+		groupData, err := loader.ReadFile(worldWMOGroupPath(placement.path, groupIndex))
+		if err != nil {
+			continue
+		}
+		group, err := parseWorldWMOGroup(groupData)
+		if err != nil {
+			continue
+		}
+		batches := group.batches
+		if len(batches) == 0 {
+			batches = []worldWMOBatch{{start: 0, count: len(group.indices)}}
+		}
+		bases := make(map[worldWMOMeshKey]uint32)
+		for _, batch := range batches {
+			if batch.start < 0 || batch.count <= 0 || batch.start+batch.count > len(group.indices) {
+				continue
+			}
+			materialInfo := worldWMOMaterial{}
+			if int(batch.material) < len(model.materials) {
+				materialInfo = model.materials[batch.material]
+			}
+			key := worldWMOMeshKey{material: materialInfo, batchFlags: batch.flags}
+			builder := builders[key]
+			if builder == nil {
+				builder = &worldWMOMeshBuilder{positions: math32.NewArrayF32(0, len(group.vertices)), uvs: math32.NewArrayF32(0, len(group.vertices)/3*2), indices: math32.NewArrayU32(0, batch.count)}
+				builders[key] = builder
+			}
+			base, exists := bases[key]
+			if !exists {
+				base = uint32(len(builder.positions) / 3)
+				bases[key] = base
+				for index := 0; index+2 < len(group.vertices); index += 3 {
+					point := transformWorldWMOPoint([3]float32{group.vertices[index], group.vertices[index+1], group.vertices[index+2]}, placement)
+					builder.positions.Append(point[0], point[1], point[2])
+					uvIndex := index / 3 * 2
+					if uvIndex+1 < len(group.uvs) {
+						builder.uvs.Append(group.uvs[uvIndex], group.uvs[uvIndex+1])
+					} else {
+						builder.uvs.Append(0, 0)
+					}
+				}
+			}
+			for _, index := range group.indices[batch.start : batch.start+batch.count] {
+				if int(index)*3+2 < len(group.vertices) {
+					builder.indices.Append(base + uint32(index))
+				}
+			}
+		}
+	}
+	meshes := make([]*graphic.Mesh, 0, len(builders))
+	for key, builder := range builders {
+		if len(builder.indices) < 3 {
+			continue
+		}
+		tex := placeholder
+		if key.material.texture != "" {
+			if cached, ok := textures[key.material.texture]; ok {
+				tex = cached
+			} else if loaded := loadModelTexture(loader, key.material.texture); loaded != nil {
+				textures[key.material.texture] = loaded
+				tex = loaded
+			}
+		}
+		geom := geometry.NewGeometry()
+		geom.SetIndices(builder.indices)
+		geom.AddVBO(gls.NewVBO(builder.positions).AddAttrib(gls.VertexPosition))
+		geom.AddVBO(gls.NewVBO(builder.uvs).AddAttrib(gls.VertexTexcoord))
+		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
+		shader := "morenowow_world_terrain"
+		if key.material.blend == 1 {
+			shader = "morenowow_world_terrain_alpha_key"
+		}
+		mat.SetShader(shader)
+		mat.SetShaderUnique(true)
+		if key.material.flags&0x04 != 0 {
+			mat.SetSide(material.SideDouble)
+		} else {
+			mat.SetSide(material.SideFront)
+		}
+		mat.SetUseLights(material.UseLightNone)
+		mat.AddTexture(tex)
+		if key.material.blend >= 2 {
+			mat.SetTransparent(true)
+			mat.SetDepthMask(false)
+			if key.material.blend == 4 {
+				mat.SetBlending(material.BlendAdditive)
+			} else {
+				mat.SetBlending(material.BlendNormal)
+			}
+		}
+		mesh := graphic.NewMesh(geom, mat)
+		mesh.SetRenderOrder(-40 + int(key.material.blend))
+		meshes = append(meshes, mesh)
+	}
+	return meshes
+}
+
 func worldWMOGroupPath(path string, index int) string {
 	stem := path
 	if strings.HasSuffix(strings.ToLower(stem), ".wmo") {
 		stem = stem[:len(stem)-4]
 	}
 	return fmt.Sprintf("%s_%03d.wmo", stem, index)
-}
-
-func buildWorldWMOBatch(loader *ui.Loader, group worldWMOGroup, batch worldWMOBatch, materials []worldWMOMaterial, placement worldWMOPlacement, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) *graphic.Mesh {
-	start, end := batch.start, batch.start+batch.count
-	if start < 0 || end > len(group.indices) || start >= end {
-		return nil
-	}
-	positions := math32.NewArrayF32(0, len(group.vertices))
-	uvs := math32.NewArrayF32(0, len(group.vertices)/3*2)
-	for index := 0; index+2 < len(group.vertices); index += 3 {
-		point := transformWorldWMOPoint([3]float32{group.vertices[index], group.vertices[index+1], group.vertices[index+2]}, placement)
-		positions.Append(point[0], point[1], point[2])
-		uvIndex := index / 3 * 2
-		if uvIndex+1 < len(group.uvs) {
-			uvs.Append(group.uvs[uvIndex], group.uvs[uvIndex+1])
-		} else {
-			uvs.Append(0, 0)
-		}
-	}
-	indices := math32.NewArrayU32(0, end-start)
-	for _, index := range group.indices[start:end] {
-		if int(index)*3+2 < len(group.vertices) {
-			indices.Append(uint32(index))
-		}
-	}
-	if len(indices) < 3 {
-		return nil
-	}
-	materialIndex := int(batch.material)
-	materialInfo := worldWMOMaterial{}
-	if materialIndex >= 0 && materialIndex < len(materials) {
-		materialInfo = materials[materialIndex]
-	}
-	path := materialInfo.texture
-	tex := placeholder
-	if path != "" {
-		if cached, ok := textures[path]; ok {
-			tex = cached
-		} else if loaded := loadModelTexture(loader, path); loaded != nil {
-			textures[path] = loaded
-			tex = loaded
-		}
-	}
-	geom := geometry.NewGeometry()
-	geom.SetIndices(indices)
-	geom.AddVBO(gls.NewVBO(positions).AddAttrib(gls.VertexPosition))
-	geom.AddVBO(gls.NewVBO(uvs).AddAttrib(gls.VertexTexcoord))
-	mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
-	shader := "morenowow_world_terrain"
-	if materialInfo.blend == 1 {
-		shader = "morenowow_world_terrain_alpha_key"
-	}
-	mat.SetShader(shader)
-	mat.SetShaderUnique(true)
-	if materialInfo.flags&0x04 != 0 {
-		mat.SetSide(material.SideDouble)
-	} else {
-		mat.SetSide(material.SideFront)
-	}
-	mat.SetUseLights(material.UseLightNone)
-	mat.AddTexture(tex)
-	if materialInfo.blend >= 2 {
-		mat.SetTransparent(true)
-		mat.SetDepthMask(false)
-		if materialInfo.blend == 4 {
-			mat.SetBlending(material.BlendAdditive)
-		} else {
-			mat.SetBlending(material.BlendNormal)
-		}
-	}
-	mesh := graphic.NewMesh(geom, mat)
-	mesh.SetRenderOrder(-40 + int(materialInfo.blend))
-	return mesh
 }
 
 func worldWMOPosition(raw [3]float32) [3]float32 {
