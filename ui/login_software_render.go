@@ -578,6 +578,18 @@ func (eng *UIEngine) editFace(w *widget) (font.Face, func()) {
 	return face, func() { face.Close() }
 }
 
+func (eng *UIEngine) editTextOrigin(face font.Face, text string, dst image.Rectangle, w *widget) int {
+	width := font.MeasureString(face, text).Ceil()
+	switch strings.ToUpper(eng.textJustify(w)) {
+	case "RIGHT":
+		return dst.Max.X - width - 4
+	case "CENTER":
+		return dst.Min.X + (dst.Dx()-width)/2
+	default:
+		return dst.Min.X + 4
+	}
+}
+
 func (eng *UIEngine) setEditCursor(w *widget, x float64) { eng.setEditCursorAt(w, x, false) }
 
 func (eng *UIEngine) setEditCursorAt(w *widget, x float64, extend bool) {
@@ -597,14 +609,16 @@ func (eng *UIEngine) setEditCursorAt(w *widget, x float64, extend bool) {
 	if scale <= 0 {
 		scale = 1
 	}
-	position := (x - textRect.X0*scale) / scale
 	display := []rune(editDisplayText(w))
 	face, release := eng.editFace(w)
 	defer release()
 	if face == nil {
-		moveEditCursor(w, int(math.Round(position/8)), extend)
+		moveEditCursor(w, int(math.Round((x-textRect.X0*scale)/scale/8)), extend)
 		return
 	}
+	dst := ScreenRect(screenScaledRect(textRect, scale), float64(eng.screenHeight))
+	origin := eng.editTextOrigin(face, string(display), dst, eng.editTextWidget(w))
+	position := (x - float64(origin)) / scale
 	for index := 0; index < len(display); index++ {
 		left := float64(font.MeasureString(face, string(display[:index])).Ceil())
 		right := float64(font.MeasureString(face, string(display[:index+1])).Ceil())
@@ -628,19 +642,21 @@ func (eng *UIEngine) drawEditText(canvas *image.RGBA, face, faceLg font.Face, w 
 	}
 	start, end := editSelection(w)
 	if eng.Rt.focused == w && start != end {
+		dst := ScreenRect(screenTextRect, screenHeight)
+		origin := eng.editTextOrigin(textFace, text, dst, textWidget)
 		startWidth := font.MeasureString(textFace, string([]rune(text)[:start])).Ceil()
 		endWidth := font.MeasureString(textFace, string([]rune(text)[:end])).Ceil()
-		dst := ScreenRect(screenTextRect, screenHeight)
-		selection := image.Rect(dst.Min.X+startWidth, dst.Min.Y+2, dst.Min.X+endWidth, dst.Max.Y-2)
+		selection := image.Rect(origin+startWidth, dst.Min.Y+2, origin+endWidth, dst.Max.Y-2)
 		draw.Draw(canvas, selection, &image.Uniform{C: color.RGBA{R: 35, G: 100, B: 180, A: 180}}, image.Point{}, draw.Over)
 	}
 	if text != "" {
 		eng.drawTextAlignedWidget(canvas, textFace, text, screenTextRect, screenHeight, textColor, textWidget)
 	}
 	if eng.Rt.focused == w {
-		width := font.MeasureString(textFace, string([]rune(text)[:clampCursor(w.cursor, len([]rune(text)))])).Ceil()
 		dst := ScreenRect(screenTextRect, screenHeight)
-		caretX := dst.Min.X + width + 1
+		origin := eng.editTextOrigin(textFace, text, dst, textWidget)
+		width := font.MeasureString(textFace, string([]rune(text)[:clampCursor(w.cursor, len([]rune(text)))])).Ceil()
+		caretX := origin + width + 1
 		caret := image.Rect(caretX, dst.Min.Y+4, caretX+1, dst.Max.Y-4)
 		draw.Draw(canvas, caret, &image.Uniform{C: color.RGBA{R: 255, G: 220, B: 80, A: 255}}, image.Point{}, draw.Over)
 	}
