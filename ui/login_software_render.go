@@ -36,6 +36,7 @@ type UIEngine struct {
 	screenHeight int
 	rects        map[*widget]Rect
 	layoutActive map[*widget]bool
+	textFaces    map[string]font.Face
 }
 
 func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, error) {
@@ -117,7 +118,10 @@ func newUIEngine(rt *Runtime, loader *Loader, bgImagePath string) (*UIEngine, er
 		dialog.shown = false
 	}
 
+	rt.Execute("GlueParent_OnEvent('FRAMES_LOADED')", "@render.lua")
+	rt.FireEvent("FRAMES_LOADED")
 	rt.Execute("GlueParent_OnEvent('SET_GLUE_SCREEN', 'login')", "@render.lua")
+	rt.FireEvent("SET_GLUE_SCREEN", lua.LString("login"))
 
 	fontData, err := loader.readAsset("Fonts\\FRIZQT__.TTF")
 	if err != nil {
@@ -221,6 +225,12 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 
 	faceLg, _ := opentype.NewFace(eng.FontObj, &opentype.FaceOptions{Size: 16 * uiScale, DPI: 96})
 	defer faceLg.Close()
+	eng.textFaces = make(map[string]font.Face)
+	defer func() {
+		for _, textFace := range eng.textFaces {
+			textFace.Close()
+		}
+	}()
 	if root := eng.Rt.widgets["GlueParent"]; root != nil {
 		eng.prepareText(root, face, faceLg)
 	}
@@ -277,11 +287,17 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 			}
 			if text != "" {
 				c := eng.fontColor(w)
-				f := face
-				if w.fontObject != "" && strings.Contains(strings.ToLower(w.fontObject), "large") {
-					f = faceLg
+				f := eng.faceFor(w, face, faceLg)
+				if !w.autoTextWidth {
+					text = strings.Join(wrapText(text, f, int(scaledRect.W())), "\n")
 				}
-				drawTextAligned(canvas, f, text, scaledRect, float64(screenHeight), c, w.justifyH)
+				if w.maxLines > 0 {
+					lines := strings.Split(text, "\n")
+					if len(lines) > w.maxLines {
+						text = strings.Join(lines[:w.maxLines], "\n")
+					}
+				}
+				drawTextAlignedV(canvas, f, text, scaledRect, float64(screenHeight), c, eng.textJustify(w), eng.textVerticalJustify(w))
 			}
 
 		case kindEditBox:
@@ -333,10 +349,7 @@ func (eng *UIEngine) prepareText(w *widget, face, faceLg font.Face) {
 		if w.parent != nil && (w.parent.kind == kindButton || w.parent.kind == kindCheckButton) && w.parent.buttonLabel == w && w.parent.text != "" {
 			text = eng.resolveText(w.parent.text)
 		}
-		fontFace := face
-		if strings.Contains(strings.ToLower(w.fontObject), "large") || strings.Contains(strings.ToLower(w.fontObject), "huge") {
-			fontFace = faceLg
-		}
+		fontFace := eng.faceFor(w, face, faceLg)
 		lines := strings.Split(cleanText(text), "\n")
 		if w.autoTextWidth {
 			maxWidth := 0
@@ -345,7 +358,16 @@ func (eng *UIEngine) prepareText(w *widget, face, faceLg font.Face) {
 					maxWidth = width
 				}
 			}
+			w.textWidth = float64(maxWidth) / eng.uiScale
 			w.width = float64(maxWidth) / eng.uiScale
+		} else {
+			maxWidth := 0
+			for _, line := range lines {
+				if width := font.MeasureString(fontFace, line).Ceil(); width > maxWidth {
+					maxWidth = width
+				}
+			}
+			w.textWidth = float64(maxWidth) / eng.uiScale
 		}
 		if w.autoTextHeight {
 			w.height = float64(fontFace.Metrics().Height.Ceil()*len(lines)) / eng.uiScale
@@ -462,7 +484,10 @@ func (eng *UIEngine) SetStatusKey(key string) {
 func (eng *UIEngine) SetInitialCredentials(account, password string, rememberMe bool) {
 	eng.rememberMe = rememberMe
 	eng.Rt.SetCVar("accountName", account)
+	eng.Rt.Execute("for _, name in ipairs({'VideoOptionsFrame', 'AudioOptionsFrame', 'OptionsSelectFrame', 'RealmList', 'AddonList', 'GlueDialog'}) do local frame = _G[name]; if frame then frame:Hide() end end", "@credentials.lua")
 	eng.Rt.Execute("GlueParent_OnEvent('SET_GLUE_SCREEN', 'login')", "@credentials.lua")
+	eng.Rt.Execute("SetGlueScreen('login')", "@credentials.lua")
+	eng.Rt.FireEvent("SET_GLUE_SCREEN", lua.LString("login"))
 	if checkbox := eng.Rt.widgets["AccountLoginSaveAccountName"]; checkbox != nil {
 		checkbox.checked = account != ""
 	}
@@ -477,7 +502,11 @@ func (eng *UIEngine) SetInitialCredentials(account, password string, rememberMe 
 func (eng *UIEngine) SetGlueState(state GlueState) {
 	eng.Rt.Glue = state
 	eng.statusKey = ""
+	eng.Rt.Execute("for _, name in ipairs({'VideoOptionsFrame', 'AudioOptionsFrame', 'OptionsSelectFrame', 'RealmList', 'AddonList', 'GlueDialog'}) do local frame = _G[name]; if frame then frame:Hide() end end", "@network.lua")
 	eng.Rt.Execute("GlueParent_OnEvent('SET_GLUE_SCREEN', 'charselect')", "@network.lua")
+	eng.Rt.Execute("SetGlueScreen('charselect')", "@network.lua")
+	eng.Rt.FireEvent("SET_GLUE_SCREEN", lua.LString("charselect"))
+	eng.Rt.FireEvent("CHARACTER_LIST_UPDATE")
 }
 
 func (eng *UIEngine) HandleCursor(x, y float64) bool {
@@ -867,8 +896,79 @@ func (eng *UIEngine) fontColor(w *widget) color.Color {
 			A: 255,
 		}
 	}
+	if style := eng.fontStyle(w); style != nil && !style.Color.isZero() {
+		return color.RGBA{R: uint8(style.Color.r * 255), G: uint8(style.Color.g * 255), B: uint8(style.Color.b * 255), A: 255}
+	}
 	// Default WoW glue label is yellow-gold
 	return color.RGBA{R: 255, G: 210, B: 0, A: 255}
+}
+
+func (eng *UIEngine) fontStyle(w *widget) *Font {
+	name := w.fontObject
+	if w.parent != nil && (w.parent.kind == kindButton || w.parent.kind == kindCheckButton) && w.parent.buttonLabel == w {
+		switch {
+		case !w.parent.enabled && w.parent.disabledFont != "":
+			name = w.parent.disabledFont
+		case w.parent.highlighted && w.parent.highlightFont != "":
+			name = w.parent.highlightFont
+		case w.parent.normalFont != "":
+			name = w.parent.normalFont
+		}
+	}
+	return eng.Rt.fonts[name]
+}
+
+func (eng *UIEngine) faceFor(w *widget, fallback, fallbackLarge font.Face) font.Face {
+	style := eng.fontStyle(w)
+	size := 13.0
+	fontObj := eng.FontObj
+	fontKey := "FRIZQT__.TTF"
+	if style != nil {
+		if style.Height > 0 {
+			size = style.Height
+		}
+		if style.FontFile != "" {
+			fontKey = style.FontFile
+		}
+		if strings.Contains(strings.ToLower(style.FontFile), "morpheus") {
+			fontObj = eng.FontObjSm
+		}
+	} else if strings.Contains(strings.ToLower(w.fontObject), "large") || strings.Contains(strings.ToLower(w.fontObject), "huge") {
+		return fallbackLarge
+	}
+	if size == 13 && style == nil {
+		return fallback
+	}
+	key := fmt.Sprintf("%s|%.3f", fontKey, size*eng.uiScale)
+	if textFace, ok := eng.textFaces[key]; ok {
+		return textFace
+	}
+	textFace, err := opentype.NewFace(fontObj, &opentype.FaceOptions{Size: size * eng.uiScale, DPI: 96})
+	if err != nil {
+		return fallback
+	}
+	eng.textFaces[key] = textFace
+	return textFace
+}
+
+func (eng *UIEngine) textJustify(w *widget) string {
+	if w.justifyH != "" {
+		return w.justifyH
+	}
+	if style := eng.fontStyle(w); style != nil && style.JustifyH != "" {
+		return style.JustifyH
+	}
+	return "CENTER"
+}
+
+func (eng *UIEngine) textVerticalJustify(w *widget) string {
+	if w.justifyV != "" {
+		return w.justifyV
+	}
+	if style := eng.fontStyle(w); style != nil && style.JustifyV != "" {
+		return style.JustifyV
+	}
+	return "CENTER"
 }
 
 type hostScreen struct {
@@ -942,6 +1042,12 @@ func drawText(canvas *image.RGBA, face font.Face, text string, r Rect, screenHei
 }
 
 func drawTextAligned(canvas *image.RGBA, face font.Face, text string, r Rect, screenHeight float64, c color.Color, justify string) {
+	dst := ScreenRect(r, screenHeight)
+	text = strings.Join(wrapText(text, face, dst.Dx()), "\n")
+	drawTextAlignedV(canvas, face, text, r, screenHeight, c, justify, "CENTER")
+}
+
+func drawTextAlignedV(canvas *image.RGBA, face font.Face, text string, r Rect, screenHeight float64, c color.Color, justify, vertical string) {
 	text = cleanText(text)
 	dst := ScreenRect(r, screenHeight)
 	if dst.Dx() <= 0 || dst.Dy() <= 0 {
@@ -956,6 +1062,12 @@ func drawTextAligned(canvas *image.RGBA, face font.Face, text string, r Rect, sc
 	lines := strings.Split(text, "\n")
 	totalHeight := height * len(lines)
 	startY := dst.Min.Y + ascent + (dst.Dy()-totalHeight)/2
+	switch strings.ToUpper(vertical) {
+	case "TOP":
+		startY = dst.Min.Y + ascent
+	case "BOTTOM":
+		startY = dst.Max.Y - totalHeight + ascent
+	}
 	for index, line := range lines {
 		width := font.MeasureString(face, line).Ceil()
 		dotX := dst.Min.X + 4
@@ -968,6 +1080,52 @@ func drawTextAligned(canvas *image.RGBA, face font.Face, text string, r Rect, sc
 		d := &font.Drawer{Dst: canvas, Src: image.NewUniform(c), Face: face, Dot: fixed.P(dotX, startY+index*height)}
 		d.DrawString(line)
 	}
+}
+
+func wrapText(text string, face font.Face, maxWidth int) []string {
+	paragraphs := strings.Split(text, "\n")
+	if maxWidth <= 0 {
+		return paragraphs
+	}
+	lines := make([]string, 0, len(paragraphs))
+	for _, paragraph := range paragraphs {
+		if paragraph == "" {
+			lines = append(lines, "")
+			continue
+		}
+		words := strings.Fields(paragraph)
+		line := ""
+		for _, word := range words {
+			candidate := word
+			if line != "" {
+				candidate = line + " " + word
+			}
+			if font.MeasureString(face, candidate).Ceil() <= maxWidth || line == "" && font.MeasureString(face, candidate).Ceil() <= maxWidth {
+				line = candidate
+				continue
+			}
+			if line != "" {
+				lines = append(lines, line)
+			}
+			line = word
+			for font.MeasureString(face, line).Ceil() > maxWidth {
+				runes := []rune(line)
+				if len(runes) <= 1 {
+					break
+				}
+				cut := len(runes) - 1
+				for cut > 1 && font.MeasureString(face, string(runes[:cut])).Ceil() > maxWidth {
+					cut--
+				}
+				lines = append(lines, string(runes[:cut]))
+				line = string(runes[cut:])
+			}
+		}
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 func cleanText(text string) string {

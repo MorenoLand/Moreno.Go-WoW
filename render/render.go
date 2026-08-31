@@ -32,6 +32,7 @@ type clientHost struct {
 	width        float64
 	height       float64
 	startLogin   func(string, string)
+	enterWorld   func(int)
 	quit         func()
 	loginRunning bool
 }
@@ -54,6 +55,11 @@ func (h *clientHost) Screenshot()        {}
 func (h *clientHost) DefaultServerLogin(account, password string) {
 	if h.startLogin != nil {
 		h.startLogin(account, password)
+	}
+}
+func (h *clientHost) EnterWorld(index int) {
+	if h.enterWorld != nil {
+		h.enterWorld(index)
 	}
 }
 
@@ -80,6 +86,16 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	results := make(chan loginResult, 1)
 	var uiEngine *ui.UIEngine
 	var activeSession *network.Session
+	host.enterWorld = func(index int) {
+		if activeSession == nil {
+			return
+		}
+		go func() {
+			if _, err := activeSession.EnterWorld(index); err != nil && debug {
+				log.Printf("enter world: %v", err)
+			}
+		}()
+	}
 	host.startLogin = func(account, password string) {
 		if host.loginRunning {
 			return
@@ -282,7 +298,7 @@ func glueState(session *network.Session) ui.GlueState {
 	state.Realms = []ui.RealmInfo{{Name: session.Realm.Name, Address: session.Realm.Address, RealmType: strconv.Itoa(int(session.Realm.Kind))}}
 	state.Characters = make([]ui.CharacterEntry, 0, len(session.Characters))
 	for _, character := range session.Characters {
-		state.Characters = append(state.Characters, ui.CharacterEntry{Name: character.Name, Race: raceName(character.Race), Class: className(character.Class), Gender: int(character.Gender), Level: int(character.Level), Zone: strconv.Itoa(int(character.Zone))})
+		state.Characters = append(state.Characters, ui.CharacterEntry{Name: character.Name, Race: raceName(character.Race), RaceID: int(character.Race), Class: className(character.Class), ClassID: int(character.Class), Gender: int(character.Gender), Level: int(character.Level), Zone: strconv.Itoa(int(character.Zone)), ZoneID: character.Zone, MapID: character.Map, Flags: character.Flags, CustomizeFlags: character.CustomizeFlags, BackgroundModel: raceModelName(character.Race)})
 	}
 	return state
 }
@@ -299,4 +315,11 @@ func className(id uint8) string {
 		return name
 	}
 	return strconv.Itoa(int(id))
+}
+
+func raceModelName(id uint8) string {
+	if name, ok := map[uint8]string{1: "Human", 2: "Orc", 3: "Dwarf", 4: "NightElf", 5: "Scourge", 6: "Tauren", 7: "Gnome", 8: "Troll", 10: "BloodElf", 11: "Draenei"}[id]; ok {
+		return name
+	}
+	return "CharacterSelect"
 }

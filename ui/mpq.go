@@ -69,6 +69,8 @@ type mpqSet struct {
 	archives []*mpqArchive
 	locale   uint16
 	files    map[string]mpqFileRef
+	loose    map[string]string
+	looseRoots []string
 	missing  map[string]struct{}
 }
 
@@ -81,7 +83,11 @@ func openMPQSet(dataPath, locale string) (*mpqSet, error) {
 	if err != nil {
 		return nil, err
 	}
-	set := &mpqSet{locale: mpqLocaleID(locale), files: make(map[string]mpqFileRef), missing: make(map[string]struct{})}
+	set := &mpqSet{locale: mpqLocaleID(locale), files: make(map[string]mpqFileRef), loose: make(map[string]string), missing: make(map[string]struct{})}
+	set.looseRoots = append(set.looseRoots, root)
+	if localeDir := findLocaleDirectory(root, locale); localeDir != "" {
+		set.looseRoots = append(set.looseRoots, localeDir)
+	}
 	for _, path := range paths {
 		archive, err := openMPQArchive(path)
 		if err != nil {
@@ -124,6 +130,15 @@ func (set *mpqSet) ReadFile(name string) ([]byte, error) {
 		set.files[name] = mpqFileRef{archive: archive, block: block}
 		return archive.readBlock(name, block)
 	}
+	if path, ok := set.loose[name]; ok {
+		return os.ReadFile(path)
+	}
+	for _, root := range set.looseRoots {
+		if path, ok := resolveLoosePath(root, name); ok {
+			set.loose[name] = path
+			return os.ReadFile(path)
+		}
+	}
 	set.missing[name] = struct{}{}
 	return nil, os.ErrNotExist
 }
@@ -159,6 +174,43 @@ func hasMPQFile(root string) bool {
 		}
 	}
 	return false
+}
+
+func findLocaleDirectory(root, locale string) string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.EqualFold(entry.Name(), locale) {
+			return filepath.Join(root, entry.Name())
+		}
+	}
+	return ""
+}
+
+func resolveLoosePath(root, name string) (string, bool) {
+	parts := strings.Split(strings.Trim(strings.ReplaceAll(normalizeMPQPath(name), "\\", "/"), "/"), "/")
+	dir := root
+	for _, part := range parts {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return "", false
+		}
+		found := ""
+		for _, entry := range entries {
+			if strings.EqualFold(entry.Name(), part) {
+				found = filepath.Join(dir, entry.Name())
+				break
+			}
+		}
+		if found == "" {
+			return "", false
+		}
+		dir = found
+	}
+	info, err := os.Stat(dir)
+	return dir, err == nil && !info.IsDir()
 }
 
 var fixedMPQArchives = []string{"alternate.MPQ", "interface.MPQ", "misc.MPQ", "model.MPQ", "texture.MPQ", "terrain.MPQ", "wmo.MPQ", "sound.MPQ", "fonts.MPQ", "dbc.MPQ", "speech.MPQ", "expansionloc.MPQ", "lichkingloc.MPQ", "expansionspeech.MPQ", "lichkingspeech.MPQ", "expansion.MPQ", "lichking.MPQ", "common.MPQ", "common-2.MPQ"}

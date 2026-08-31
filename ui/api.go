@@ -2,6 +2,7 @@ package ui
 
 import (
 	"runtime"
+	"strconv"
 	"strings"
 
 	lua "github.com/yuin/gopher-lua"
@@ -38,12 +39,23 @@ type RealmInfo struct {
 
 // CharacterEntry describes one character in the character list.
 type CharacterEntry struct {
-	Name   string
-	Race   string
-	Class  string
-	Gender int
-	Level  int
-	Zone   string
+	Name            string
+	Race            string
+	RaceID          int
+	Class           string
+	ClassID         int
+	Gender          int
+	Level           int
+	Zone            string
+	ZoneID          uint32
+	MapID           uint32
+	Flags           uint32
+	CustomizeFlags  uint32
+	Ghost           bool
+	PaidCustomization bool
+	PaidRaceChange  bool
+	PaidFactionChange bool
+	BackgroundModel string
 }
 
 func registerGlueAPI(rt *Runtime) {
@@ -132,7 +144,7 @@ func registerGlueAPI(rt *Runtime) {
 		if v, ok := rt.GetCVar(L.CheckString(1)); ok {
 			L.Push(lua.LString(v))
 		} else {
-			L.Push(lua.LNil)
+			L.Push(lua.LString("0"))
 		}
 		return 1
 	})
@@ -140,7 +152,7 @@ func registerGlueAPI(rt *Runtime) {
 		if v, ok := rt.GetCVar(L.CheckString(1)); ok {
 			L.Push(lua.LBool(v == "1" || strings.EqualFold(v, "true")))
 		} else {
-			L.Push(lua.LNil)
+			L.Push(lua.LFalse)
 		}
 		return 1
 	})
@@ -162,10 +174,12 @@ func registerGlueAPI(rt *Runtime) {
 		if v, ok := rt.cvarDefaults[strings.ToLower(L.CheckString(1))]; ok {
 			L.Push(lua.LString(v))
 		} else {
-			L.Push(lua.LNil)
+			L.Push(lua.LString("0"))
 		}
 		return 1
 	})
+	reg("GetCVarMin", func(L *lua.LState) int { L.Push(lua.LNil); return 1 })
+	reg("GetCVarMax", func(L *lua.LState) int { L.Push(lua.LNil); return 1 })
 
 	// Audio.
 	reg("PlaySound", func(L *lua.LState) int {
@@ -361,16 +375,39 @@ func registerGlueAPI(rt *Runtime) {
 		L.Push(lua.LString(c.Name))
 		L.Push(lua.LString(c.Race))
 		L.Push(lua.LString(c.Class))
-		L.Push(lua.LNumber(c.Gender))
 		L.Push(lua.LNumber(c.Level))
-		L.Push(lua.LNumber(0)) // localized class id placeholder is not used by glue scripts
-		L.Push(lua.LNumber(0)) // zone id
 		L.Push(lua.LString(c.Zone))
-		return 8
+		L.Push(lua.LNumber(c.Gender))
+		L.Push(lua.LBool(c.Ghost))
+		L.Push(lua.LBool(c.PaidCustomization))
+		L.Push(lua.LBool(c.PaidRaceChange))
+		L.Push(lua.LBool(c.PaidFactionChange))
+		return 10
 	})
 	reg("SelectCharacter", func(L *lua.LState) int {
-		rt.Glue.SelectedCharacter = L.CheckInt(1)
+		index := L.CheckInt(1)
+		rt.Glue.SelectedCharacter = index
+		rt.FireEvent("UPDATE_SELECTED_CHARACTER", lua.LNumber(index))
 		return 0
+	})
+	reg("EnterWorld", func(L *lua.LState) int {
+		if host, ok := rt.Host.(WorldHost); ok {
+			host.EnterWorld(rt.Glue.SelectedCharacter - 1)
+		}
+		return 0
+	})
+	reg("GetSelectBackgroundModel", func(L *lua.LState) int {
+		idx := L.CheckInt(1)
+		if idx < 1 || idx > len(rt.Glue.Characters) {
+			L.Push(lua.LNil)
+			return 1
+		}
+		model := rt.Glue.Characters[idx-1].BackgroundModel
+		if model == "" {
+			model = strings.TrimPrefix(strings.ToUpper(rt.Glue.Characters[idx-1].Race), "RACE_")
+		}
+		L.Push(lua.LString(model))
+		return 1
 	})
 	reg("GetCharacterSelectFacing", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
 	reg("SetCharacterSelectFacing", func(L *lua.LState) int { return 0 })
@@ -382,6 +419,8 @@ func registerGlueAPI(rt *Runtime) {
 	reg("UpdateSelectionCustomizationScene", func(L *lua.LState) int { return 0 })
 	reg("SetCharCustomizeBackground", func(L *lua.LState) int { return 0 })
 	reg("SetCharSelectBackground", func(L *lua.LState) int { return 0 })
+	reg("ReadyForAccountDataTimes", func(L *lua.LState) int { return 0 })
+	reg("RequestRealmSplitInfo", func(L *lua.LState) int { return 0 })
 
 	// Notices and agreements.
 	for _, name := range []string{
@@ -477,6 +516,22 @@ func registerGlueAPI(rt *Runtime) {
 	reg("GetCurrentMultisampleFormat", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
 	reg("SetMultisampleFormat", func(L *lua.LState) int { return 0 })
 	reg("SetScreenResolution", func(L *lua.LState) int { return 0 })
+	reg("GetGamma", func(L *lua.LState) int {
+		if value, ok := rt.GetCVar("gamma"); ok {
+			if number, err := strconv.ParseFloat(value, 64); err == nil {
+				L.Push(lua.LNumber(number))
+				return 1
+			}
+		}
+		L.Push(lua.LNumber(0))
+		return 1
+	})
+	reg("SetGamma", func(L *lua.LState) int {
+		rt.SetCVar("gamma", L.Get(1).String())
+		return 0
+	})
+	reg("GetTerrainMip", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("SetTerrainMip", func(L *lua.LState) int { return 0 })
 	reg("IsPlayerResolutionAvailable", func(L *lua.LState) int { L.Push(lua.LBool(true)); return 1 })
 	reg("IsStereoVideoAvailable", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
 	reg("GetVideoCaps", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
@@ -680,7 +735,35 @@ func registerStringHelpers(L *lua.LState) {
 	L.SetGlobal("tremove", L.GetGlobal("table").(*lua.LTable).RawGetString("remove"))
 	// SecureNext pairs with next for secure iteration; the glue scripts use
 	// it as a plain iterator.
-	L.SetGlobal("SecureNext", L.GetGlobal("next"))
+	safeNext := L.NewFunction(func(L *lua.LState) int {
+		table := L.CheckTable(1)
+		key := lua.LValue(lua.LNil)
+		if L.GetTop() >= 2 {
+			key = L.Get(2)
+			switch key.Type() {
+			case lua.LTUserData, lua.LTTable, lua.LTFunction:
+				key = lua.LNil
+			case lua.LTNumber:
+				if key != lua.LNumber(0) && table.RawGet(key) == lua.LNil {
+					key = lua.LNil
+				}
+			default:
+				if key != lua.LNil && table.RawGet(key) == lua.LNil {
+					key = lua.LNil
+				}
+			}
+		}
+		nextKey, value := table.Next(key)
+		if nextKey == lua.LNil {
+			L.Push(lua.LNil)
+			return 1
+		}
+		L.Push(nextKey)
+		L.Push(value)
+		return 2
+	})
+	L.SetGlobal("next", safeNext)
+	L.SetGlobal("SecureNext", safeNext)
 	L.SetGlobal("issecure", L.NewFunction(func(L *lua.LState) int {
 		L.Push(lua.LBool(true))
 		return 1
@@ -699,14 +782,18 @@ func registerStringHelpers(L *lua.LState) {
 		if fn.Type() != lua.LTFunction {
 			return 0
 		}
-		L.Push(fn)
+		args := make([]lua.LValue, n-1)
 		for i := 2; i <= n; i++ {
-			L.Push(L.Get(i))
+			args[i-2] = L.Get(i)
 		}
-		if err := L.PCall(n-1, lua.MultRet, nil); err != nil {
+		L.SetTop(0)
+		L.Push(fn)
+		for _, arg := range args {
+			L.Push(arg)
+		}
+		if err := L.PCall(len(args), lua.MultRet, nil); err != nil {
 			return 0
 		}
-		// Entry top was n; the call consumed n stack slots above it.
-		return L.GetTop() - n
+		return L.GetTop()
 	}))
 }

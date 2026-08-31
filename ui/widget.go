@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 
 	lua "github.com/yuin/gopher-lua"
 )
@@ -89,6 +90,8 @@ type widget struct {
 	frameLevel      int
 	width           float64
 	height          float64
+	explicitWidth   bool
+	explicitHeight  bool
 	scale           float64
 	alpha           float64
 	points          []anchorPoint
@@ -157,6 +160,8 @@ type widget struct {
 	textWidth      float64
 	autoTextWidth  bool
 	autoTextHeight bool
+	nonSpaceWrap   bool
+	maxLines       int
 	textInsetL     float64
 	textInsetR     float64
 	textInsetT     float64
@@ -196,6 +201,13 @@ func newWidget(kind widgetKind, name string) *widget {
 }
 
 func (w *widget) objectType() string { return w.kind.objectType() }
+
+func (w *widget) parentName() string {
+	if w == nil || w.parent == nil {
+		return ""
+	}
+	return w.parent.name
+}
 
 func (w *widget) objectTypeMatches(name string) bool {
 	if name == w.objectType() {
@@ -407,7 +419,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 						p.relativeTo = rel.name
 					}
 				case lua.LString:
-					p.relativeTo = v.String()
+					p.relativeTo = resolveParentName(v.String(), w.parentName())
 				}
 				p.relativePoint = L.CheckString(4)
 				p.x = float64(L.CheckNumber(5))
@@ -420,14 +432,30 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 						p.relativeTo = rel.name
 					}
 				case lua.LString:
-					p.relativeTo = v.String()
+					p.relativeTo = resolveParentName(v.String(), w.parentName())
 				}
 				p.relativePoint = p.point
 				p.x = float64(L.CheckNumber(4))
 				p.y = float64(L.CheckNumber(5))
+			case n == 4 && (L.Get(3).Type() == lua.LTUserData || L.Get(3).Type() == lua.LTString):
+				switch v := L.Get(3).(type) {
+				case *lua.LUserData:
+					if rel, ok := v.Value.(*widget); ok {
+						p.relativeTo = rel.name
+					}
+				case lua.LString:
+					p.relativeTo = resolveParentName(v.String(), w.parentName())
+				}
+				p.relativePoint = L.CheckString(4)
 			case n == 4 && L.Get(3).Type() == lua.LTNumber:
 				p.x = float64(L.CheckNumber(3))
 				p.y = float64(L.CheckNumber(4))
+			}
+			for index, existing := range w.points {
+				if existing.point == p.point {
+					w.points[index] = p
+					return 0
+				}
 			}
 			w.points = append(w.points, p)
 			return 0
@@ -536,7 +564,16 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			format := L.CheckString(2)
 			args := make([]interface{}, 0, L.GetTop()-1)
 			for i := 3; i <= L.GetTop(); i++ {
-				args = append(args, L.Get(i).String())
+				value := L.Get(i)
+				if number, ok := value.(lua.LNumber); ok {
+					if math.Trunc(float64(number)) == float64(number) {
+						args = append(args, int64(number))
+					} else {
+						args = append(args, float64(number))
+					}
+				} else {
+					args = append(args, value.String())
+				}
 			}
 			rt.setText(w, sprintf(format, args))
 			return 0
@@ -557,7 +594,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.vertexColor.b = float64(L.CheckNumber(4))
 			return 0
 		},
-		"SetAlphaAttr":  func(L *lua.LState, w *widget) int { return 0 },
+		"SetAlphaAttr": func(L *lua.LState, w *widget) int { return 0 },
 		"SetTextInsets": func(L *lua.LState, w *widget) int {
 			w.textInsetL = float64(L.CheckNumber(2))
 			w.textInsetR = float64(L.CheckNumber(3))
@@ -634,7 +671,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 				L.Push(lua.LNil)
 				return 1
 			}
-			L.Push(lua.LString(w.fontObject))
+			L.Push(L.GetGlobal(w.fontObject))
 			return 1
 		},
 		"GetCurrentValue": func(L *lua.LState, w *widget) int {
@@ -829,6 +866,10 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"SetLight":    func(L *lua.LState, w *widget) int { return 0 },
+		"ResetLights": func(L *lua.LState, w *widget) int { return 0 },
+		"AddCharacterLight": func(L *lua.LState, w *widget) int { return 0 },
+		"AddLight": func(L *lua.LState, w *widget) int { return 0 },
+		"AddPetLight": func(L *lua.LState, w *widget) int { return 0 },
 		"SetPosition": func(L *lua.LState, w *widget) int { return 0 },
 		"AdvanceTime": func(L *lua.LState, w *widget) int { return 0 },
 		"StartMovie":  func(L *lua.LState, w *widget) int { return 0 },
@@ -855,6 +896,19 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		},
 	}
 
+	methodIndex := L.NewTable()
+	for methodName, method := range methods {
+		method := method
+		methodIndex.RawSetString(methodName, L.NewFunction(func(L *lua.LState) int {
+			self := L.CheckUserData(1)
+			w, ok := self.Value.(*widget)
+			if !ok {
+				L.ArgError(1, "widget expected")
+				return 0
+			}
+			return method(L, w)
+		}))
+	}
 	mt := L.NewTypeMetatable("wowWidget")
 	L.SetGlobal("__wowWidgetMT", mt) // keep reference alive
 	mt.RawSetString("__index", L.NewFunction(func(L *lua.LState) int {
@@ -903,6 +957,24 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		}
 		w.ensureFields(L).RawSetString(L.CheckString(2), L.Get(3))
 		return 0
+	}))
+	baseGetMetatable := L.GetGlobal("getmetatable")
+	L.SetGlobal("getmetatable", L.NewFunction(func(L *lua.LState) int {
+		if ud, ok := L.Get(1).(*lua.LUserData); ok {
+			if _, ok := ud.Value.(*widget); ok {
+				proxy := L.NewTable()
+				proxy.RawSetString("__index", methodIndex)
+				L.Push(proxy)
+				return 1
+			}
+		}
+		L.Push(baseGetMetatable)
+		L.Push(L.Get(1))
+		if err := L.PCall(1, 1, nil); err != nil {
+			L.Push(lua.LNil)
+			return 1
+		}
+		return 1
 	}))
 }
 

@@ -51,7 +51,7 @@ func installTemplateFactory(l *Loader) {
 		if !ok {
 			return
 		}
-		merged := mergeTemplate(tpl, &xmlNode{name: w.objectType(), attrs: map[string]string{}})
+		merged := mergeTemplate(l, tpl, &xmlNode{name: w.objectType(), attrs: map[string]string{}})
 		l.applyWidgetAttrs(w, merged)
 		for _, group := range merged.children {
 			switch group.name {
@@ -63,7 +63,7 @@ func installTemplateFactory(l *Loader) {
 					w.height = attrFloat(d, "y", w.height)
 				}
 			case "Anchors":
-				w.points = append(w.points, parseAnchors(group)...)
+				w.points = append(w.points, parseAnchors(group, w.parentName())...)
 			case "Backdrop":
 				w.backdrop = parseBackdrop(group)
 			case "Layers":
@@ -353,6 +353,8 @@ func (l *Loader) loadUiChildren(ui *xmlNode, interfacePath string) error {
 			if v, ok := child.attr("font"); ok {
 				font.FontFile = v
 			}
+			font.JustifyH = child.attrDefault("justifyH", font.JustifyH)
+			font.JustifyV = child.attrDefault("justifyV", font.JustifyV)
 			if v, ok := child.attr("outline"); ok {
 				font.Outline = v
 			}
@@ -367,6 +369,13 @@ func (l *Loader) loadUiChildren(ui *xmlNode, interfacePath string) error {
 			fontTable.RawSetString("name", lua.LString(name))
 			fontTable.RawSetString("height", lua.LNumber(font.Height))
 			fontTable.RawSetString("font", lua.LString(font.FontFile))
+			fontTable.RawSetString("GetTextColor", l.rt.L.NewFunction(func(L *lua.LState) int {
+				L.Push(lua.LNumber(font.Color.r))
+				L.Push(lua.LNumber(font.Color.g))
+				L.Push(lua.LNumber(font.Color.b))
+				L.Push(lua.LNumber(font.Color.a))
+				return 4
+			}))
 			l.rt.L.SetGlobal(name, fontTable)
 		default:
 			if isWidgetElement(child.name) {
@@ -416,7 +425,7 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 		if !ok {
 			return nil, fmt.Errorf("%s: template %q not found", interfacePath, inherits)
 		}
-		merged = mergeTemplate(tpl, node)
+		merged = mergeTemplate(l, tpl, node)
 	}
 
 	kind := kindFromObjectType(node.name)
@@ -444,7 +453,7 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 				w.height = attrFloat(d, "y", w.height)
 			}
 		case "Anchors":
-			w.points = append(w.points, parseAnchors(group)...)
+			w.points = append(w.points, parseAnchors(group, w.parentName())...)
 		case "Backdrop":
 			w.backdrop = parseBackdrop(group)
 		case "Layers":
@@ -562,7 +571,7 @@ func (l *Loader) buildButtonTexture(node *xmlNode, parent *widget, interfacePath
 	merged := node
 	if inherits, ok := node.attr("inherits"); ok && inherits != "" {
 		if tpl, ok := l.rt.virtuals[inherits]; ok {
-			merged = mergeTemplate(tpl, node)
+			merged = mergeTemplate(l, tpl, node)
 		}
 	}
 	w := newWidget(kindTexture, resolveParentName(merged.attrDefault("name", ""), parent.name))
@@ -579,7 +588,7 @@ func (l *Loader) buildButtonTexture(node *xmlNode, parent *widget, interfacePath
 		w.texCoordB = attrFloat(tc, "bottom", 1)
 	}
 	if a := merged.child("Anchors"); a != nil {
-		w.points = parseAnchors(a)
+		w.points = parseAnchors(a, parent.name)
 	}
 	if s := merged.child("Size"); s != nil {
 		w.width = attrFloat(s, "x", w.width)
@@ -603,7 +612,7 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 	merged := node
 	if inherits, ok := merged.attr("inherits"); ok && inherits != "" {
 		if tpl, ok := l.rt.virtuals[inherits]; ok {
-			merged = mergeTemplate(tpl, node)
+			merged = mergeTemplate(l, tpl, node)
 		}
 	}
 	kind := kindTexture
@@ -629,6 +638,10 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 		w.fontObject = merged.attrDefault("inherits", "")
 		w.justifyH = merged.attrDefault("justifyH", "")
 		w.justifyV = merged.attrDefault("justifyV", "")
+		w.nonSpaceWrap = parseBool(merged.attrDefault("nonspacewrap", "false"), false)
+		if maxLines, ok := merged.attr("maxLines"); ok {
+			w.maxLines, _ = strconv.Atoi(maxLines)
+		}
 		w.autoTextWidth = true
 		w.autoTextHeight = true
 		if c := merged.child("Color"); c != nil {
@@ -638,21 +651,33 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 	if s := merged.child("Size"); s != nil {
 		w.width = attrFloat(s, "x", w.width)
 		w.height = attrFloat(s, "y", w.height)
+		if _, ok := s.attr("x"); ok {
+			w.explicitWidth = true
+		}
+		if _, ok := s.attr("y"); ok {
+			w.explicitHeight = true
+		}
 		if d := s.child("AbsDimension"); d != nil {
 			w.width = attrFloat(d, "x", w.width)
 			w.height = attrFloat(d, "y", w.height)
+			if _, ok := d.attr("x"); ok {
+				w.explicitWidth = true
+			}
+			if _, ok := d.attr("y"); ok {
+				w.explicitHeight = true
+			}
 		}
 	}
 	if kind == kindFontString {
-		if w.width > 0 {
+		if w.explicitWidth {
 			w.autoTextWidth = false
 		}
-		if w.height > 0 {
+		if w.explicitHeight {
 			w.autoTextHeight = false
 		}
 	}
 	if a := merged.child("Anchors"); a != nil {
-		w.points = parseAnchors(a)
+		w.points = parseAnchors(a, parent.name)
 	}
 	if v, ok := merged.attr("setAllPoints"); (ok && parseBool(v, false)) || (w.width == 0 && w.height == 0 && len(w.points) == 0 && kind == kindTexture) {
 		w.points = []anchorPoint{
@@ -838,7 +863,7 @@ func (l *Loader) compileScript(body, handler, chunkName string) *lua.LFunction {
 	return result
 }
 
-func parseAnchors(node *xmlNode) []anchorPoint {
+func parseAnchors(node *xmlNode, parentName string) []anchorPoint {
 	var points []anchorPoint
 	for _, a := range node.children {
 		if a.name != "Anchor" {
@@ -846,7 +871,7 @@ func parseAnchors(node *xmlNode) []anchorPoint {
 		}
 		p := anchorPoint{point: a.attrDefault("point", "CENTER")}
 		if v, ok := a.attr("relativeTo"); ok {
-			p.relativeTo = v
+			p.relativeTo = resolveParentName(v, parentName)
 		}
 		if v, ok := a.attr("relativePoint"); ok {
 			p.relativePoint = v
@@ -938,7 +963,12 @@ func dirOf(path string) string {
 // the template's groups, all other template children (regions, nested
 // frames, scripts) are kept ahead of the instance's, and instance script
 // handlers replace same-named template handlers.
-func mergeTemplate(tpl, instance *xmlNode) *xmlNode {
+func mergeTemplate(l *Loader, tpl, instance *xmlNode) *xmlNode {
+	if inherits := tpl.attrDefault("inherits", ""); inherits != "" {
+		if parent, ok := l.rt.virtuals[inherits]; ok && parent != tpl {
+			tpl = mergeTemplate(l, parent, tpl)
+		}
+	}
 	merged := &xmlNode{name: instance.name, attrs: make(map[string]string)}
 	for k, v := range tpl.attrs {
 		merged.attrs[k] = v
@@ -947,7 +977,7 @@ func mergeTemplate(tpl, instance *xmlNode) *xmlNode {
 		merged.attrs[k] = v
 	}
 	replaced := map[string]bool{}
-	for _, group := range []string{"Size", "Anchors", "Backdrop", "TexCoords", "Color"} {
+	for _, group := range []string{"Size", "Anchors", "Backdrop", "TexCoords", "Color", "ButtonText", "NormalFont", "HighlightFont", "DisabledFont", "CheckedFont", "NormalTexture", "PushedTexture", "DisabledTexture", "HighlightTexture", "CheckedTexture", "DisabledCheckedTexture", "ThumbTexture", "TextInsets", "HitRectInsets"} {
 		if instance.child(group) != nil {
 			replaced[group] = true
 		}

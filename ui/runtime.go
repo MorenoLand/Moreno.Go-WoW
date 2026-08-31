@@ -77,6 +77,10 @@ type LoginHost interface {
 	DefaultServerLogin(account, password string)
 }
 
+type WorldHost interface {
+	EnterWorld(index int)
+}
+
 // Font is a named font object created from a <Font> element.
 type Font struct {
 	Name     string
@@ -85,6 +89,8 @@ type Font struct {
 	Color    rgba
 	Outline  string
 	Shadow   bool
+	JustifyH string
+	JustifyV string
 }
 
 // NewRuntime creates the Lua state and registers the glue API and widget
