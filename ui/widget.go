@@ -751,7 +751,13 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		},
 		"SetDisabledTextColor": func(L *lua.LState, w *widget) int { return 0 },
 		"SetDesaturated": func(L *lua.LState, w *widget) int {
-			w.desaturated = L.CheckBool(2)
+			w.desaturated = false
+			switch value := L.Get(2); value.Type() {
+			case lua.LTBool:
+				w.desaturated = L.CheckBool(2)
+			case lua.LTNumber:
+				w.desaturated = L.CheckNumber(2) != 0
+			}
 			return 0
 		},
 		"SetTexture": func(L *lua.LState, w *widget) int {

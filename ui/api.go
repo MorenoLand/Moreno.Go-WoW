@@ -17,6 +17,22 @@ const (
 	buildTOC     = 30300
 )
 
+type createRaceInfo struct {
+	key     string
+	file    string
+	faction string
+}
+
+type createClassInfo struct {
+	key                  string
+	file                 string
+	tank, healer, damage bool
+}
+
+var createRaces = []createRaceInfo{{"RACE_HUMAN", "Human", "Alliance"}, {"RACE_DWARF", "Dwarf", "Alliance"}, {"RACE_GNOME", "Gnome", "Alliance"}, {"RACE_NIGHTELF", "NightElf", "Alliance"}, {"RACE_TAUREN", "Tauren", "Horde"}, {"RACE_SCOURGE", "Scourge", "Horde"}, {"RACE_TROLL", "Troll", "Horde"}, {"RACE_ORC", "Orc", "Horde"}, {"RACE_BLOODELF", "BloodElf", "Horde"}, {"RACE_DRAENEI", "Draenei", "Alliance"}}
+
+var createClasses = []createClassInfo{{"WARRIOR", "WARRIOR", true, false, true}, {"PALADIN", "PALADIN", true, true, true}, {"HUNTER", "HUNTER", false, false, true}, {"ROGUE", "ROGUE", false, false, true}, {"PRIEST", "PRIEST", false, true, true}, {"DEATHKNIGHT", "DEATHKNIGHT", true, false, true}, {"SHAMAN", "SHAMAN", false, true, true}, {"MAGE", "MAGE", false, false, true}, {"WARLOCK", "WARLOCK", false, false, true}, {"DRUID", "DRUID", true, true, true}}
+
 // GlueState tracks connection-flow state the glue API surfaces to scripts.
 type GlueState struct {
 	Connected         bool
@@ -26,6 +42,7 @@ type GlueState struct {
 	Realms            []RealmInfo
 	SelectedCharacter int
 	Characters        []CharacterEntry
+	AddOns            []AddonInfo
 }
 
 // RealmInfo describes one realm entry returned by the realm list.
@@ -35,6 +52,31 @@ type RealmInfo struct {
 	Population string
 	RealmType  string
 	Locale     string
+	ID         int
+	Characters int
+	Invalid    bool
+	Down       bool
+	Current    bool
+	PVP        bool
+	RP         bool
+	Load       float64
+	Locked     bool
+	Major      int
+	Minor      int
+	Revision   int
+	Build      string
+}
+
+type AddonInfo struct {
+	Name       string
+	Title      string
+	Notes      string
+	URL        string
+	Loadable   bool
+	Reason     string
+	Security   string
+	NewVersion bool
+	Enabled    bool
 }
 
 // CharacterEntry describes one character in the character list.
@@ -374,25 +416,64 @@ func registerGlueAPI(rt *Runtime) {
 	})
 	reg("GetRealmInfo", func(L *lua.LState) int {
 		idx := L.CheckInt(1)
+		if L.GetTop() >= 2 {
+			idx = L.CheckInt(2)
+		}
 		if idx < 1 || idx > len(rt.Glue.Realms) {
 			L.Push(lua.LNil)
 			return 1
 		}
 		r := rt.Glue.Realms[idx-1]
 		L.Push(lua.LString(r.Name))
-		L.Push(lua.LNumber(0)) // queue status: unavailable flag
-		L.Push(lua.LBool(false))
-		L.Push(lua.LNumber(0)) // current population
+		L.Push(lua.LNumber(r.Characters))
+		L.Push(lua.LBool(r.Invalid))
+		L.Push(lua.LBool(r.Down))
+		L.Push(lua.LBool(r.Current || (r.ID != 0 && r.ID == rt.Glue.SelectedRealm)))
+		L.Push(lua.LBool(r.PVP))
+		L.Push(lua.LBool(r.RP))
+		L.Push(lua.LNumber(r.Load))
+		L.Push(lua.LBool(r.Locked))
+		if r.Major == 0 {
+			L.Push(lua.LNil)
+		} else {
+			L.Push(lua.LNumber(r.Major))
+		}
+		if r.Minor == 0 {
+			L.Push(lua.LNil)
+		} else {
+			L.Push(lua.LNumber(r.Minor))
+		}
+		if r.Revision == 0 {
+			L.Push(lua.LNil)
+		} else {
+			L.Push(lua.LNumber(r.Revision))
+		}
+		if r.Build == "" {
+			L.Push(lua.LNil)
+		} else {
+			L.Push(lua.LString(r.Build))
+		}
 		L.Push(lua.LString(r.RealmType))
-		return 5
+		return 14
 	})
 	reg("RequestRealmList", func(L *lua.LState) int {
 		rt.Glue.PendingRealmList = true
+		rt.FireEvent("OPEN_REALM_LIST")
 		return 0
 	})
-	reg("CancelRealmListQuery", func(L *lua.LState) int { return 0 })
+	reg("CancelRealmListQuery", func(L *lua.LState) int { rt.Glue.PendingRealmList = false; return 0 })
 	reg("SortRealms", func(L *lua.LState) int { return 0 })
-	reg("ChangeRealm", func(L *lua.LState) int { return 0 })
+	reg("ChangeRealm", func(L *lua.LState) int {
+		idx := L.CheckInt(2)
+		if idx >= 1 && idx <= len(rt.Glue.Realms) {
+			rt.Glue.SelectedRealm = rt.Glue.Realms[idx-1].ID
+			rt.Glue.ServerName = rt.Glue.Realms[idx-1].Name
+		}
+		rt.Glue.PendingRealmList = false
+		return 0
+	})
+	reg("RealmListUpdateRate", func(L *lua.LState) int { L.Push(lua.LNumber(5)); return 1 })
+	reg("RealmListDialogCancelled", func(L *lua.LState) int { return 0 })
 
 	// Character list.
 	reg("GetNumCharacters", func(L *lua.LState) int {
@@ -490,20 +571,80 @@ func registerGlueAPI(rt *Runtime) {
 	})
 
 	// AddOn management (the glue addon list screen queries these).
-	reg("GetNumAddOns", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("GetNumAddOns", func(L *lua.LState) int { L.Push(lua.LNumber(len(rt.Glue.AddOns))); return 1 })
 	reg("GetAddOnInfo", func(L *lua.LState) int {
-		L.Push(lua.LNil)
-		return 6
+		index := L.CheckInt(1)
+		if index < 1 || index > len(rt.Glue.AddOns) {
+			for i := 0; i < 8; i++ {
+				L.Push(lua.LNil)
+			}
+			return 8
+		}
+		addon := rt.Glue.AddOns[index-1]
+		L.Push(lua.LString(addon.Name))
+		L.Push(lua.LString(addon.Title))
+		L.Push(lua.LString(addon.Notes))
+		L.Push(lua.LString(addon.URL))
+		L.Push(lua.LBool(addon.Loadable))
+		if addon.Reason == "" {
+			L.Push(lua.LNil)
+		} else {
+			L.Push(lua.LString(addon.Reason))
+		}
+		if addon.Security == "" {
+			L.Push(lua.LNil)
+		} else {
+			L.Push(lua.LString(addon.Security))
+		}
+		L.Push(lua.LBool(addon.NewVersion))
+		return 8
 	})
-	reg("GetAddOnEnableState", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("EnableAddOn", func(L *lua.LState) int { return 0 })
-	reg("DisableAddOn", func(L *lua.LState) int { return 0 })
-	reg("EnableAllAddOns", func(L *lua.LState) int { return 0 })
-	reg("DisableAllAddOns", func(L *lua.LState) int { return 0 })
+	reg("GetAddOnEnableState", func(L *lua.LState) int {
+		index := addonIndexArg(L)
+		if index >= 1 && index <= len(rt.Glue.AddOns) && rt.Glue.AddOns[index-1].Enabled {
+			L.Push(lua.LNumber(2))
+		} else {
+			L.Push(lua.LNumber(0))
+		}
+		return 1
+	})
+	reg("EnableAddOn", func(L *lua.LState) int {
+		index := addonIndexArg(L)
+		if index >= 1 && index <= len(rt.Glue.AddOns) {
+			rt.Glue.AddOns[index-1].Enabled = true
+		}
+		return 0
+	})
+	reg("DisableAddOn", func(L *lua.LState) int {
+		index := addonIndexArg(L)
+		if index >= 1 && index <= len(rt.Glue.AddOns) {
+			rt.Glue.AddOns[index-1].Enabled = false
+		}
+		return 0
+	})
+	reg("EnableAllAddOns", func(L *lua.LState) int {
+		for index := range rt.Glue.AddOns {
+			rt.Glue.AddOns[index].Enabled = true
+		}
+		return 0
+	})
+	reg("DisableAllAddOns", func(L *lua.LState) int {
+		for index := range rt.Glue.AddOns {
+			rt.Glue.AddOns[index].Enabled = false
+		}
+		return 0
+	})
 	reg("ResetAddOns", func(L *lua.LState) int { return 0 })
 	reg("SaveAddOns", func(L *lua.LState) int { return 0 })
-	reg("SetAddonVersionCheck", func(L *lua.LState) int { return 0 })
-	reg("IsAddonVersionCheckEnabled", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
+	reg("SetAddonVersionCheck", func(L *lua.LState) int {
+		if L.GetTop() > 0 {
+			rt.addonVersionCheck = L.Get(1) != lua.LFalse && L.Get(1) != lua.LNil && L.Get(1).String() != "0"
+		}
+		return 0
+	})
+	reg("IsAddonVersionCheckEnabled", func(L *lua.LState) int { L.Push(lua.LBool(rt.addonVersionCheck)); return 1 })
+	reg("GetAddOnDependencies", func(L *lua.LState) int { return 0 })
+	reg("LaunchAddOnURL", func(L *lua.LState) int { return 0 })
 
 	// Billing.
 	reg("GetBillingPlan", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
@@ -582,21 +723,103 @@ func registerGlueAPI(rt *Runtime) {
 	reg("SetCharSelectModelFrame", func(L *lua.LState) int { rt.SetCVar("charSelectModel", L.CheckString(1)); return 0 })
 	reg("SetCharCustomizeFrame", func(L *lua.LState) int { rt.SetCVar("charCustomizeModel", L.CheckString(1)); return 0 })
 	reg("SetRaceSelectFrame", func(L *lua.LState) int { rt.SetCVar("raceSelectModel", L.CheckString(1)); return 0 })
-	reg("GetSelectedRace", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("SetSelectedRace", func(L *lua.LState) int { return 0 })
-	reg("GetSelectedSex", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
-	reg("SetSelectedSex", func(L *lua.LState) int { return 0 })
-	reg("GetSelectedClass", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("SetSelectedClass", func(L *lua.LState) int { return 0 })
-	reg("GetSelectedCategory", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("GetNameForRace", func(L *lua.LState) int { L.Push(lua.LString("")); L.Push(lua.LString("")); return 2 })
-	reg("GetFactionForRace", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("GetAvailableRaces", func(L *lua.LState) int { return 0 })
-	reg("GetAvailableClasses", func(L *lua.LState) int { return 0 })
-	reg("GetClassesForRace", func(L *lua.LState) int { return 0 })
-	reg("IsRaceClassValid", func(L *lua.LState) int { L.Push(lua.LBool(true)); return 1 })
-	reg("GetFacialHairCustomization", func(L *lua.LState) int { L.Push(lua.LString("")); L.Push(lua.LString("")); return 2 })
-	reg("GetHairCustomization", func(L *lua.LState) int { L.Push(lua.LString("")); L.Push(lua.LString("")); return 2 })
+	reg("GetSelectedRace", func(L *lua.LState) int { L.Push(lua.LNumber(rt.selectedRace)); return 1 })
+	reg("SetSelectedRace", func(L *lua.LState) int { rt.selectedRace = clampCreateIndex(L.CheckInt(1), len(createRaces)); return 0 })
+	reg("GetSelectedSex", func(L *lua.LState) int { L.Push(lua.LNumber(rt.selectedSex)); return 1 })
+	reg("SetSelectedSex", func(L *lua.LState) int {
+		sex := L.CheckInt(1)
+		if sex == 2 || sex == 3 {
+			rt.selectedSex = sex
+		}
+		return 0
+	})
+	reg("GetSelectedClass", func(L *lua.LState) int {
+		index := rt.selectedClass
+		if !validCreateClass(rt.selectedRace, index) {
+			for candidate := range createClasses {
+				if validCreateClass(rt.selectedRace, candidate+1) {
+					index = candidate + 1
+					break
+				}
+			}
+			rt.selectedClass = index
+		}
+		class := createClasses[index-1]
+		L.Push(lua.LString(localizedValue(L, class.key)))
+		L.Push(lua.LString(class.file))
+		L.Push(lua.LNumber(index))
+		L.Push(lua.LBool(class.tank))
+		L.Push(lua.LBool(class.healer))
+		L.Push(lua.LBool(class.damage))
+		return 6
+	})
+	reg("SetSelectedClass", func(L *lua.LState) int {
+		index := L.CheckInt(1)
+		if validCreateClass(rt.selectedRace, index) {
+			rt.selectedClass = index
+		}
+		return 0
+	})
+	reg("GetSelectedCategory", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
+	reg("GetNameForRace", func(L *lua.LState) int {
+		index := clampCreateIndex(rt.selectedRace, len(createRaces))
+		race := createRaces[index-1]
+		L.Push(lua.LString(localizedValue(L, race.key)))
+		L.Push(lua.LString(race.file))
+		return 2
+	})
+	reg("GetFactionForRace", func(L *lua.LState) int {
+		index := rt.selectedRace
+		if L.GetTop() > 0 {
+			index = L.CheckInt(1)
+		}
+		index = clampCreateIndex(index, len(createRaces))
+		race := createRaces[index-1]
+		L.Push(lua.LString(localizedValue(L, race.key)))
+		L.Push(lua.LString(race.faction))
+		return 2
+	})
+	reg("GetAvailableRaces", func(L *lua.LState) int {
+		for _, race := range createRaces {
+			L.Push(lua.LString(localizedValue(L, race.key)))
+			L.Push(lua.LString(race.file))
+			L.Push(lua.LNumber(1))
+		}
+		return len(createRaces) * 3
+	})
+	reg("GetAvailableClasses", func(L *lua.LState) int {
+		for index, class := range createClasses {
+			L.Push(lua.LString(localizedValue(L, class.key)))
+			L.Push(lua.LString(class.file))
+			if validCreateClass(rt.selectedRace, index+1) {
+				L.Push(lua.LNumber(1))
+			} else {
+				L.Push(lua.LNumber(0))
+			}
+		}
+		return len(createClasses) * 3
+	})
+	reg("GetClassesForRace", func(L *lua.LState) int {
+		for index, class := range createClasses {
+			L.Push(lua.LString(localizedValue(L, class.key)))
+			L.Push(lua.LString(class.file))
+			if validCreateClass(L.CheckInt(1), index+1) {
+				L.Push(lua.LNumber(1))
+			} else {
+				L.Push(lua.LNumber(0))
+			}
+		}
+		return len(createClasses) * 3
+	})
+	reg("IsRaceClassValid", func(L *lua.LState) int { L.Push(lua.LBool(validCreateClass(L.CheckInt(1), L.CheckInt(2)))); return 1 })
+	reg("GetFacialHairCustomization", func(L *lua.LState) int { L.Push(lua.LString("NORMAL")); L.Push(lua.LString("NORMAL")); return 2 })
+	reg("GetHairCustomization", func(L *lua.LState) int { L.Push(lua.LString("NORMAL")); L.Push(lua.LString("NORMAL")); return 2 })
+	reg("GetCreateBackgroundModel", func(L *lua.LState) int {
+		index := clampCreateIndex(rt.selectedRace, len(createRaces))
+		L.Push(lua.LString(createRaces[index-1].file))
+		return 1
+	})
+	reg("ResetCharCustomize", func(L *lua.LState) int { return 0 })
 	reg("RandomName", func(L *lua.LState) int { L.Push(lua.LString("")); return 1 })
 	reg("CreateCharacter", func(L *lua.LState) int { return 0 })
 	reg("DeleteCharacter", func(L *lua.LState) int { return 0 })
@@ -679,6 +902,44 @@ func localizedValue(L *lua.LState, key string) string {
 		return value.String()
 	}
 	return key
+}
+
+func clampCreateIndex(index, max int) int {
+	if max == 0 {
+		return 0
+	}
+	if index < 1 || index > max {
+		return 1
+	}
+	return index
+}
+
+func validCreateClass(raceIndex, classIndex int) bool {
+	if raceIndex < 1 || raceIndex > len(createRaces) || classIndex < 1 || classIndex > len(createClasses) {
+		return false
+	}
+	valid := map[int]map[int]bool{
+		1:  {1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 8: true, 9: true},
+		2:  {1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true},
+		3:  {1: true, 4: true, 6: true, 8: true, 9: true},
+		4:  {1: true, 3: true, 4: true, 5: true, 6: true, 10: true},
+		5:  {1: true, 3: true, 5: true, 6: true, 7: true, 10: true},
+		6:  {1: true, 4: true, 5: true, 6: true, 8: true, 9: true},
+		7:  {1: true, 3: true, 4: true, 6: true, 8: true, 9: true, 10: true},
+		8:  {1: true, 3: true, 4: true, 5: true, 6: true, 7: true, 8: true, 9: true, 10: true},
+		9:  {1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 8: true, 9: true},
+		10: {1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true, 8: true},
+	}
+	return valid[raceIndex][classIndex]
+}
+
+func addonIndexArg(L *lua.LState) int {
+	for index := L.GetTop(); index >= 1; index-- {
+		if value, ok := L.Get(index).(lua.LNumber); ok {
+			return int(value)
+		}
+	}
+	return 0
 }
 
 // registerStringHelpers installs the string-function globals the interface

@@ -621,6 +621,9 @@ func (eng *UIEngine) SetInitialCredentials(account, password string, rememberMe 
 }
 
 func (eng *UIEngine) SetGlueState(state GlueState) {
+	if len(state.AddOns) == 0 {
+		state.AddOns = eng.Rt.Glue.AddOns
+	}
 	eng.Rt.Glue = state
 	eng.statusKey = ""
 	eng.Rt.SetCVar("currentGlueScreen", "charselect")

@@ -21,16 +21,20 @@ func (e ScriptError) Error() string { return e.Source + ": " + e.Message }
 type Runtime struct {
 	L *lua.LState
 
-	widgets      map[string]*widget
-	virtuals     map[string]*xmlNode
-	fonts        map[string]*Font
-	events       map[string][]*widget
-	cvars        map[string]string
-	cvarDefaults map[string]string
-	scriptErrors []ScriptError
-	chunkSource  string
-	nested       int
-	focused      *widget
+	widgets           map[string]*widget
+	virtuals          map[string]*xmlNode
+	fonts             map[string]*Font
+	events            map[string][]*widget
+	cvars             map[string]string
+	cvarDefaults      map[string]string
+	scriptErrors      []ScriptError
+	chunkSource       string
+	nested            int
+	focused           *widget
+	selectedRace      int
+	selectedSex       int
+	selectedClass     int
+	addonVersionCheck bool
 
 	// Glue carries the connection-flow state surfaced by the realm and
 	// character list API functions.
@@ -101,14 +105,18 @@ type Font struct {
 // method tables. Callers must Close it when done.
 func NewRuntime(host Host) *Runtime {
 	rt := &Runtime{
-		L:            lua.NewState(lua.Options{SkipOpenLibs: false}),
-		widgets:      make(map[string]*widget),
-		virtuals:     make(map[string]*xmlNode),
-		fonts:        make(map[string]*Font),
-		events:       make(map[string][]*widget),
-		cvars:        make(map[string]string),
-		cvarDefaults: make(map[string]string),
-		Host:         host,
+		L:                 lua.NewState(lua.Options{SkipOpenLibs: false}),
+		widgets:           make(map[string]*widget),
+		virtuals:          make(map[string]*xmlNode),
+		fonts:             make(map[string]*Font),
+		events:            make(map[string][]*widget),
+		cvars:             make(map[string]string),
+		cvarDefaults:      make(map[string]string),
+		selectedRace:      1,
+		selectedSex:       2,
+		selectedClass:     1,
+		addonVersionCheck: true,
+		Host:              host,
 	}
 	registerWidgetMethods(rt.L, rt)
 	registerGlueAPI(rt)

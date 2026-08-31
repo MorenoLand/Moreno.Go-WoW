@@ -41,6 +41,7 @@ func NewMPQLoader(dataPath, locale string, rt *Runtime) (*Loader, error) {
 		return nil, err
 	}
 	l := &Loader{mpq: archives, rt: rt}
+	rt.Glue.AddOns = discoverAddOns(dataPath)
 	installTemplateFactory(l)
 	return l, nil
 }

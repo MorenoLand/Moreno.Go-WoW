@@ -390,12 +390,26 @@ func resolveInterfaceRoot(dataPath, interfacePath string) string {
 
 func glueState(session *network.Session) ui.GlueState {
 	state := ui.GlueState{Connected: true, ServerName: session.Realm.Name, SelectedRealm: int(session.Realm.ID)}
-	state.Realms = []ui.RealmInfo{{Name: session.Realm.Name, Address: session.Realm.Address, RealmType: strconv.Itoa(int(session.Realm.Kind))}}
+	population := strconv.FormatFloat(float64(session.Realm.Population), 'f', 3, 32)
+	state.Realms = []ui.RealmInfo{{Name: session.Realm.Name, Address: session.Realm.Address, Population: population, RealmType: realmType(session.Realm.Kind), ID: int(session.Realm.ID), Characters: int(session.Realm.Characters), Down: session.Realm.IsOffline(), Current: true, Locked: session.Realm.Locked, Load: float64(session.Realm.Population)}}
 	state.Characters = make([]ui.CharacterEntry, 0, len(session.Characters))
 	for _, character := range session.Characters {
 		state.Characters = append(state.Characters, ui.CharacterEntry{Name: character.Name, Race: raceName(character.Race), RaceID: int(character.Race), Class: className(character.Class), ClassID: int(character.Class), Gender: int(character.Gender), Level: int(character.Level), Zone: strconv.Itoa(int(character.Zone)), ZoneID: character.Zone, MapID: character.Map, Flags: character.Flags, CustomizeFlags: character.CustomizeFlags, BackgroundModel: raceModelName(character.Race)})
 	}
 	return state
+}
+
+func realmType(kind uint8) string {
+	switch kind {
+	case 1:
+		return "PVP"
+	case 6:
+		return "RP"
+	case 8:
+		return "RP-PVP"
+	default:
+		return "Normal"
+	}
 }
 
 func raceName(id uint8) string {
