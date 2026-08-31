@@ -411,7 +411,7 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 		drawTextAligned(canvas, face, status, screenScaledRect(Rect{X0: 80, Y0: 96, X1: virtualWidth - 80, Y1: 128}, uiScale), float64(screenHeight), color.RGBA{R: 255, G: 100, B: 80, A: 255}, "CENTER")
 	}
 	if eng.statusText != "" {
-		drawTextAligned(canvas, face, eng.statusText, screenScaledRect(Rect{X0: 80, Y0: 620, X1: virtualWidth - 80, Y1: 656}, uiScale), float64(screenHeight), color.RGBA{R: 255, G: 220, B: 80, A: 255}, "CENTER")
+		drawTextAligned(canvas, face, eng.statusText, screenScaledRect(Rect{X0: 80, Y0: 364, X1: virtualWidth - 80, Y1: 404}, uiScale), float64(screenHeight), color.RGBA{R: 255, G: 220, B: 80, A: 255}, "CENTER")
 	}
 	if eng.sceneBackground {
 		for index := 3; index < len(canvas.Pix); index += 4 {
