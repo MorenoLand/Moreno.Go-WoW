@@ -330,7 +330,7 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 					if tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0 {
 						tc = [4]float64{0, 1, 0, 1}
 					}
-					drawSubMode(canvas, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.alphaMode, "ADD"))
+					drawSubModeFilter(canvas, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.alphaMode, "ADD"), strings.Contains(strings.ToLower(w.textureFile), "checkbox"))
 				}
 			} else if !w.vertexColor.isZero() {
 				eng.drawTextureColor(canvas, scaledRect, w.vertexColor)
@@ -1415,27 +1415,27 @@ func drawBackdropEdge(canvas *image.RGBA, dst image.Rectangle, source image.Imag
 		}
 		sourceWidth := x1 - x0
 		sourceHeight := y1 - y0
-		mapped := image.NewNRGBA(image.Rect(0, 0, target.Dx(), target.Dy()))
-		for y := 0; y < target.Dy(); y++ {
-			for x := 0; x < target.Dx(); x++ {
-				var sourceX, sourceY int
-				if transpose {
-					sourceX = x0 + int(float64(y)/float64(target.Dy())*float64(sourceWidth))
-					sourceY = y0 + int(float64(x)/float64(target.Dx())*float64(sourceHeight)*fraction)
-				} else {
-					sourceX = x0 + int(float64(x)/float64(target.Dx())*float64(sourceWidth))
-					sourceY = y0 + int(float64(y)/float64(target.Dy())*float64(sourceHeight)*fraction)
+		partialHeight := int(math.Round(float64(sourceHeight) * fraction))
+		if partialHeight < 1 {
+			return
+		}
+		var mapped *image.NRGBA
+		if transpose {
+			mapped = image.NewNRGBA(image.Rect(0, 0, partialHeight, sourceWidth))
+			for y := 0; y < sourceWidth; y++ {
+				for x := 0; x < partialHeight; x++ {
+					mapped.Set(x, y, source.At(x0+y, y0+x))
 				}
-				if sourceX >= x1 {
-					sourceX = x1 - 1
+			}
+		} else {
+			mapped = image.NewNRGBA(image.Rect(0, 0, sourceWidth, partialHeight))
+			for y := 0; y < partialHeight; y++ {
+				for x := 0; x < sourceWidth; x++ {
+					mapped.Set(x, y, source.At(x0+x, y0+y))
 				}
-				if sourceY >= y1 {
-					sourceY = y1 - 1
-				}
-				mapped.Set(x, y, source.At(sourceX, sourceY))
 			}
 		}
-		draw.Draw(canvas, target, mapped, image.Point{}, draw.Over)
+		xdraw.BiLinear.Scale(canvas, target, mapped, mapped.Bounds(), draw.Over, nil)
 	}
 	run := func(index int, target image.Rectangle, vertical bool, transpose bool) {
 		span := target.Dx()
@@ -1607,10 +1607,14 @@ func (h hostScreen) ConsoleExec(string)             {}
 func (h hostScreen) Screenshot()                    {}
 
 func drawSub(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64) {
-	drawSubMode(canvas, img, r, screenHeight, tc, false)
+	drawSubModeFilter(canvas, img, r, screenHeight, tc, false, false)
 }
 
 func drawSubMode(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64, additive bool) {
+	drawSubModeFilter(canvas, img, r, screenHeight, tc, additive, false)
+}
+
+func drawSubModeFilter(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64, additive, nearest bool) {
 	b := img.Bounds()
 	l := b.Min.X + int(float64(b.Dx())*tc[0])
 	rt := b.Min.X + int(float64(b.Dx())*tc[1])
@@ -1637,11 +1641,19 @@ func drawSubMode(canvas *image.RGBA, img image.Image, r Rect, screenHeight float
 		return
 	}
 	if !additive {
-		xdraw.BiLinear.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
+		if nearest {
+			xdraw.NearestNeighbor.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
+		} else {
+			xdraw.BiLinear.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
+		}
 		return
 	}
 	blend := image.NewRGBA(dst)
-	xdraw.BiLinear.Scale(blend, blend.Bounds(), src, src.Bounds(), xdraw.Src, nil)
+	if nearest {
+		xdraw.NearestNeighbor.Scale(blend, blend.Bounds(), src, src.Bounds(), xdraw.Src, nil)
+	} else {
+		xdraw.BiLinear.Scale(blend, blend.Bounds(), src, src.Bounds(), xdraw.Src, nil)
+	}
 	for y := dst.Min.Y; y < dst.Max.Y; y++ {
 		for x := dst.Min.X; x < dst.Max.X; x++ {
 			sr, sg, sb, sa := blend.At(x, y).RGBA()
