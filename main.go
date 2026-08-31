@@ -54,5 +54,5 @@ func main() {
 	if err := config.Save(configPath, options); err != nil {
 		log.Printf("saving %s: %v", configPath, err)
 	}
-	render.Run(network.Config{AuthAddress: options.AuthAddress, Account: options.Account, Password: password, Locale: options.Locale, Realm: options.Realm, Timeout: timeout, Debug: debug}, options.DataPath, options.InterfacePath, options.Character, configPath, debug)
+	render.Run(network.Config{AuthAddress: options.AuthAddress, Account: options.Account, Password: password, Locale: options.Locale, Realm: options.Realm, Timeout: timeout, Debug: debug}, options.DataPath, options.InterfacePath, options.BackgroundPath, options.Character, configPath, debug)
 }

@@ -15,7 +15,7 @@ import (
 	"github.com/g3n/engine/window"
 )
 
-func Run(clientConfig network.Config, dataPath, interfacePath, lastCharacter, configPath string, debug bool) {
+func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, lastCharacter, configPath string, debug bool) {
 	if err := window.Init(960, 640, "MorenoWoW"); err != nil {
 		log.Printf("window: %v", err)
 		return
@@ -41,7 +41,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, lastCharacter, co
 		glue := filepath.Join(interfacePath, "GlueXML")
 		frame := filepath.Join(interfacePath, "FrameXML")
 		assets := filepath.Join(interfacePath, "Interface-tree")
-		eng, err := ui.LoadUIEngine(glue, frame, assets)
+		eng, err := ui.LoadUIEngine(glue, frame, assets, backgroundPath)
 		if err == nil {
 			uiEngine = eng
 			uiImage = gui.NewImageFromRGBA(eng.Render(960, 640))

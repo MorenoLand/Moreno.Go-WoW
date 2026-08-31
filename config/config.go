@@ -12,14 +12,15 @@ import (
 )
 
 type Options struct {
-	AuthAddress string `json:"auth_address"`
-	Account     string `json:"account"`
-	Locale      string `json:"locale"`
-	Realm       string `json:"realm"`
-	Character   string `json:"character"`
-	DataPath      string `json:"data_path"`
-	InterfacePath string `json:"interface_path"`
-	RememberMe    bool   `json:"remember_me"`
+	AuthAddress    string `json:"auth_address"`
+	Account        string `json:"account"`
+	Locale         string `json:"locale"`
+	Realm          string `json:"realm"`
+	Character      string `json:"character"`
+	DataPath       string `json:"data_path"`
+	InterfacePath  string `json:"interface_path"`
+	BackgroundPath string `json:"background_path"` // Path to a static background image (JPEG/PNG) to use as the login screen scene. Leave empty to use the gradient fallback.
+	RememberMe     bool   `json:"remember_me"`
 }
 
 func Defaults() Options {

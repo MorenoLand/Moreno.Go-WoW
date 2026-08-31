@@ -20,6 +20,7 @@ func main() {
 		filepath.Join(options.InterfacePath, "GlueXML"),
 		filepath.Join(options.InterfacePath, "FrameXML"),
 		filepath.Join(options.InterfacePath, "Interface-tree"),
+		options.BackgroundPath,
 	)
 	if err != nil {
 		panic(err)
