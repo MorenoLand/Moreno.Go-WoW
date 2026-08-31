@@ -846,9 +846,7 @@ func registerGlueAPI(rt *Runtime) {
 		}
 		w := newWidget(kindFromObjectType(frameType), name)
 		w.parent = parent
-		if parent != nil {
-			parent.children = append(parent.children, w)
-		}
+		addWidgetChild(parent, w)
 		if template != "" && rt.instantiateTemplate != nil {
 			rt.instantiateTemplate(w, template)
 		}

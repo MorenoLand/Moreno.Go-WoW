@@ -67,6 +67,13 @@ func installTemplateFactory(l *Loader) {
 				w.points = append(w.points, parseAnchors(group, w.parentName())...)
 			case "Backdrop":
 				w.backdrop = parseBackdrop(group)
+			case "HitRectInsets":
+				if inset := group.child("AbsInset"); inset != nil {
+					w.hitInsetL = attrFloat(inset, "left", 0)
+					w.hitInsetR = attrFloat(inset, "right", 0)
+					w.hitInsetT = attrFloat(inset, "top", 0)
+					w.hitInsetB = attrFloat(inset, "bottom", 0)
+				}
 			case "Layers":
 				for _, layerEl := range group.children {
 					for _, region := range layerEl.children {
@@ -563,6 +570,13 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 				w.textInsetR = attrFloat(inset, "right", 0)
 				w.textInsetT = attrFloat(inset, "top", 0)
 				w.textInsetB = attrFloat(inset, "bottom", 0)
+			}
+		case "HitRectInsets":
+			if inset := group.child("AbsInset"); inset != nil {
+				w.hitInsetL = attrFloat(inset, "left", 0)
+				w.hitInsetR = attrFloat(inset, "right", 0)
+				w.hitInsetT = attrFloat(inset, "top", 0)
+				w.hitInsetB = attrFloat(inset, "bottom", 0)
 			}
 		default:
 			// Remaining child elements (insets, scroll children, model

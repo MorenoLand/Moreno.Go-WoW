@@ -33,6 +33,7 @@ type UIEngine struct {
 	statusTTL       float64
 	rememberMe      bool
 	pressed         *widget
+	selecting       *widget
 	hovered         *widget
 	screen          Rect
 	uiScale         float64
@@ -462,6 +463,9 @@ func (eng *UIEngine) prepareText(w *widget, face, faceLg font.Face) {
 	for _, child := range w.children {
 		eng.prepareText(child, face, faceLg)
 	}
+	if w.buttonLabel != nil && w.buttonLabel.textWidth > 0 && w.width < w.buttonLabel.textWidth+50 {
+		w.width = w.buttonLabel.textWidth + 50
+	}
 }
 
 func (eng *UIEngine) layoutRect(w *widget, parent Rect) Rect {
@@ -574,7 +578,9 @@ func (eng *UIEngine) editFace(w *widget) (font.Face, func()) {
 	return face, func() { face.Close() }
 }
 
-func (eng *UIEngine) setEditCursor(w *widget, x float64) {
+func (eng *UIEngine) setEditCursor(w *widget, x float64) { eng.setEditCursorAt(w, x, false) }
+
+func (eng *UIEngine) setEditCursorAt(w *widget, x float64, extend bool) {
 	if w == nil || w.kind != kindEditBox {
 		return
 	}
@@ -596,18 +602,18 @@ func (eng *UIEngine) setEditCursor(w *widget, x float64) {
 	face, release := eng.editFace(w)
 	defer release()
 	if face == nil {
-		moveEditCursor(w, int(math.Round(position/8)), false)
+		moveEditCursor(w, int(math.Round(position/8)), extend)
 		return
 	}
 	for index := 0; index < len(display); index++ {
 		left := float64(font.MeasureString(face, string(display[:index])).Ceil())
 		right := float64(font.MeasureString(face, string(display[:index+1])).Ceil())
 		if position < (left+right)/2 {
-			moveEditCursor(w, index, false)
+			moveEditCursor(w, index, extend)
 			return
 		}
 	}
-	moveEditCursor(w, len(display), false)
+	moveEditCursor(w, len(display), extend)
 }
 
 func (eng *UIEngine) drawEditText(canvas *image.RGBA, face, faceLg font.Face, w *widget, rect Rect, screenHeight float64) {
@@ -751,6 +757,10 @@ func (eng *UIEngine) SetGlueState(state GlueState) {
 }
 
 func (eng *UIEngine) HandleCursor(x, y float64) bool {
+	if eng.selecting != nil {
+		eng.setEditCursorAt(eng.selecting, x, true)
+		return true
+	}
 	if eng.debugPanel.dragging {
 		eng.debugPanel.move(x, y, eng)
 		if eng.hovered != nil {
@@ -798,6 +808,7 @@ func (eng *UIEngine) HandleMouse(x, y float64, button window.MouseButton, down b
 		if target.kind == kindEditBox {
 			eng.Rt.setFocus(target)
 			eng.setEditCursor(target, x)
+			eng.selecting = target
 		} else if target.kind == kindButton || target.kind == kindCheckButton {
 			target.buttonState = "PUSHED"
 		}
@@ -805,6 +816,7 @@ func (eng *UIEngine) HandleMouse(x, y float64, button window.MouseButton, down b
 	}
 	pressed := eng.pressed
 	eng.pressed = nil
+	eng.selecting = nil
 	if pressed == nil {
 		return target != nil
 	}
@@ -1125,7 +1137,8 @@ func (eng *UIEngine) hitTest(x, y float64) *widget {
 				return target
 			}
 		}
-		if point.x < rect.X0 || point.x > rect.X1 || point.y < rect.Y0 || point.y > rect.Y1 {
+		hitRect := Rect{X0: rect.X0 + w.hitInsetL, Y0: rect.Y0 + w.hitInsetB, X1: rect.X1 - w.hitInsetR, Y1: rect.Y1 - w.hitInsetT}
+		if point.x < hitRect.X0 || point.x > hitRect.X1 || point.y < hitRect.Y0 || point.y > hitRect.Y1 {
 			return nil
 		}
 		if w.kind == kindButton || w.kind == kindCheckButton || w.kind == kindEditBox || w.enableMouse {
@@ -1578,11 +1591,11 @@ func drawSubMode(canvas *image.RGBA, img image.Image, r Rect, screenHeight float
 		return
 	}
 	if !additive {
-		xdraw.BiLinear.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
+		xdraw.NearestNeighbor.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
 		return
 	}
 	blend := image.NewRGBA(dst)
-	xdraw.BiLinear.Scale(blend, blend.Bounds(), src, src.Bounds(), xdraw.Src, nil)
+	xdraw.NearestNeighbor.Scale(blend, blend.Bounds(), src, src.Bounds(), xdraw.Src, nil)
 	for y := dst.Min.Y; y < dst.Max.Y; y++ {
 		for x := dst.Min.X; x < dst.Max.X; x++ {
 			sr, sg, sb, sa := blend.At(x, y).RGBA()

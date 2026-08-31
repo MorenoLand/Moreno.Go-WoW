@@ -16,6 +16,7 @@
 - [ ] Resolve race-specific character preview model paths from the live MPQ set; do not assume every race has an `Interface\\Glues\\Models\\UI_<Race>\\UI_<Race>.m2` asset.
 - [ ] Make live MPQ cinematics decode and advance through the video at the authored display position and scale instead of stopping on load or rendering off-center.
 - [ ] Show transient on-screen feedback when Ctrl+M toggles music or Ctrl+S toggles sound effects.
+- [ ] Preserve authored M2 background/foreground layer order and depth state so scene BLP planes do not draw across the wrong layer.
 
 ## Verification
 

@@ -98,6 +98,10 @@ type widget struct {
 	frameStrata     int
 	frameLevel      int
 	layerLevel      int
+	hitInsetL       float64
+	hitInsetR       float64
+	hitInsetT       float64
+	hitInsetB       float64
 	renderRect      Rect
 	hasRenderRect   bool
 	width           float64
