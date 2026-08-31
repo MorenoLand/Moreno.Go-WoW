@@ -254,7 +254,7 @@ func registerGlueAPI(rt *Runtime) {
 		return 0
 	})
 	reg("PlayGlueAmbience", func(L *lua.LState) int {
-		if rt.Host != nil {
+		if rt.Host != nil && L.GetTop() >= 1 && L.Get(1).Type() == lua.LTString {
 			rt.Host.PlayAmbience(L.CheckString(1))
 		}
 		return 0
@@ -484,8 +484,8 @@ func registerGlueAPI(rt *Runtime) {
 		}
 		c := rt.Glue.Characters[idx-1]
 		L.Push(lua.LString(c.Name))
-		L.Push(lua.LString(localizedValue(L, c.Race)))
-		L.Push(lua.LString(localizedValue(L, c.Class)))
+		L.Push(lua.LString(createLocalizedValue(L, c.Race)))
+		L.Push(lua.LString(createLocalizedValue(L, c.Class)))
 		L.Push(lua.LNumber(c.Level))
 		L.Push(lua.LString(c.Zone))
 		L.Push(lua.LNumber(c.Gender))
@@ -587,11 +587,11 @@ func registerGlueAPI(rt *Runtime) {
 		} else {
 			L.Push(lua.LString(addon.Reason))
 		}
-		if addon.Security == "" {
-			L.Push(lua.LNil)
-		} else {
-			L.Push(lua.LString(addon.Security))
+		security := addon.Security
+		if security == "" {
+			security = "INSECURE"
 		}
+		L.Push(lua.LString(security))
 		L.Push(lua.LBool(addon.NewVersion))
 		return 8
 	})
@@ -683,7 +683,14 @@ func registerGlueAPI(rt *Runtime) {
 	})
 	reg("GetCurrentResolution", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
 	reg("GetRefreshRates", func(L *lua.LState) int { L.Push(lua.LNumber(60)); return 1 })
-	reg("GetMultisampleFormats", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
+	reg("GetMultisampleFormats", func(L *lua.LState) int {
+		for _, samples := range []int{1, 2, 4, 8} {
+			L.Push(lua.LNumber(32))
+			L.Push(lua.LNumber(24))
+			L.Push(lua.LNumber(samples))
+		}
+		return 12
+	})
 	reg("GetCurrentMultisampleFormat", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
 	reg("SetMultisampleFormat", func(L *lua.LState) int { return 0 })
 	reg("SetScreenResolution", func(L *lua.LState) int { return 0 })
@@ -741,7 +748,7 @@ func registerGlueAPI(rt *Runtime) {
 			rt.selectedClass = index
 		}
 		class := createClasses[index-1]
-		L.Push(lua.LString(localizedValue(L, class.key)))
+		L.Push(lua.LString(createLocalizedValue(L, class.key)))
 		L.Push(lua.LString(class.file))
 		L.Push(lua.LNumber(index))
 		L.Push(lua.LBool(class.tank))
@@ -760,7 +767,7 @@ func registerGlueAPI(rt *Runtime) {
 	reg("GetNameForRace", func(L *lua.LState) int {
 		index := clampCreateIndex(rt.selectedRace, len(createRaces))
 		race := createRaces[index-1]
-		L.Push(lua.LString(localizedValue(L, race.key)))
+		L.Push(lua.LString(createLocalizedValue(L, race.key)))
 		L.Push(lua.LString(race.file))
 		return 2
 	})
@@ -771,13 +778,13 @@ func registerGlueAPI(rt *Runtime) {
 		}
 		index = clampCreateIndex(index, len(createRaces))
 		race := createRaces[index-1]
-		L.Push(lua.LString(localizedValue(L, race.key)))
+		L.Push(lua.LString(createLocalizedValue(L, race.key)))
 		L.Push(lua.LString(race.faction))
 		return 2
 	})
 	reg("GetAvailableRaces", func(L *lua.LState) int {
 		for _, race := range createRaces {
-			L.Push(lua.LString(localizedValue(L, race.key)))
+			L.Push(lua.LString(createLocalizedValue(L, race.key)))
 			L.Push(lua.LString(race.file))
 			L.Push(lua.LNumber(1))
 		}
@@ -785,7 +792,7 @@ func registerGlueAPI(rt *Runtime) {
 	})
 	reg("GetAvailableClasses", func(L *lua.LState) int {
 		for index, class := range createClasses {
-			L.Push(lua.LString(localizedValue(L, class.key)))
+			L.Push(lua.LString(createLocalizedValue(L, class.key)))
 			L.Push(lua.LString(class.file))
 			if validCreateClass(rt.selectedRace, index+1) {
 				L.Push(lua.LNumber(1))
@@ -797,7 +804,7 @@ func registerGlueAPI(rt *Runtime) {
 	})
 	reg("GetClassesForRace", func(L *lua.LState) int {
 		for index, class := range createClasses {
-			L.Push(lua.LString(localizedValue(L, class.key)))
+			L.Push(lua.LString(createLocalizedValue(L, class.key)))
 			L.Push(lua.LString(class.file))
 			if validCreateClass(L.CheckInt(1), index+1) {
 				L.Push(lua.LNumber(1))
@@ -911,6 +918,56 @@ func localizedValue(L *lua.LState, key string) string {
 		return value.String()
 	}
 	return key
+}
+
+func createLocalizedValue(L *lua.LState, key string) string {
+	if value := localizedValue(L, key); value != key {
+		return value
+	}
+	switch strings.ToUpper(strings.TrimPrefix(key, "CLASS_")) {
+	case "RACE_HUMAN":
+		return "Human"
+	case "RACE_ORC":
+		return "Orc"
+	case "RACE_DWARF":
+		return "Dwarf"
+	case "RACE_NIGHTELF":
+		return "Night Elf"
+	case "RACE_SCOURGE":
+		return "Undead"
+	case "RACE_TAUREN":
+		return "Tauren"
+	case "RACE_GNOME":
+		return "Gnome"
+	case "RACE_TROLL":
+		return "Troll"
+	case "RACE_BLOODELF":
+		return "Blood Elf"
+	case "RACE_DRAENEI":
+		return "Draenei"
+	case "WARRIOR":
+		return "Warrior"
+	case "PALADIN":
+		return "Paladin"
+	case "HUNTER":
+		return "Hunter"
+	case "ROGUE":
+		return "Rogue"
+	case "PRIEST":
+		return "Priest"
+	case "DEATHKNIGHT":
+		return "Death Knight"
+	case "SHAMAN":
+		return "Shaman"
+	case "MAGE":
+		return "Mage"
+	case "WARLOCK":
+		return "Warlock"
+	case "DRUID":
+		return "Druid"
+	default:
+		return key
+	}
 }
 
 func clampCreateIndex(index, max int) int {

@@ -168,6 +168,9 @@ func (rt *Runtime) setText(w *widget, text string) {
 		return
 	}
 	w.text = text
+	if w.buttonLabel != nil {
+		w.buttonLabel.text = text
+	}
 	w.cursor = len([]rune(text))
 	w.selectionStart = w.cursor
 	w.selectionEnd = w.cursor

@@ -359,10 +359,18 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		},
 		"SetWidth": func(L *lua.LState, w *widget) int {
 			w.width = float64(L.CheckNumber(2))
+			if w.kind == kindFontString {
+				w.explicitWidth = true
+				w.autoTextWidth = false
+			}
 			return 0
 		},
 		"SetHeight": func(L *lua.LState, w *widget) int {
 			w.height = float64(L.CheckNumber(2))
+			if w.kind == kindFontString {
+				w.explicitHeight = true
+				w.autoTextHeight = false
+			}
 			return 0
 		},
 		"GetWidth": func(L *lua.LState, w *widget) int {

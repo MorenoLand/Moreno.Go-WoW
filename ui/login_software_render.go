@@ -300,8 +300,28 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 
 	screen := eng.screen
 
-	var paint func(w *widget, parent Rect)
-	paint = func(w *widget, parent Rect) {
+	var paint func(*image.RGBA, *widget, Rect)
+	paintChildren := func(target *image.RGBA, w *widget, rect Rect) {
+		if w.kind == kindScrollFrame {
+			children := image.NewRGBA(target.Bounds())
+			for _, child := range orderedChildren(w.children) {
+				if child.shown {
+					paint(children, child, rect)
+				}
+			}
+			clip := ScreenRect(rect, float64(target.Bounds().Dy())).Intersect(target.Bounds())
+			if !clip.Empty() {
+				draw.Draw(target, clip, children, clip.Min, draw.Over)
+			}
+			return
+		}
+		for _, child := range orderedChildren(w.children) {
+			if child.shown && !(w.kind == kindEditBox && w.text != "" && child.kind == kindFontString && strings.HasSuffix(strings.ToLower(child.name), "fill")) {
+				paint(target, child, rect)
+			}
+		}
+	}
+	paint = func(target *image.RGBA, w *widget, parent Rect) {
 		rect := eng.layoutRect(w, parent)
 
 		scaledRect := Rect{
@@ -320,7 +340,7 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 				copy.edgeFile = `Interface\Common\Common-Input-Border`
 				backdrop = &copy
 			}
-			eng.drawBackdrop(canvas, backdrop, scaledRect)
+			eng.drawBackdrop(target, backdrop, scaledRect)
 		}
 
 		switch w.kind {
@@ -332,10 +352,10 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 					if tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0 {
 						tc = [4]float64{0, 1, 0, 1}
 					}
-					drawSubModeFilter(canvas, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.alphaMode, "ADD"))
+					drawSubModeFilter(target, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.alphaMode, "ADD"))
 				}
 			} else if !w.vertexColor.isZero() {
-				eng.drawTextureColor(canvas, scaledRect, w.vertexColor)
+				eng.drawTextureColor(target, scaledRect, w.vertexColor)
 			}
 
 		case kindFontString:
@@ -355,16 +375,16 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 						text = strings.Join(lines[:w.maxLines], "\n")
 					}
 				}
-				eng.drawTextAlignedWidget(canvas, f, text, scaledRect, float64(screenHeight), c, w)
+				eng.drawTextAlignedWidget(target, f, text, scaledRect, float64(screenHeight), c, w)
 			}
 
 		case kindMovieFrame:
 			if w.movieActive {
 				eng.ensureMovie(w.movieFile, float64(w.movieVolume)/255)
-				dst := ScreenRect(rect, float64(canvas.Bounds().Dy()))
-				draw.Draw(canvas, dst, &image.Uniform{C: color.Black}, image.Point{}, draw.Src)
+				dst := ScreenRect(rect, float64(target.Bounds().Dy()))
+				draw.Draw(target, dst, &image.Uniform{C: color.Black}, image.Point{}, draw.Src)
 				if eng.movieImage != nil {
-					eng.drawMovieFrame(canvas, dst, eng.movieImage)
+					eng.drawMovieFrame(target, dst, eng.movieImage)
 				}
 			}
 		}
@@ -373,33 +393,29 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 			children := orderedChildren(w.children)
 			for _, child := range children {
 				if child.shown && child.layerLevel < layerArtwork {
-					paint(child, rect)
+					paint(target, child, rect)
 				}
 			}
-			eng.paintButtonState(w, rect, paint)
+			eng.paintButtonState(w, rect, func(child *widget, childRect Rect) { paint(target, child, childRect) })
 			for _, child := range children {
 				if child.shown && child.layerLevel >= layerArtwork {
-					paint(child, rect)
+					paint(target, child, rect)
 				}
 			}
 		} else {
-			for _, child := range orderedChildren(w.children) {
-				if child.shown && !(w.kind == kindEditBox && w.text != "" && child.kind == kindFontString && strings.HasSuffix(strings.ToLower(child.name), "fill")) {
-					paint(child, rect)
-				}
-			}
+			paintChildren(target, w, rect)
 		}
 
 		if w.kind == kindButton || w.kind == kindCheckButton {
 			if w.buttonLabel == nil {
 				text := eng.resolveText(w.text)
 				if text != "" {
-					eng.drawTextAlignedWidget(canvas, face, text, scaledRect, float64(screenHeight), eng.fontColor(w), w)
+					eng.drawTextAlignedWidget(target, face, text, scaledRect, float64(screenHeight), eng.fontColor(w), w)
 				}
 			}
 		}
 		if w.kind == kindEditBox {
-			eng.drawEditText(canvas, face, faceLg, w, rect, float64(screenHeight))
+			eng.drawEditText(target, face, faceLg, w, rect, float64(screenHeight))
 		}
 	}
 
@@ -407,7 +423,7 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 	if glueParent != nil {
 		for _, child := range orderedChildren(glueParent.children) {
 			if child.shown {
-				paint(child, screen)
+				paint(canvas, child, screen)
 			}
 		}
 	}
@@ -484,6 +500,14 @@ func (eng *UIEngine) layoutRect(w *widget, parent Rect) Rect {
 	parentRect := parent
 	if w.parent != nil {
 		parentRect = eng.layoutRect(w.parent, parent)
+	}
+	if w.parent != nil && w.parent.kind == kindScrollFrame && len(w.points) == 0 {
+		shift := w.parent.verticalScroll
+		rect := Rect{X0: parentRect.X0, Y0: parentRect.Y1 - shift - w.height, X1: parentRect.X0 + w.width, Y1: parentRect.Y1 - shift}
+		eng.rects[w] = rect
+		w.renderRect = rect
+		w.hasRenderRect = true
+		return rect
 	}
 	rect := resolveRect(w, parentRect, func(name string) (Rect, bool) {
 		target := eng.Rt.widgets[name]
@@ -1728,6 +1752,11 @@ func drawTextAlignedVStyle(canvas *image.RGBA, face font.Face, text string, r Re
 	if dst.Dx() <= 0 || dst.Dy() <= 0 {
 		return
 	}
+	clip := dst.Intersect(canvas.Bounds())
+	if clip.Empty() {
+		return
+	}
+	destination := canvas.SubImage(clip).(*image.RGBA)
 
 	if justify == "" {
 		justify = "CENTER"
@@ -1756,10 +1785,10 @@ func drawTextAlignedVStyle(canvas *image.RGBA, face font.Face, text string, r Re
 			shadowColor := color.RGBA{R: uint8(shadow.ShadowColor.r * 255), G: uint8(shadow.ShadowColor.g * 255), B: uint8(shadow.ShadowColor.b * 255), A: uint8(shadow.ShadowColor.a * 255)}
 			shadowX := int(math.Round(shadow.ShadowOffsetX * shadowScale))
 			shadowY := int(math.Round(-shadow.ShadowOffsetY * shadowScale))
-			d := &font.Drawer{Dst: canvas, Src: image.NewUniform(shadowColor), Face: face, Dot: fixed.P(dotX+shadowX, startY+index*height+shadowY)}
+			d := &font.Drawer{Dst: destination, Src: image.NewUniform(shadowColor), Face: face, Dot: fixed.P(dotX+shadowX, startY+index*height+shadowY)}
 			d.DrawString(line)
 		}
-		d := &font.Drawer{Dst: canvas, Src: image.NewUniform(c), Face: face, Dot: fixed.P(dotX, startY+index*height)}
+		d := &font.Drawer{Dst: destination, Src: image.NewUniform(c), Face: face, Dot: fixed.P(dotX, startY+index*height)}
 		d.DrawString(line)
 	}
 }
