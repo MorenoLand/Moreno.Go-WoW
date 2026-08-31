@@ -1,6 +1,7 @@
 package render
 
 import (
+	"encoding/binary"
 	"math"
 	"testing"
 )
@@ -14,6 +15,19 @@ func TestDecodeM2QuaternionIdentity(t *testing.T) {
 	}
 	if value := decodeM2Quaternion(0xffff); math.Abs(float64(value-1)) > 0.00001 {
 		t.Fatalf("unit quaternion component=%f", value)
+	}
+}
+
+func TestReadM2TrackKeyUsesFirstSequenceValueArray(t *testing.T) {
+	data := make([]byte, 64)
+	binary.LittleEndian.PutUint32(data[12:16], 1)
+	binary.LittleEndian.PutUint32(data[16:20], 20)
+	binary.LittleEndian.PutUint32(data[20:24], 1)
+	binary.LittleEndian.PutUint32(data[24:28], 28)
+	binary.LittleEndian.PutUint32(data[28:32], 0x12345678)
+	key, ok := readM2TrackKey(data, 0, 4)
+	if !ok || key != 28 {
+		t.Fatalf("track key offset=%d ok=%v", key, ok)
 	}
 }
 

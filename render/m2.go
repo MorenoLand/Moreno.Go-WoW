@@ -573,13 +573,13 @@ func readM2TrackKey(data []byte, offset, valueSize int) (int, bool) {
 	if offset < 0 || offset+20 > len(data) {
 		return 0, false
 	}
-	keyCount := int(binary.LittleEndian.Uint32(data[offset+12 : offset+16]))
-	keyHeaders := int(binary.LittleEndian.Uint32(data[offset+16 : offset+20]))
-	if keyCount <= 0 || keyHeaders < 0 || keyHeaders+8 > len(data) {
+	valueCount := int(binary.LittleEndian.Uint32(data[offset+12 : offset+16]))
+	valueHeaders := int(binary.LittleEndian.Uint32(data[offset+16 : offset+20]))
+	if valueCount <= 0 || valueHeaders < 0 || valueHeaders+8 > len(data) {
 		return 0, false
 	}
-	count := int(binary.LittleEndian.Uint32(data[keyHeaders : keyHeaders+4]))
-	keyOffset := int(binary.LittleEndian.Uint32(data[keyHeaders+4 : keyHeaders+8]))
+	count := int(binary.LittleEndian.Uint32(data[valueHeaders : valueHeaders+4]))
+	keyOffset := int(binary.LittleEndian.Uint32(data[valueHeaders+4 : valueHeaders+8]))
 	if count <= 0 || keyOffset < 0 || valueSize < 0 || keyOffset+valueSize > len(data) {
 		return 0, false
 	}
