@@ -70,7 +70,7 @@ func decodeBLPPalette(mip []byte, width, height int, alphaDepth uint32, palette 
 	if len(pixels) < width*height {
 		return nil, fmt.Errorf("blp: palette pixel data short (%d < %d)", len(pixels), width*height)
 	}
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
 	if alphaDepth == 8 {
 		alpha := pixels[width*height:]
 		if len(alpha) < width*height {
@@ -111,7 +111,7 @@ func decodeBLPPalette(mip []byte, width, height int, alphaDepth uint32, palette 
 }
 
 func decodeBLPDXT(mip []byte, width, height int, alphaDepth uint32) (image.Image, error) {
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
 	switch alphaDepth {
 	case 0: // DXT1
 		need := ((width + 3) / 4) * ((height + 3) / 4) * 8
@@ -163,7 +163,7 @@ func decodeBLPDXT(mip []byte, width, height int, alphaDepth uint32) (image.Image
 	return img, nil
 }
 
-func decodeDXT1Block(block []byte, img *image.RGBA, bx, by int) {
+func decodeDXT1Block(block []byte, img *image.NRGBA, bx, by int) {
 	c0 := binary.LittleEndian.Uint16(block[0:2])
 	c1 := binary.LittleEndian.Uint16(block[2:4])
 	r0, g0, b0 := rgb565(c0)
@@ -195,7 +195,7 @@ func decodeDXT1Block(block []byte, img *image.RGBA, bx, by int) {
 	}
 }
 
-func decodeDXT3Block(block []byte, img *image.RGBA, bx, by int) {
+func decodeDXT3Block(block []byte, img *image.NRGBA, bx, by int) {
 	c0 := binary.LittleEndian.Uint16(block[8:10])
 	c1 := binary.LittleEndian.Uint16(block[10:12])
 	r0, g0, b0 := rgb565(c0)
@@ -226,7 +226,7 @@ func decodeDXT3Block(block []byte, img *image.RGBA, bx, by int) {
 	}
 }
 
-func decodeDXT5Block(block []byte, img *image.RGBA, bx, by int) {
+func decodeDXT5Block(block []byte, img *image.NRGBA, bx, by int) {
 	a0, a1 := block[0], block[1]
 	var alpha [8]uint8
 	alpha[0], alpha[1] = a0, a1

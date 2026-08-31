@@ -211,10 +211,7 @@ func registerGlueAPI(rt *Runtime) {
 		default:
 			value = L.Get(2).String()
 		}
-		rt.SetCVar(name, value)
-		if host, ok := rt.Host.(AudioHost); ok {
-			host.SetAudioCVar(name, value)
-		}
+		setCVarValue(rt, name, value)
 		return 0
 	})
 	reg("GetCVarDefault", func(L *lua.LState) int {
@@ -281,28 +278,26 @@ func registerGlueAPI(rt *Runtime) {
 	})
 	reg("ActionStatus_DisplayMessage", func(L *lua.LState) int { return 0 })
 	reg("Sound_ToggleMusic", func(L *lua.LState) int {
-		value, ok := rt.GetCVar("Sound_EnableMusic")
-		if !ok {
-			value, _ = defaultCVarValue("Sound_EnableMusic")
+		if cvarValue(rt, "Sound_EnableAllSound") == "0" {
+			return 0
 		}
-		if value == "0" {
-			rt.SetCVar("Sound_EnableMusic", "1")
+		if cvarValue(rt, "Sound_EnableMusic") == "0" {
+			setCVarValue(rt, "Sound_EnableMusic", "1")
 		} else {
-			rt.SetCVar("Sound_EnableMusic", "0")
+			setCVarValue(rt, "Sound_EnableMusic", "0")
 		}
 		return 0
 	})
 	reg("Sound_ToggleSound", func(L *lua.LState) int {
-		value, ok := rt.GetCVar("Sound_EnableSFX")
-		if !ok {
-			value, _ = defaultCVarValue("Sound_EnableSFX")
+		if cvarValue(rt, "Sound_EnableAllSound") == "0" {
+			return 0
 		}
-		if value == "0" {
-			rt.SetCVar("Sound_EnableSFX", "1")
-			rt.SetCVar("Sound_EnableAmbience", "1")
+		if cvarValue(rt, "Sound_EnableSFX") == "0" {
+			setCVarValue(rt, "Sound_EnableSFX", "1")
+			setCVarValue(rt, "Sound_EnableAmbience", "1")
 		} else {
-			rt.SetCVar("Sound_EnableSFX", "0")
-			rt.SetCVar("Sound_EnableAmbience", "0")
+			setCVarValue(rt, "Sound_EnableSFX", "0")
+			setCVarValue(rt, "Sound_EnableAmbience", "0")
 		}
 		return 0
 	})
@@ -885,6 +880,21 @@ func kindFromObjectType(objectType string) widgetKind {
 		return kindMovieFrame
 	default:
 		return kindFrame
+	}
+}
+
+func cvarValue(rt *Runtime, name string) string {
+	if value, ok := rt.GetCVar(name); ok {
+		return value
+	}
+	value, _ := defaultCVarValue(name)
+	return value
+}
+
+func setCVarValue(rt *Runtime, name, value string) {
+	rt.SetCVar(name, value)
+	if host, ok := rt.Host.(AudioHost); ok {
+		host.SetAudioCVar(name, value)
 	}
 }
 

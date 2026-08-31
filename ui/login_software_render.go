@@ -368,12 +368,22 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 		}
 
 		if w.kind == kindButton || w.kind == kindCheckButton {
+			for _, child := range w.children {
+				if child.shown && child.layerLevel < layerArtwork {
+					paint(child, rect)
+				}
+			}
 			eng.paintButtonState(w, rect, paint)
-		}
-
-		for _, child := range w.children {
-			if child.shown && !(w.kind == kindEditBox && w.text != "" && child.kind == kindFontString && strings.HasSuffix(strings.ToLower(child.name), "fill")) {
-				paint(child, rect)
+			for _, child := range w.children {
+				if child.shown && child.layerLevel >= layerArtwork {
+					paint(child, rect)
+				}
+			}
+		} else {
+			for _, child := range w.children {
+				if child.shown && !(w.kind == kindEditBox && w.text != "" && child.kind == kindFontString && strings.HasSuffix(strings.ToLower(child.name), "fill")) {
+					paint(child, rect)
+				}
 			}
 		}
 
@@ -450,6 +460,8 @@ func (eng *UIEngine) prepareText(w *widget, face, faceLg font.Face) {
 
 func (eng *UIEngine) layoutRect(w *widget, parent Rect) Rect {
 	if rect, ok := eng.rects[w]; ok {
+		w.renderRect = rect
+		w.hasRenderRect = true
 		return rect
 	}
 	if eng.layoutActive[w] {
@@ -473,6 +485,8 @@ func (eng *UIEngine) layoutRect(w *widget, parent Rect) Rect {
 		return eng.layoutRect(target, targetParent), true
 	})
 	eng.rects[w] = rect
+	w.renderRect = rect
+	w.hasRenderRect = true
 	return rect
 }
 

@@ -71,7 +71,9 @@ func installTemplateFactory(l *Loader) {
 				for _, layerEl := range group.children {
 					for _, region := range layerEl.children {
 						if region.name == "Texture" || region.name == "FontString" {
-							l.buildRegion(region, w, "CreateFrame:"+template)
+							if child, err := l.buildRegion(region, w, "CreateFrame:"+template); err == nil {
+								child.layerLevel = layerOrder(layerEl.attrDefault("level", "ARTWORK"))
+							}
 						}
 					}
 				}
@@ -461,9 +463,11 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 			for _, layerEl := range group.children {
 				for _, region := range layerEl.children {
 					if region.name == "Texture" || region.name == "FontString" {
-						if _, err := l.buildRegion(region, w, interfacePath); err != nil {
+						child, err := l.buildRegion(region, w, interfacePath)
+						if err != nil {
 							return nil, err
 						}
+						child.layerLevel = layerOrder(layerEl.attrDefault("level", "ARTWORK"))
 					}
 				}
 			}
@@ -692,6 +696,21 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 	parent.children = append(parent.children, w)
 	l.rt.register(w)
 	return w, nil
+}
+
+func layerOrder(level string) int {
+	switch strings.ToUpper(level) {
+	case "BACKGROUND":
+		return layerBackground
+	case "BORDER":
+		return layerBorder
+	case "OVERLAY":
+		return layerOverlay
+	case "HIGHLIGHT":
+		return layerHighlight
+	default:
+		return layerArtwork
+	}
 }
 
 func buttonTextNode(group *xmlNode, parent *widget, button *xmlNode) *xmlNode {

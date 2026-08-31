@@ -11,7 +11,7 @@ func TestDXT5ColorInterpolationDoesNotOverflow(t *testing.T) {
 	if got := binary.LittleEndian.Uint16(block[8:10]); got != 0x4370 {
 		t.Fatal(got)
 	}
-	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	img := image.NewNRGBA(image.Rect(0, 0, 4, 4))
 	decodeDXT5Block(block, img, 0, 0)
 	r, g, b, a := img.At(0, 0).RGBA()
 	if r>>8 < 50 || g>>8 < 90 || b>>8 < 110 || a>>8 != 255 {

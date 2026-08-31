@@ -25,6 +25,14 @@ const (
 	kindFontString
 )
 
+const (
+	layerBackground = iota
+	layerBorder
+	layerArtwork
+	layerOverlay
+	layerHighlight
+)
+
 func (k widgetKind) objectType() string {
 	switch k {
 	case kindFrame:
@@ -88,6 +96,9 @@ type widget struct {
 	enableKeyboard  bool
 	clampedToScreen bool
 	frameLevel      int
+	layerLevel      int
+	renderRect      Rect
+	hasRenderRect   bool
 	width           float64
 	height          float64
 	explicitWidth   bool
@@ -195,6 +206,7 @@ func newWidget(kind widgetKind, name string) *widget {
 		alpha:       1,
 		buttonState: "NORMAL",
 		enabled:     true,
+		layerLevel:  layerArtwork,
 		orientation: "VERTICAL",
 		scripts:     make(map[string]*lua.LFunction),
 		events:      make(map[string]bool),
@@ -322,6 +334,38 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		},
 		"GetHeight": func(L *lua.LState, w *widget) int {
 			L.Push(lua.LNumber(w.height))
+			return 1
+		},
+		"GetTop": func(L *lua.LState, w *widget) int {
+			if w.hasRenderRect {
+				L.Push(lua.LNumber(w.renderRect.Y1))
+			} else {
+				L.Push(lua.LNumber(w.height))
+			}
+			return 1
+		},
+		"GetBottom": func(L *lua.LState, w *widget) int {
+			if w.hasRenderRect {
+				L.Push(lua.LNumber(w.renderRect.Y0))
+			} else {
+				L.Push(lua.LNumber(0))
+			}
+			return 1
+		},
+		"GetLeft": func(L *lua.LState, w *widget) int {
+			if w.hasRenderRect {
+				L.Push(lua.LNumber(w.renderRect.X0))
+			} else {
+				L.Push(lua.LNumber(0))
+			}
+			return 1
+		},
+		"GetRight": func(L *lua.LState, w *widget) int {
+			if w.hasRenderRect {
+				L.Push(lua.LNumber(w.renderRect.X1))
+			} else {
+				L.Push(lua.LNumber(w.width))
+			}
 			return 1
 		},
 		"GetAlpha": func(L *lua.LState, w *widget) int {
@@ -767,13 +811,20 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"SetTexCoord": func(L *lua.LState, w *widget) int {
-			if L.GetTop() >= 8 {
+			if L.GetTop() >= 5 {
 				w.texCoordL = float64(L.CheckNumber(2))
 				w.texCoordR = float64(L.CheckNumber(3))
 				w.texCoordT = float64(L.CheckNumber(4))
 				w.texCoordB = float64(L.CheckNumber(5))
 			}
 			return 0
+		},
+		"GetTexCoord": func(L *lua.LState, w *widget) int {
+			L.Push(lua.LNumber(w.texCoordL))
+			L.Push(lua.LNumber(w.texCoordR))
+			L.Push(lua.LNumber(w.texCoordT))
+			L.Push(lua.LNumber(w.texCoordB))
+			return 4
 		},
 		"SetFontObject": func(L *lua.LState, w *widget) int {
 			w.fontObject = fontObjectName(L, 2)
