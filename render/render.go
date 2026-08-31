@@ -157,6 +157,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var uiImage *gui.Image
 	var eng *ui.UIEngine
 	var err error
+	lastUIRefresh := time.Time{}
 	var sceneModel *core.Node
 	sceneModelPath := ""
 	sceneCameraDiagonalFOV := float32(0)
@@ -298,6 +299,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		uiImage.SetTexture(texture.NewTexture2DFromRGBA(uiEngine.Render(width, height)))
 		debugUIRenderMS = time.Since(uiStarted).Seconds() * 1000
 		uiImage.SetSize(float32(width), float32(height))
+		lastUIRefresh = time.Now()
 	}
 
 	onResize := func(string, interface{}) {
@@ -314,7 +316,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		win.Subscribe(window.OnCursor, func(_ string, event interface{}) {
 			cursor := event.(*window.CursorEvent)
 			if uiEngine.HandleCursor(float64(cursor.Xpos), float64(cursor.Ypos)) {
-				refresh()
+				if !uiEngine.DebugPanelDragging() {
+					refresh()
+				}
 			}
 		})
 		win.Subscribe(window.OnMouseDown, func(_ string, event interface{}) {
@@ -386,8 +390,14 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					info.particles.Update(elapsed)
 				}
 			}
-			uiEngine.Update(elapsed)
+			movieChanged := uiEngine.Update(elapsed)
 			lastUpdate = now
+			if movieChanged {
+				refresh()
+			}
+			if uiEngine.DebugPanelDragging() && (lastUIRefresh.IsZero() || frameAt.Sub(lastUIRefresh) >= time.Second/60) {
+				refresh()
+			}
 			select {
 			case result := <-results:
 				host.loginRunning = false

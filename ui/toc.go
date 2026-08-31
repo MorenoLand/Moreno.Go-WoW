@@ -361,6 +361,19 @@ func (l *Loader) loadUiChildren(ui *xmlNode, interfacePath string) error {
 			if v, ok := child.attr("outline"); ok {
 				font.Outline = v
 			}
+			if shadow := child.child("Shadow"); shadow != nil {
+				font.Shadow = true
+				if offset := shadow.child("Offset"); offset != nil {
+					dimension := offset.child("AbsDimension")
+					if dimension != nil {
+						font.ShadowOffsetX = attrFloat(dimension, "x", font.ShadowOffsetX)
+						font.ShadowOffsetY = attrFloat(dimension, "y", font.ShadowOffsetY)
+					}
+				}
+				if shadowColor := shadow.child("Color"); shadowColor != nil {
+					font.ShadowColor = rgba{attrFloat(shadowColor, "r", 0), attrFloat(shadowColor, "g", 0), attrFloat(shadowColor, "b", 0), attrFloat(shadowColor, "a", 1)}
+				}
+			}
 			if h := child.child("FontHeight"); h != nil {
 				font.Height = attrFloat(h.child("AbsValue"), "val", font.Height)
 			}

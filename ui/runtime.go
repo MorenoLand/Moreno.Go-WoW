@@ -91,14 +91,17 @@ type AudioHost interface {
 
 // Font is a named font object created from a <Font> element.
 type Font struct {
-	Name     string
-	FontFile string
-	Height   float64
-	Color    rgba
-	Outline  string
-	Shadow   bool
-	JustifyH string
-	JustifyV string
+	Name          string
+	FontFile      string
+	Height        float64
+	Color         rgba
+	Outline       string
+	Shadow        bool
+	ShadowColor   rgba
+	ShadowOffsetX float64
+	ShadowOffsetY float64
+	JustifyH      string
+	JustifyV      string
 }
 
 // NewRuntime creates the Lua state and registers the glue API and widget

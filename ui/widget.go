@@ -166,19 +166,24 @@ type widget struct {
 	alphaMode                                  string
 
 	// FontString state.
-	fontObject     string
-	justifyH       string
-	justifyV       string
-	textColor      rgba
-	textWidth      float64
-	autoTextWidth  bool
-	autoTextHeight bool
-	nonSpaceWrap   bool
-	maxLines       int
-	textInsetL     float64
-	textInsetR     float64
-	textInsetT     float64
-	textInsetB     float64
+	fontObject      string
+	justifyH        string
+	justifyV        string
+	textColor       rgba
+	textWidth       float64
+	autoTextWidth   bool
+	autoTextHeight  bool
+	nonSpaceWrap    bool
+	maxLines        int
+	textInsetL      float64
+	textInsetR      float64
+	textInsetT      float64
+	textInsetB      float64
+	shadowColor     rgba
+	shadowColorSet  bool
+	shadowOffsetX   float64
+	shadowOffsetY   float64
+	shadowOffsetSet bool
 
 	// Tooltip/HTML text lines.
 	lines []string
@@ -839,10 +844,22 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.justifyV = L.CheckString(2)
 			return 0
 		},
-		"SetShadowColor":  func(L *lua.LState, w *widget) int { return 0 },
-		"SetShadowOffset": func(L *lua.LState, w *widget) int { return 0 },
-		"SetSpacing":      func(L *lua.LState, w *widget) int { return 0 },
-		"SetWordWrap":     func(L *lua.LState, w *widget) int { return 0 },
+		"SetShadowColor": func(L *lua.LState, w *widget) int {
+			w.shadowColor = rgba{float64(L.CheckNumber(2)), float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), 1}
+			if L.GetTop() >= 5 {
+				w.shadowColor.a = float64(L.CheckNumber(5))
+			}
+			w.shadowColorSet = true
+			return 0
+		},
+		"SetShadowOffset": func(L *lua.LState, w *widget) int {
+			w.shadowOffsetX = float64(L.CheckNumber(2))
+			w.shadowOffsetY = float64(L.CheckNumber(3))
+			w.shadowOffsetSet = true
+			return 0
+		},
+		"SetSpacing":  func(L *lua.LState, w *widget) int { return 0 },
+		"SetWordWrap": func(L *lua.LState, w *widget) int { return 0 },
 		"GetStringWidth": func(L *lua.LState, w *widget) int {
 			L.Push(lua.LNumber(w.textWidth))
 			return 1
@@ -874,6 +891,9 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 				w.backdrop = &backdrop{}
 			}
 			w.backdrop.bgColor = rgba{float64(L.CheckNumber(2)), float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), 1}
+			if L.GetTop() >= 5 {
+				w.backdrop.bgColor.a = float64(L.CheckNumber(5))
+			}
 			return 0
 		},
 		"SetBackdropBorderColor": func(L *lua.LState, w *widget) int {
@@ -881,6 +901,9 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 				w.backdrop = &backdrop{}
 			}
 			w.backdrop.edgeColor = rgba{float64(L.CheckNumber(2)), float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), 1}
+			if L.GetTop() >= 5 {
+				w.backdrop.edgeColor.a = float64(L.CheckNumber(5))
+			}
 			return 0
 		},
 		"SetSequence": func(L *lua.LState, w *widget) int {

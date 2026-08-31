@@ -30,6 +30,8 @@ func (eng *UIEngine) ToggleDebugPanel() bool {
 
 func (eng *UIEngine) DebugPanelVisible() bool { return eng.debugPanel.visible }
 
+func (eng *UIEngine) DebugPanelDragging() bool { return eng.debugPanel.dragging }
+
 func (eng *UIEngine) SetDebugPanelLines(lines []string) {
 	eng.debugPanel.lines = append(eng.debugPanel.lines[:0], lines...)
 }

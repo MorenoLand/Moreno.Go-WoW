@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"bytes"
 	"fmt"
 	"image"
 	"image/color"
@@ -14,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/g3n/engine/window"
-	mpeg4 "github.com/mgvs/go-mpeg4"
 	lua "github.com/yuin/gopher-lua"
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
@@ -42,6 +40,7 @@ type UIEngine struct {
 	textFaces       map[string]font.Face
 	movieFile       string
 	movieImage      image.Image
+	movie           *moviePlayback
 	sceneBackground bool
 	debugPanel      debugPanelState
 }
@@ -176,9 +175,9 @@ func (eng *UIEngine) Close() {
 	}
 }
 
-func (eng *UIEngine) Update(elapsed float64) {
+func (eng *UIEngine) Update(elapsed float64) bool {
 	if elapsed <= 0 {
-		return
+		return false
 	}
 	var update func(*widget)
 	update = func(w *widget) {
@@ -195,6 +194,7 @@ func (eng *UIEngine) Update(elapsed float64) {
 			update(child)
 		}
 	}
+	return eng.updateMovie(elapsed)
 }
 
 func (eng *UIEngine) drawMovieFrame(canvas *image.RGBA, dst image.Rectangle, frame image.Image) {
@@ -340,24 +340,12 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 						text = strings.Join(lines[:w.maxLines], "\n")
 					}
 				}
-				drawTextAlignedV(canvas, f, text, scaledRect, float64(screenHeight), c, eng.textJustify(w), eng.textVerticalJustify(w))
+				eng.drawTextAlignedWidget(canvas, f, text, scaledRect, float64(screenHeight), c, w)
 			}
 
 		case kindMovieFrame:
 			if w.movieActive {
-				if eng.movieFile != w.movieFile {
-					eng.movieFile = w.movieFile
-					cacheKey := "movie:" + strings.ToLower(w.movieFile)
-					if frame, ok := eng.Cache[cacheKey]; ok {
-						eng.movieImage = frame
-					} else if data, err := eng.AssetLoader.ReadFile(w.movieFile + ".avi"); err == nil {
-						frame, decodeErr := mpeg4.DecodeAVIFirstFrame(bytes.NewReader(data))
-						if decodeErr == nil {
-							eng.movieImage = frame
-						}
-						eng.Cache[cacheKey] = eng.movieImage
-					}
-				}
+				eng.ensureMovie(w.movieFile)
 				dst := ScreenRect(rect, float64(canvas.Bounds().Dy()))
 				draw.Draw(canvas, dst, &image.Uniform{C: color.Black}, image.Point{}, draw.Src)
 				if eng.movieImage != nil {
@@ -390,7 +378,7 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 			if w.buttonLabel == nil {
 				text := eng.resolveText(w.text)
 				if text != "" {
-					drawTextAligned(canvas, face, text, scaledRect, float64(screenHeight), eng.fontColor(w), "CENTER")
+					eng.drawTextAlignedWidget(canvas, face, text, scaledRect, float64(screenHeight), eng.fontColor(w), w)
 				}
 			}
 		}
@@ -550,7 +538,7 @@ func (eng *UIEngine) drawEditText(canvas *image.RGBA, face, faceLg font.Face, w 
 	if !textWidget.textColor.isZero() {
 		textColor = color.RGBA{R: uint8(textWidget.textColor.r * 255), G: uint8(textWidget.textColor.g * 255), B: uint8(textWidget.textColor.b * 255), A: uint8(textWidget.textColor.a * 255)}
 	}
-	drawTextAlignedV(canvas, textFace, text, screenTextRect, screenHeight, textColor, eng.textJustify(textWidget), eng.textVerticalJustify(textWidget))
+	eng.drawTextAlignedWidget(canvas, textFace, text, screenTextRect, screenHeight, textColor, textWidget)
 	if eng.Rt.focused == w {
 		width := font.MeasureString(textFace, text).Ceil()
 		dst := ScreenRect(screenTextRect, screenHeight)
@@ -995,6 +983,9 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 
 	bgImg := eng.loadBLP(bd.bgFile)
 	if bgImg != nil {
+		if !bd.bgColor.isZero() {
+			bgImg = tintImage(bgImg, bd.bgColor)
+		}
 		// Tile the background inside insets
 		inL := int(bd.insetL * eng.uiScale)
 		inR := int(bd.insetR * eng.uiScale)
@@ -1012,7 +1003,7 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 				xdraw.NearestNeighbor.Scale(canvas, inner, bgImg, bgImg.Bounds(), xdraw.Over, nil)
 			}
 		}
-	} else {
+	} else if bd.bgFile != "" {
 		// Fallback: solid very dark box
 		draw.Draw(canvas, dst, &image.Uniform{C: color.RGBA{R: 8, G: 15, B: 25, A: 200}}, image.Point{}, draw.Over)
 	}
@@ -1020,10 +1011,39 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 	// Draw border
 	edgeImg := eng.loadBLP(bd.edgeFile)
 	if edgeImg != nil {
+		if !bd.edgeColor.isZero() {
+			edgeImg = tintImage(edgeImg, bd.edgeColor)
+		}
 		drawBackdropEdge(canvas, dst, edgeImg, bd.edgeSize*eng.uiScale)
 	} else if bd.edgeFile != "" {
 		drawBorder(canvas, dst, color.RGBA{R: 80, G: 120, B: 150, A: 200}, 1)
 	}
+}
+
+func tintImage(source image.Image, tint rgba) image.Image {
+	bounds := source.Bounds()
+	result := image.NewNRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	red := clampImageChannel(tint.r)
+	green := clampImageChannel(tint.g)
+	blue := clampImageChannel(tint.b)
+	alpha := clampImageChannel(tint.a)
+	for y := 0; y < bounds.Dy(); y++ {
+		for x := 0; x < bounds.Dx(); x++ {
+			pixel := color.NRGBAModel.Convert(source.At(bounds.Min.X+x, bounds.Min.Y+y)).(color.NRGBA)
+			result.SetNRGBA(x, y, color.NRGBA{R: uint8(float64(pixel.R) * red), G: uint8(float64(pixel.G) * green), B: uint8(float64(pixel.B) * blue), A: uint8(float64(pixel.A) * alpha)})
+		}
+	}
+	return result
+}
+
+func clampImageChannel(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
 }
 
 func drawBackdropEdge(canvas *image.RGBA, dst image.Rectangle, source image.Image, edgeSize float64) {
@@ -1313,6 +1333,35 @@ func drawTextAligned(canvas *image.RGBA, face font.Face, text string, r Rect, sc
 }
 
 func drawTextAlignedV(canvas *image.RGBA, face font.Face, text string, r Rect, screenHeight float64, c color.Color, justify, vertical string) {
+	drawTextAlignedVStyle(canvas, face, text, r, screenHeight, c, justify, vertical, nil, 1)
+}
+
+func (eng *UIEngine) drawTextAlignedWidget(canvas *image.RGBA, face font.Face, text string, r Rect, screenHeight float64, c color.Color, w *widget) {
+	style := eng.fontStyle(w)
+	if style == nil && !w.shadowColorSet && !w.shadowOffsetSet {
+		drawTextAlignedV(canvas, face, text, r, screenHeight, c, eng.textJustify(w), eng.textVerticalJustify(w))
+		return
+	}
+	shadow := &Font{}
+	if style != nil {
+		*shadow = *style
+	}
+	if w.shadowColorSet {
+		shadow.Shadow = true
+		shadow.ShadowColor = w.shadowColor
+	}
+	if w.shadowOffsetSet {
+		shadow.Shadow = true
+		shadow.ShadowOffsetX = w.shadowOffsetX
+		shadow.ShadowOffsetY = w.shadowOffsetY
+	}
+	if shadow.ShadowColor.isZero() {
+		shadow.ShadowColor = rgba{r: 0, g: 0, b: 0, a: 1}
+	}
+	drawTextAlignedVStyle(canvas, face, text, r, screenHeight, c, eng.textJustify(w), eng.textVerticalJustify(w), shadow, eng.uiScale)
+}
+
+func drawTextAlignedVStyle(canvas *image.RGBA, face font.Face, text string, r Rect, screenHeight float64, c color.Color, justify, vertical string, shadow *Font, shadowScale float64) {
 	text = cleanText(text)
 	dst := ScreenRect(r, screenHeight)
 	if dst.Dx() <= 0 || dst.Dy() <= 0 {
@@ -1341,6 +1390,13 @@ func drawTextAlignedV(canvas *image.RGBA, face font.Face, text string, r Rect, s
 			dotX = dst.Min.X + (dst.Dx()-width)/2
 		case "RIGHT":
 			dotX = dst.Max.X - width - 4
+		}
+		if shadow != nil && shadow.Shadow {
+			shadowColor := color.RGBA{R: uint8(shadow.ShadowColor.r * 255), G: uint8(shadow.ShadowColor.g * 255), B: uint8(shadow.ShadowColor.b * 255), A: uint8(shadow.ShadowColor.a * 255)}
+			shadowX := int(math.Round(shadow.ShadowOffsetX * shadowScale))
+			shadowY := int(math.Round(-shadow.ShadowOffsetY * shadowScale))
+			d := &font.Drawer{Dst: canvas, Src: image.NewUniform(shadowColor), Face: face, Dot: fixed.P(dotX+shadowX, startY+index*height+shadowY)}
+			d.DrawString(line)
 		}
 		d := &font.Drawer{Dst: canvas, Src: image.NewUniform(c), Face: face, Dot: fixed.P(dotX, startY+index*height)}
 		d.DrawString(line)

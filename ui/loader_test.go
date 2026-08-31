@@ -112,6 +112,22 @@ func TestVirtualTemplateAndParentName(t *testing.T) {
 	}
 }
 
+func TestFontShadowLoadsFromXML(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"Interface/GlueXML/Font.xml": `<Ui><Font name="ShadowFont" font="Fonts\ARIALN.TTF" virtual="true"><Shadow><Offset><AbsDimension x="1" y="-1"/></Offset><Color r="0" g="0" b="0"/></Shadow><FontHeight><AbsValue val="16"/></FontHeight></Font></Ui>`,
+	})
+	rt := NewRuntime(nil)
+	defer rt.Close()
+	loader := NewLoader(root, rt)
+	if err := loader.LoadInterfaceFile("Interface\\GlueXML\\Font.xml"); err != nil {
+		t.Fatal(err)
+	}
+	font := rt.fonts["ShadowFont"]
+	if font == nil || !font.Shadow || font.ShadowOffsetX != 1 || font.ShadowOffsetY != -1 {
+		t.Fatalf("font shadow = %#v", font)
+	}
+}
+
 func TestScriptParamsAndEvents(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"Interface/GlueXML/E.xml": `<Ui>
