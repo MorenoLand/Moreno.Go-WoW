@@ -20,6 +20,7 @@ const (
 type createRaceInfo struct {
 	key     string
 	file    string
+	scene   string
 	faction string
 }
 
@@ -29,7 +30,7 @@ type createClassInfo struct {
 	tank, healer, damage bool
 }
 
-var createRaces = []createRaceInfo{{"RACE_HUMAN", "Human", "Alliance"}, {"RACE_DWARF", "Dwarf", "Alliance"}, {"RACE_GNOME", "Gnome", "Alliance"}, {"RACE_NIGHTELF", "NightElf", "Alliance"}, {"RACE_TAUREN", "Tauren", "Horde"}, {"RACE_SCOURGE", "Scourge", "Horde"}, {"RACE_TROLL", "Troll", "Horde"}, {"RACE_ORC", "Orc", "Horde"}, {"RACE_BLOODELF", "BloodElf", "Horde"}, {"RACE_DRAENEI", "Draenei", "Alliance"}}
+var createRaces = []createRaceInfo{{"RACE_HUMAN", "Human", "Human", "Alliance"}, {"RACE_DWARF", "Dwarf", "Dwarf", "Alliance"}, {"RACE_GNOME", "Gnome", "Dwarf", "Alliance"}, {"RACE_NIGHTELF", "NightElf", "NightElf", "Alliance"}, {"RACE_TAUREN", "Tauren", "Tauren", "Horde"}, {"RACE_SCOURGE", "Scourge", "Scourge", "Horde"}, {"RACE_TROLL", "Troll", "Orc", "Horde"}, {"RACE_ORC", "Orc", "Orc", "Horde"}, {"RACE_BLOODELF", "BloodElf", "BloodElf", "Horde"}, {"RACE_DRAENEI", "Draenei", "Draenei", "Alliance"}}
 
 var createClasses = []createClassInfo{{"WARRIOR", "WARRIOR", true, false, true}, {"PALADIN", "PALADIN", true, true, true}, {"HUNTER", "HUNTER", false, false, true}, {"ROGUE", "ROGUE", false, false, true}, {"PRIEST", "PRIEST", false, true, true}, {"DEATHKNIGHT", "DEATHKNIGHT", true, false, true}, {"SHAMAN", "SHAMAN", false, true, true}, {"MAGE", "MAGE", false, false, true}, {"WARLOCK", "WARLOCK", false, false, true}, {"DRUID", "DRUID", true, true, true}}
 
@@ -811,7 +812,7 @@ func registerGlueAPI(rt *Runtime) {
 	reg("GetHairCustomization", func(L *lua.LState) int { L.Push(lua.LString("NORMAL")); L.Push(lua.LString("NORMAL")); return 2 })
 	reg("GetCreateBackgroundModel", func(L *lua.LState) int {
 		index := clampCreateIndex(rt.selectedRace, len(createRaces))
-		L.Push(lua.LString(createRaces[index-1].file))
+		L.Push(lua.LString(createRaces[index-1].scene))
 		return 1
 	})
 	reg("ResetCharCustomize", func(L *lua.LState) int { return 0 })

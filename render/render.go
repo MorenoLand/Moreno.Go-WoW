@@ -515,7 +515,7 @@ func className(id uint8) string {
 }
 
 func raceModelName(id uint8) string {
-	if name, ok := map[uint8]string{1: "Human", 2: "Orc", 3: "Dwarf", 4: "NightElf", 5: "Scourge", 6: "Tauren", 7: "Gnome", 8: "Troll", 10: "BloodElf", 11: "Draenei"}[id]; ok {
+	if name, ok := map[uint8]string{1: "Human", 2: "Orc", 3: "Dwarf", 4: "NightElf", 5: "Scourge", 6: "Tauren", 7: "Dwarf", 8: "Orc", 10: "BloodElf", 11: "Draenei"}[id]; ok {
 		return name
 	}
 	return "CharacterSelect"
