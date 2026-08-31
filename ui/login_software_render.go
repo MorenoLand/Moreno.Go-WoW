@@ -214,12 +214,7 @@ func (eng *UIEngine) drawMovieFrame(canvas *image.RGBA, dst image.Rectangle, fra
 	if dst.Dx() <= 0 || dst.Dy() <= 0 || frame.Bounds().Dx() <= 0 || frame.Bounds().Dy() <= 0 {
 		return
 	}
-	scale := math.Min(float64(dst.Dx())/float64(frame.Bounds().Dx()), float64(dst.Dy())/float64(frame.Bounds().Dy()))
-	width := int(float64(frame.Bounds().Dx()) * scale)
-	height := int(float64(frame.Bounds().Dy()) * scale)
-	left := dst.Min.X + (dst.Dx()-width)/2
-	top := dst.Min.Y + (dst.Dy()-height)/2
-	xdraw.BiLinear.Scale(canvas, image.Rect(left, top, left+width, top+height), frame, frame.Bounds(), xdraw.Src, nil)
+	xdraw.BiLinear.Scale(canvas, dst, frame, frame.Bounds(), xdraw.Src, nil)
 }
 
 // resolveText looks up a string that may be a Lua global (e.g. "ACCOUNT_NAME")
@@ -318,7 +313,14 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 
 		// ─── Backdrop ────────────────────────────────────────────────────
 		if w.backdrop != nil && (w.backdrop.bgFile != "" || w.backdrop.edgeFile != "") {
-			eng.drawBackdrop(canvas, w.backdrop, scaledRect)
+			backdrop := w.backdrop
+			if w.kind == kindEditBox && strings.EqualFold(backdrop.edgeFile, `Interface\Glues\Common\Glue-Tooltip-Border`) {
+				copy := *backdrop
+				copy.bgFile = ""
+				copy.edgeFile = `Interface\Common\Common-Input-Border`
+				backdrop = &copy
+			}
+			eng.drawBackdrop(canvas, backdrop, scaledRect)
 		}
 
 		switch w.kind {
@@ -330,7 +332,7 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 					if tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0 {
 						tc = [4]float64{0, 1, 0, 1}
 					}
-					drawSubModeFilter(canvas, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.alphaMode, "ADD"), strings.Contains(strings.ToLower(w.textureFile), "checkbox"))
+					drawSubModeFilter(canvas, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.alphaMode, "ADD"))
 				}
 			} else if !w.vertexColor.isZero() {
 				eng.drawTextureColor(canvas, scaledRect, w.vertexColor)
@@ -1318,7 +1320,11 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 		if !bd.edgeColor.isZero() {
 			edgeImg = eng.tintBackdropImage(bd.edgeFile, edgeImg, bd.edgeColor)
 		}
-		drawBackdropEdge(canvas, dst, edgeImg, bd.edgeSize*eng.uiScale)
+		if strings.EqualFold(bd.edgeFile, `Interface\Common\Common-Input-Border`) {
+			xdraw.BiLinear.Scale(canvas, dst, edgeImg, edgeImg.Bounds(), draw.Over, nil)
+		} else {
+			drawBackdropEdge(canvas, dst, edgeImg, bd.edgeSize*eng.uiScale)
+		}
 	} else if bd.edgeFile != "" {
 		drawBorder(canvas, dst, color.RGBA{R: 80, G: 120, B: 150, A: 200}, 1)
 	}
@@ -1607,14 +1613,14 @@ func (h hostScreen) ConsoleExec(string)             {}
 func (h hostScreen) Screenshot()                    {}
 
 func drawSub(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64) {
-	drawSubModeFilter(canvas, img, r, screenHeight, tc, false, false)
+	drawSubModeFilter(canvas, img, r, screenHeight, tc, false)
 }
 
 func drawSubMode(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64, additive bool) {
-	drawSubModeFilter(canvas, img, r, screenHeight, tc, additive, false)
+	drawSubModeFilter(canvas, img, r, screenHeight, tc, additive)
 }
 
-func drawSubModeFilter(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64, additive, nearest bool) {
+func drawSubModeFilter(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64, additive bool) {
 	b := img.Bounds()
 	l := b.Min.X + int(float64(b.Dx())*tc[0])
 	rt := b.Min.X + int(float64(b.Dx())*tc[1])
@@ -1641,19 +1647,11 @@ func drawSubModeFilter(canvas *image.RGBA, img image.Image, r Rect, screenHeight
 		return
 	}
 	if !additive {
-		if nearest {
-			xdraw.NearestNeighbor.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
-		} else {
-			xdraw.BiLinear.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
-		}
+		xdraw.BiLinear.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
 		return
 	}
 	blend := image.NewRGBA(dst)
-	if nearest {
-		xdraw.NearestNeighbor.Scale(blend, blend.Bounds(), src, src.Bounds(), xdraw.Src, nil)
-	} else {
-		xdraw.BiLinear.Scale(blend, blend.Bounds(), src, src.Bounds(), xdraw.Src, nil)
-	}
+	xdraw.BiLinear.Scale(blend, blend.Bounds(), src, src.Bounds(), xdraw.Src, nil)
 	for y := dst.Min.Y; y < dst.Max.Y; y++ {
 		for x := dst.Min.X; x < dst.Max.X; x++ {
 			sr, sg, sb, sa := blend.At(x, y).RGBA()

@@ -663,16 +663,18 @@ func transformM2Point(index int, point [3]float32, bones []m2Bone, depth int) [3
 		return point
 	}
 	bone := bones[index]
-	point[0] -= bone.pivot[0]
-	point[1] -= bone.pivot[1]
-	point[2] -= bone.pivot[2]
-	point = rotateM2Vector(bone.rotation, point)
-	point[0] *= bone.scale[0]
-	point[1] *= bone.scale[1]
-	point[2] *= bone.scale[2]
-	point[0] += bone.pivot[0] + bone.translation[0]
-	point[1] += bone.pivot[1] + bone.translation[1]
-	point[2] += bone.pivot[2] + bone.translation[2]
+	if bone.flags&(0x80|0x200) != 0 {
+		point[0] -= bone.pivot[0]
+		point[1] -= bone.pivot[1]
+		point[2] -= bone.pivot[2]
+		point = rotateM2Vector(bone.rotation, point)
+		point[0] *= bone.scale[0]
+		point[1] *= bone.scale[1]
+		point[2] *= bone.scale[2]
+		point[0] += bone.pivot[0] + bone.translation[0]
+		point[1] += bone.pivot[1] + bone.translation[1]
+		point[2] += bone.pivot[2] + bone.translation[2]
+	}
 	if bone.parent >= 0 {
 		return transformM2Point(int(bone.parent), point, bones, depth+1)
 	}
@@ -684,7 +686,9 @@ func transformM2Normal(index int, normal [3]float32, bones []m2Bone, depth int) 
 		return normal
 	}
 	bone := bones[index]
-	normal = rotateM2Vector(bone.rotation, normal)
+	if bone.flags&(0x80|0x200) != 0 {
+		normal = rotateM2Vector(bone.rotation, normal)
+	}
 	if bone.parent >= 0 {
 		return transformM2Normal(int(bone.parent), normal, bones, depth+1)
 	}
