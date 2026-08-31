@@ -11,20 +11,31 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/g3n/engine/window"
 	lua "github.com/yuin/gopher-lua"
+	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
-	xdraw "golang.org/x/image/draw"
 )
 
 type UIEngine struct {
-	Rt          *Runtime
-	FontObj     *opentype.Font
-	FontObjSm   *opentype.Font
-	AssetLoader *Loader
-	Cache       map[string]image.Image
-	BgImagePath string // Path to a static background image (JPEG/PNG)
+	Rt           *Runtime
+	FontObj      *opentype.Font
+	FontObjSm    *opentype.Font
+	AssetLoader  *Loader
+	Cache        map[string]image.Image
+	BgImagePath  string // Path to a static background image (JPEG/PNG)
+	statusKey    string
+	rememberMe   bool
+	pressed      *widget
+	hovered      *widget
+	screen       Rect
+	uiScale      float64
+	screenWidth  int
+	screenHeight int
+	rects        map[*widget]Rect
+	layoutActive map[*widget]bool
 }
 
 func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, error) {
@@ -32,6 +43,7 @@ func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, er
 	if err != nil {
 		return nil, err
 	}
+	defer os.RemoveAll(root)
 
 	stageTree := func(rel, source string) error {
 		dir := filepath.Join(root, filepath.FromSlash(rel))
@@ -64,16 +76,38 @@ func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, er
 		return nil, err
 	}
 
-	rt := NewRuntime(&hostScreen{})
+	rt := NewRuntime(&hostScreen{w: 960, h: 640})
 
-	l := NewLoader(root, rt)
+	l := NewLoaderWithAssets(root, assets, rt)
 	if err := l.LoadTOC("Interface/GlueXML/GlueXML.toc", nil); err != nil {
 		return nil, err
+	}
+	return newUIEngine(rt, l, bgImagePath)
+}
+
+func LoadUIEngineFromMPQ(dataPath, locale, bgImagePath string) (*UIEngine, error) {
+	rt := NewRuntime(&hostScreen{w: 960, h: 640})
+	l, err := NewMPQLoader(dataPath, locale, rt)
+	if err != nil {
+		rt.Close()
+		return nil, err
+	}
+	if err := l.LoadTOC("Interface/GlueXML/GlueXML.toc", nil); err != nil {
+		_ = l.Close()
+		rt.Close()
+		return nil, err
+	}
+	return newUIEngine(rt, l, bgImagePath)
+}
+
+func newUIEngine(rt *Runtime, loader *Loader, bgImagePath string) (*UIEngine, error) {
+	if dialog := rt.widgets["ChangedOptionsDialog"]; dialog != nil {
+		dialog.shown = false
 	}
 
 	rt.Execute("GlueParent_OnEvent('SET_GLUE_SCREEN', 'login')", "@render.lua")
 
-	fontData, err := os.ReadFile(filepath.Join(assets, "Fonts", "FRIZQT__.TTF"))
+	fontData, err := loader.readAsset("Fonts\\FRIZQT__.TTF")
 	if err != nil {
 		return nil, fmt.Errorf("font: %v", err)
 	}
@@ -84,7 +118,7 @@ func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, er
 
 	// Try to load MORPHEUS for title-style text, fall back to FRIZQT
 	var fontObjSm *opentype.Font
-	if morphData, err2 := os.ReadFile(filepath.Join(assets, "Fonts", "MORPHEUS.ttf")); err2 == nil {
+	if morphData, err2 := loader.readAsset("Fonts\\MORPHEUS.ttf"); err2 == nil {
 		if mo, err3 := opentype.Parse(morphData); err3 == nil {
 			fontObjSm = mo
 		}
@@ -93,20 +127,28 @@ func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, er
 		fontObjSm = fontObj
 	}
 
-	assetLoader := NewLoader(assets, rt)
 	cache := map[string]image.Image{}
 
 	return &UIEngine{
 		Rt:          rt,
 		FontObj:     fontObj,
 		FontObjSm:   fontObjSm,
-		AssetLoader: assetLoader,
+		AssetLoader: loader,
 		Cache:       cache,
 		BgImagePath: bgImagePath,
 	}, nil
 }
 
-func (eng *UIEngine) Close() {}
+func (eng *UIEngine) Close() {
+	if eng.Rt != nil {
+		eng.Rt.Close()
+		eng.Rt = nil
+	}
+	if eng.AssetLoader != nil {
+		_ = eng.AssetLoader.Close()
+		eng.AssetLoader = nil
+	}
+}
 
 // resolveText looks up a string that may be a Lua global (e.g. "ACCOUNT_NAME")
 // and returns the localized value, or the original string if not found.
@@ -146,9 +188,21 @@ func (eng *UIEngine) loadBLP(path string) image.Image {
 }
 
 func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
+	if screenWidth < 1 {
+		screenWidth = 1
+	}
+	if screenHeight < 1 {
+		screenHeight = 1
+	}
 	canvas := image.NewRGBA(image.Rect(0, 0, screenWidth, screenHeight))
 
 	uiScale := float64(screenHeight) / 768.0
+	eng.uiScale = uiScale
+	eng.screenWidth = screenWidth
+	eng.screenHeight = screenHeight
+	eng.screen = Rect{X0: 0, Y0: 0, X1: float64(screenWidth) / uiScale, Y1: 768}
+	eng.rects = make(map[*widget]Rect)
+	eng.layoutActive = make(map[*widget]bool)
 
 	face, _ := opentype.NewFace(eng.FontObj, &opentype.FaceOptions{Size: 13 * uiScale, DPI: 96})
 	defer face.Close()
@@ -156,8 +210,8 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 	faceLg, _ := opentype.NewFace(eng.FontObj, &opentype.FaceOptions{Size: 16 * uiScale, DPI: 96})
 	defer faceLg.Close()
 
-	virtualWidth := float64(screenWidth) / uiScale
-	virtualHeight := 768.0
+	virtualWidth := eng.screen.W()
+	virtualHeight := eng.screen.H()
 
 	// Update host screen dimensions dynamically
 	if host, ok := eng.Rt.Host.(*hostScreen); ok {
@@ -168,11 +222,11 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 	// ─── Step 1: Render background from BLP sky textures ───────────────
 	eng.renderBackground(canvas, screenWidth, screenHeight)
 
-	screen := Rect{X0: 0, Y0: 0, X1: virtualWidth, Y1: virtualHeight}
+	screen := eng.screen
 
 	var paint func(w *widget, parent Rect)
 	paint = func(w *widget, parent Rect) {
-		rect := ResolveRect(w, parent)
+		rect := eng.layoutRect(w, parent)
 
 		scaledRect := Rect{
 			X0: rect.X0 * uiScale,
@@ -201,47 +255,42 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 
 		case kindFontString:
 			text := eng.resolveText(w.text)
+			if w.parent != nil && (w.parent.kind == kindButton || w.parent.kind == kindCheckButton) && w.parent.buttonLabel == w && w.parent.text != "" {
+				text = eng.resolveText(w.parent.text)
+			}
 			if text != "" {
 				c := eng.fontColor(w)
 				f := face
 				if w.fontObject != "" && strings.Contains(strings.ToLower(w.fontObject), "large") {
 					f = faceLg
 				}
-				drawText(canvas, f, text, scaledRect, float64(screenHeight), c, false)
+				drawTextAligned(canvas, f, text, scaledRect, float64(screenHeight), c, w.justifyH)
 			}
 
 		case kindEditBox:
-			// EditBox: draw dark fill + border
 			eng.drawEditBoxBg(canvas, scaledRect)
-
-		case kindButton, kindCheckButton:
-			// Draw normal texture first (handled via normalTexture child)
-			// Then draw label text centered
-			text := eng.resolveText(w.text)
-			if text != "" {
-				c := color.RGBA{R: 255, G: 210, B: 0, A: 255} // WoW gold
-				if !w.textColor.isZero() {
-					c = color.RGBA{
-						R: uint8(w.textColor.r * 255),
-						G: uint8(w.textColor.g * 255),
-						B: uint8(w.textColor.b * 255),
-						A: 255,
-					}
-				}
-				drawText(canvas, face, text, scaledRect, float64(screenHeight), c, true)
-			}
 		}
 
-		// Button textures
-		if w.normalTexture != nil && w.normalTexture.shown {
-			paint(w.normalTexture, rect)
+		if w.kind == kindButton || w.kind == kindCheckButton {
+			eng.paintButtonState(w, rect, paint)
 		}
 
-		// Children (layers, frames, etc.)
 		for _, child := range w.children {
-			if child.shown {
+			if child.shown && !(w.kind == kindEditBox && w.text != "" && child.kind == kindFontString && strings.HasSuffix(strings.ToLower(child.name), "fill")) {
 				paint(child, rect)
 			}
+		}
+
+		if w.kind == kindButton || w.kind == kindCheckButton {
+			if w.buttonLabel == nil {
+				text := eng.resolveText(w.text)
+				if text != "" {
+					drawTextAligned(canvas, face, text, scaledRect, float64(screenHeight), eng.fontColor(w), "CENTER")
+				}
+			}
+		}
+		if w.kind == kindEditBox {
+			eng.drawEditText(canvas, face, w, rect, float64(screenHeight))
 		}
 	}
 
@@ -253,8 +302,278 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 			}
 		}
 	}
+	if eng.statusKey != "" {
+		status := eng.resolveText(eng.statusKey)
+		drawTextAligned(canvas, face, status, screenScaledRect(Rect{X0: 80, Y0: 96, X1: virtualWidth - 80, Y1: 128}, uiScale), float64(screenHeight), color.RGBA{R: 255, G: 100, B: 80, A: 255}, "CENTER")
+	}
 
 	return canvas
+}
+
+func (eng *UIEngine) layoutRect(w *widget, parent Rect) Rect {
+	if rect, ok := eng.rects[w]; ok {
+		return rect
+	}
+	if eng.layoutActive[w] {
+		return ResolveRect(w, parent)
+	}
+	eng.layoutActive[w] = true
+	defer delete(eng.layoutActive, w)
+	parentRect := parent
+	if w.parent != nil {
+		parentRect = eng.layoutRect(w.parent, parent)
+	}
+	rect := resolveRect(w, parentRect, func(name string) (Rect, bool) {
+		target := eng.Rt.widgets[name]
+		if target == nil {
+			return Rect{}, false
+		}
+		targetParent := eng.screen
+		if target.parent != nil {
+			targetParent = eng.layoutRect(target.parent, eng.screen)
+		}
+		return eng.layoutRect(target, targetParent), true
+	})
+	eng.rects[w] = rect
+	return rect
+}
+
+func (eng *UIEngine) paintButtonState(w *widget, rect Rect, paint func(*widget, Rect)) {
+	base := w.normalTexture
+	if !w.enabled {
+		if w.checked && w.disabledCheckedTexture != nil {
+			base = w.disabledCheckedTexture
+		} else if w.disabledTexture != nil {
+			base = w.disabledTexture
+		}
+	} else if w.buttonState == "PUSHED" && w.pushedTexture != nil {
+		base = w.pushedTexture
+	}
+	if base != nil && base.shown {
+		paint(base, rect)
+	}
+	if w.enabled && w.checked && w.checkedTexture != nil && w.checkedTexture.shown {
+		paint(w.checkedTexture, rect)
+	}
+	if w.enabled && w.highlighted && w.highlightTexture != nil && w.highlightTexture.shown {
+		paint(w.highlightTexture, rect)
+	}
+}
+
+func (eng *UIEngine) drawEditText(canvas *image.RGBA, face font.Face, w *widget, rect Rect, screenHeight float64) {
+	if w.text == "" {
+		return
+	}
+	text := w.text
+	if w.password {
+		text = strings.Repeat("*", len([]rune(text)))
+	}
+	left := w.textInsetL
+	right := w.textInsetR
+	top := w.textInsetT
+	bottom := w.textInsetB
+	if left == 0 {
+		left = 12
+	}
+	if right == 0 {
+		right = 5
+	}
+	if top == 0 && bottom == 0 {
+		bottom = 4
+	}
+	textRect := Rect{X0: rect.X0 + left, Y0: rect.Y0 + bottom, X1: rect.X1 - right, Y1: rect.Y1 - top}
+	screenTextRect := screenScaledRect(textRect, eng.uiScale)
+	drawTextAligned(canvas, face, text, screenTextRect, screenHeight, color.RGBA{R: 235, G: 235, B: 235, A: 255}, "LEFT")
+	if eng.Rt.focused == w {
+		width := font.MeasureString(face, text).Ceil()
+		dst := ScreenRect(screenTextRect, screenHeight)
+		caretX := dst.Min.X + width + 1
+		caret := image.Rect(caretX, dst.Min.Y+4, caretX+1, dst.Max.Y-4)
+		draw.Draw(canvas, caret, &image.Uniform{C: color.RGBA{R: 255, G: 220, B: 80, A: 255}}, image.Point{}, draw.Over)
+	}
+}
+
+func screenScaledRect(r Rect, scale float64) Rect {
+	return Rect{X0: r.X0 * scale, Y0: r.Y0 * scale, X1: r.X1 * scale, Y1: r.Y1 * scale}
+}
+
+func (eng *UIEngine) SetStatusKey(key string) {
+	eng.statusKey = key
+}
+
+func (eng *UIEngine) SetInitialCredentials(account, password string, rememberMe bool) {
+	eng.rememberMe = rememberMe
+	eng.Rt.SetCVar("accountName", account)
+	eng.Rt.Execute("GlueParent_OnEvent('SET_GLUE_SCREEN', 'login')", "@credentials.lua")
+	if checkbox := eng.Rt.widgets["AccountLoginSaveAccountName"]; checkbox != nil {
+		checkbox.checked = account != ""
+	}
+	if password != "" {
+		if edit := eng.Rt.widgets["AccountLoginPasswordEdit"]; edit != nil {
+			eng.Rt.setText(edit, password)
+			eng.Rt.setFocus(edit)
+		}
+	}
+}
+
+func (eng *UIEngine) SetGlueState(state GlueState) {
+	eng.Rt.Glue = state
+	eng.statusKey = ""
+	eng.Rt.Execute("GlueParent_OnEvent('SET_GLUE_SCREEN', 'charselect')", "@network.lua")
+}
+
+func (eng *UIEngine) HandleCursor(x, y float64) bool {
+	target := eng.hitTest(x, y)
+	if target == eng.hovered {
+		return false
+	}
+	if eng.hovered != nil {
+		eng.hovered.highlighted = false
+	}
+	eng.hovered = target
+	if target != nil && (target.kind == kindButton || target.kind == kindCheckButton) {
+		target.highlighted = true
+	}
+	return true
+}
+
+func (eng *UIEngine) HandleMouse(x, y float64, button window.MouseButton, down bool) bool {
+	if button != window.MouseButtonLeft {
+		return false
+	}
+	target := eng.hitTest(x, y)
+	if down {
+		eng.pressed = target
+		if target == nil {
+			eng.Rt.setFocus(nil)
+			return false
+		}
+		if target.kind == kindEditBox {
+			eng.Rt.setFocus(target)
+		} else if target.kind == kindButton || target.kind == kindCheckButton {
+			target.buttonState = "PUSHED"
+		}
+		return true
+	}
+	pressed := eng.pressed
+	eng.pressed = nil
+	if pressed == nil {
+		return target != nil
+	}
+	if pressed.kind == kindButton || pressed.kind == kindCheckButton {
+		pressed.buttonState = "NORMAL"
+	}
+	if pressed == target && (target.kind == kindButton || target.kind == kindCheckButton) {
+		if target.kind == kindCheckButton {
+			target.checked = !target.checked
+		}
+		eng.Rt.fire(target, "OnClick", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString("LeftButton"), lua.LBool(false)})
+		return true
+	}
+	return pressed == target
+}
+
+func (eng *UIEngine) HandleChar(char rune) bool {
+	w := eng.Rt.focused
+	if w == nil || w.kind != kindEditBox || char < 32 || char == 127 {
+		return false
+	}
+	runes := []rune(w.text)
+	if w.cursor < 0 || w.cursor > len(runes) {
+		w.cursor = len(runes)
+	}
+	if w.maxLetters > 0 && len(runes) >= w.maxLetters {
+		return true
+	}
+	runes = append(runes, 0)
+	copy(runes[w.cursor+1:], runes[w.cursor:])
+	runes[w.cursor] = char
+	if w.maxBytes > 0 && len([]byte(string(runes))) > w.maxBytes {
+		return true
+	}
+	position := w.cursor + 1
+	eng.Rt.setText(w, string(runes))
+	w.cursor = position
+	return true
+}
+
+func (eng *UIEngine) HandleKey(key window.Key) bool {
+	w := eng.Rt.focused
+	if w == nil || w.kind != kindEditBox {
+		return false
+	}
+	switch key {
+	case window.KeyTab:
+		eng.Rt.fire(w, "OnTabPressed", []lua.LValue{w.luaValue(eng.Rt.L)})
+	case window.KeyEscape:
+		eng.Rt.fire(w, "OnEscapePressed", []lua.LValue{w.luaValue(eng.Rt.L)})
+	case window.KeyEnter:
+		eng.Rt.fire(w, "OnEnterPressed", []lua.LValue{w.luaValue(eng.Rt.L)})
+	case window.KeyLeft:
+		if w.cursor > 0 {
+			w.cursor--
+		}
+	case window.KeyRight:
+		if w.cursor < len([]rune(w.text)) {
+			w.cursor++
+		}
+	case window.KeyHome:
+		w.cursor = 0
+	case window.KeyEnd:
+		w.cursor = len([]rune(w.text))
+	case window.KeyBackspace:
+		if w.cursor > 0 {
+			runes := []rune(w.text)
+			runes = append(runes[:w.cursor-1], runes[w.cursor:]...)
+			w.cursor--
+			eng.Rt.setText(w, string(runes))
+		}
+	case window.KeyDelete:
+		runes := []rune(w.text)
+		if w.cursor < len(runes) {
+			runes = append(runes[:w.cursor], runes[w.cursor+1:]...)
+			eng.Rt.setText(w, string(runes))
+		}
+	default:
+		return false
+	}
+	return true
+}
+
+func (eng *UIEngine) hitTest(x, y float64) *widget {
+	if eng.uiScale == 0 {
+		return nil
+	}
+	point := struct{ x, y float64 }{x / eng.uiScale, (float64(eng.screenHeight) - y) / eng.uiScale}
+	var visit func(*widget, Rect) *widget
+	visit = func(w *widget, parent Rect) *widget {
+		if !w.shown {
+			return nil
+		}
+		rect := eng.layoutRect(w, parent)
+		for i := len(w.children) - 1; i >= 0; i-- {
+			if target := visit(w.children[i], rect); target != nil {
+				return target
+			}
+		}
+		if point.x < rect.X0 || point.x > rect.X1 || point.y < rect.Y0 || point.y > rect.Y1 {
+			return nil
+		}
+		if w.kind == kindButton || w.kind == kindCheckButton || w.kind == kindEditBox || w.enableMouse {
+			return w
+		}
+		return nil
+	}
+	root := eng.Rt.widgets["GlueParent"]
+	if root == nil {
+		return nil
+	}
+	for i := len(root.children) - 1; i >= 0; i-- {
+		if target := visit(root.children[i], eng.screen); target != nil {
+			return target
+		}
+	}
+	return nil
 }
 
 // renderBackground draws the WotLK Northrend background.
@@ -388,17 +707,17 @@ type hostScreen struct {
 	w, h float64
 }
 
-func (h *hostScreen) ScreenSize() (float64, float64) { return h.w, h.h }
-func (h *hostScreen) PlaySound(string)               {}
-func (h *hostScreen) PlayMusic(string)               {}
-func (h *hostScreen) PlayAmbience(string)            {}
-func (h *hostScreen) StopMusic()                     {}
-func (h *hostScreen) StopAmbience()                  {}
-func (h *hostScreen) StopAllSFX()                    {}
-func (h *hostScreen) LaunchURL(string)               {}
-func (h *hostScreen) Quit(bool)                      {}
-func (h *hostScreen) ConsoleExec(string)             {}
-func (h *hostScreen) Screenshot()                    {}
+func (h hostScreen) ScreenSize() (float64, float64) { return h.w, h.h }
+func (h hostScreen) PlaySound(string)               {}
+func (h hostScreen) PlayMusic(string)               {}
+func (h hostScreen) PlayAmbience(string)            {}
+func (h hostScreen) StopMusic()                     {}
+func (h hostScreen) StopAmbience()                  {}
+func (h hostScreen) StopAllSFX()                    {}
+func (h hostScreen) LaunchURL(string)               {}
+func (h hostScreen) Quit(bool)                      {}
+func (h hostScreen) ConsoleExec(string)             {}
+func (h hostScreen) Screenshot()                    {}
 
 func drawSub(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64) {
 	b := img.Bounds()
@@ -419,16 +738,26 @@ func drawSub(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, 
 	xdraw.BiLinear.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
 }
 
-func drawText(canvas *image.RGBA, face font.Face, text string, r Rect, screenHeight float64, c color.Color, center bool) {
+func drawText(canvas *image.RGBA, face font.Face, text string, r Rect, screenHeight float64, c color.Color) {
+	drawTextAligned(canvas, face, text, r, screenHeight, c, "LEFT")
+}
+
+func drawTextAligned(canvas *image.RGBA, face font.Face, text string, r Rect, screenHeight float64, c color.Color, justify string) {
 	dst := ScreenRect(r, screenHeight)
 	if dst.Dx() <= 0 || dst.Dy() <= 0 {
 		return
 	}
 
 	dotX := dst.Min.X + 4
-	if center {
-		width := font.MeasureString(face, text).Ceil()
+	width := font.MeasureString(face, text).Ceil()
+	if justify == "" {
+		justify = "CENTER"
+	}
+	switch strings.ToUpper(justify) {
+	case "CENTER":
 		dotX = dst.Min.X + (dst.Dx()-width)/2
+	case "RIGHT":
+		dotX = dst.Max.X - width - 4
 	}
 
 	ascent := face.Metrics().Ascent.Ceil()

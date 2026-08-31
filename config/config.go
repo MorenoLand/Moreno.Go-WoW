@@ -25,10 +25,8 @@ type Options struct {
 
 func Defaults() Options {
 	return Options{
-		AuthAddress:   "127.0.0.1:3724",
-		Locale:        "enUS",
-		DataPath:      `F:\Games\Wrath of the Lich King\Data`,
-		InterfacePath: `G:\Development\Rust\Warcraft\Research\mpq-extract`,
+		AuthAddress: "127.0.0.1:3724",
+		Locale:      "enUS",
 	}
 }
 

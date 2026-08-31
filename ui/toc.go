@@ -16,14 +16,37 @@ import (
 // case-insensitive with forward or back slashes, matching the client's
 // MPQ-backed path handling.
 type Loader struct {
-	Root string
-	rt   *Runtime
+	Root      string
+	assetRoot string
+	mpq       *mpqSet
+	rt        *Runtime
 }
 
 // NewLoader creates a loader rooted at the given data directory.
 func NewLoader(root string, rt *Runtime) *Loader {
-	l := &Loader{Root: root, rt: rt}
-	rt.instantiateTemplate = func(w *widget, template string) {
+	l := &Loader{Root: root, assetRoot: root, rt: rt}
+	installTemplateFactory(l)
+	return l
+}
+
+func NewLoaderWithAssets(root, assetRoot string, rt *Runtime) *Loader {
+	l := &Loader{Root: root, assetRoot: assetRoot, rt: rt}
+	installTemplateFactory(l)
+	return l
+}
+
+func NewMPQLoader(dataPath, locale string, rt *Runtime) (*Loader, error) {
+	archives, err := openMPQSet(dataPath, locale)
+	if err != nil {
+		return nil, err
+	}
+	l := &Loader{mpq: archives, rt: rt}
+	installTemplateFactory(l)
+	return l, nil
+}
+
+func installTemplateFactory(l *Loader) {
+	l.rt.instantiateTemplate = func(w *widget, template string) {
 		tpl, ok := l.rt.virtuals[template]
 		if !ok {
 			return
@@ -69,6 +92,12 @@ func NewLoader(root string, rt *Runtime) *Loader {
 					w.pushedTexture = texture
 				case "HighlightTexture":
 					w.highlightTexture = texture
+				case "DisabledTexture":
+					w.disabledTexture = texture
+				case "CheckedTexture":
+					w.checkedTexture = texture
+				case "DisabledCheckedTexture":
+					w.disabledCheckedTexture = texture
 				}
 				if texture.name != "" {
 					l.rt.register(texture)
@@ -80,14 +109,10 @@ func NewLoader(root string, rt *Runtime) *Loader {
 			case "DisabledFont":
 				w.disabledFont = group.attrDefault("style", "")
 			case "ButtonText":
-				label := &xmlNode{name: "FontString", attrs: map[string]string{}}
-				if name := group.attrDefault("name", ""); name != "" {
-					label.attrs["name"] = name
+				label := buttonTextNode(group, w, merged)
+				if region, err := l.buildRegion(label, w, "CreateFrame:"+template); err == nil {
+					w.buttonLabel = region
 				}
-				if text := group.attrDefault("text", ""); text != "" {
-					label.attrs["text"] = text
-				}
-				l.buildRegion(label, w, "CreateFrame:"+template)
 			case "Scripts":
 				for _, scriptEl := range group.children {
 					handler := scriptEl.name
@@ -107,19 +132,22 @@ func NewLoader(root string, rt *Runtime) *Loader {
 			}
 		}
 	}
-	return l
 }
 
 // resolve maps an interface path (e.g. Interface\GlueXML\GlueXML.toc) to a
 // file under the loader root, tolerating case and separator differences.
 func (l *Loader) resolve(interfacePath string) (string, error) {
+	return l.resolveAt(l.Root, interfacePath)
+}
+
+func (l *Loader) resolveAt(root, interfacePath string) (string, error) {
 	clean := filepath.FromSlash(strings.ReplaceAll(interfacePath, "/", "\\"))
-	candidate := filepath.Join(l.Root, clean)
+	candidate := filepath.Join(root, clean)
 	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 		return candidate, nil
 	}
 	parts := strings.Split(strings.Trim(clean, "\\"), "\\")
-	dir := l.Root
+	dir := root
 	for i, part := range parts {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -150,16 +178,39 @@ func (l *Loader) resolve(interfacePath string) (string, error) {
 // ReadAsset resolves and reads an interface asset path, tolerating a
 // missing .blp extension the way the client's texture loader does.
 func (l *Loader) ReadAsset(path string) ([]byte, error) {
-	data, err := l.read(path)
+	data, err := l.readAsset(path)
 	if err == nil {
 		return data, nil
 	}
-	return l.read(path + ".blp")
+	return l.readAsset(path + ".blp")
+}
+
+func (l *Loader) ReadFile(path string) ([]byte, error) { return l.read(path) }
+
+func (l *Loader) Close() error {
+	if l.mpq == nil {
+		return nil
+	}
+	return l.mpq.Close()
 }
 
 // read resolves and reads an interface file.
 func (l *Loader) read(interfacePath string) ([]byte, error) {
+	if l.mpq != nil {
+		return l.mpq.ReadFile(interfacePath)
+	}
 	path, err := l.resolve(interfacePath)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+}
+
+func (l *Loader) readAsset(interfacePath string) ([]byte, error) {
+	if l.mpq != nil {
+		return l.mpq.ReadFile(interfacePath)
+	}
+	path, err := l.resolveAt(l.assetRoot, interfacePath)
 	if err != nil {
 		return nil, err
 	}
@@ -410,6 +461,16 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 					w.children = append(w.children, child)
 				}
 			}
+		case "ScrollChild":
+			for _, frameEl := range group.children {
+				if isWidgetElement(frameEl.name) {
+					child, err := l.buildWidget(frameEl, w, interfacePath)
+					if err != nil {
+						return nil, err
+					}
+					w.children = append(w.children, child)
+				}
+			}
 		case "Scripts":
 			for _, scriptEl := range group.children {
 				handler := scriptEl.name
@@ -437,6 +498,12 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 				w.pushedTexture = texture
 			case "HighlightTexture":
 				w.highlightTexture = texture
+			case "DisabledTexture":
+				w.disabledTexture = texture
+			case "CheckedTexture":
+				w.checkedTexture = texture
+			case "DisabledCheckedTexture":
+				w.disabledCheckedTexture = texture
 			}
 			if texture.name != "" {
 				l.rt.register(texture)
@@ -451,25 +518,31 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 			if text := group.attrDefault("text", ""); text != "" {
 				w.text = text
 			}
-			if name := group.attrDefault("name", ""); name != "" || true {
-				label := &xmlNode{
-					name:  "FontString",
-					attrs: map[string]string{},
-				}
-				if name != "" {
-					label.attrs["name"] = name
-				}
-				if text := group.attrDefault("text", ""); text != "" {
-					label.attrs["text"] = text
-				}
-				if _, err := l.buildRegion(label, w, interfacePath); err != nil {
-					return nil, err
-				}
+			label := buttonTextNode(group, w, merged)
+			region, err := l.buildRegion(label, w, interfacePath)
+			if err != nil {
+				return nil, err
+			}
+			w.buttonLabel = region
+		case "TextInsets":
+			if inset := group.child("AbsInset"); inset != nil {
+				w.textInsetL = attrFloat(inset, "left", 0)
+				w.textInsetR = attrFloat(inset, "right", 0)
+				w.textInsetT = attrFloat(inset, "top", 0)
+				w.textInsetB = attrFloat(inset, "bottom", 0)
 			}
 		default:
 			// Remaining child elements (insets, scroll children, model
 			// tuning) carry visual state the headless runtime does not
 			// consume yet.
+		}
+	}
+	if w.buttonLabel != nil {
+		if w.buttonLabel.width == 0 {
+			w.buttonLabel.width = w.width
+		}
+		if w.buttonLabel.height == 0 {
+			w.buttonLabel.height = w.height
 		}
 	}
 	l.rt.register(w)
@@ -489,6 +562,9 @@ func (l *Loader) buildButtonTexture(node *xmlNode, parent *widget, interfacePath
 	w := newWidget(kindTexture, resolveParentName(merged.attrDefault("name", ""), parent.name))
 	w.parent = parent
 	w.textureFile = merged.attrDefault("file", "")
+	if hidden, ok := merged.attr("hidden"); ok {
+		w.shown = !parseBool(hidden, false)
+	}
 	if tc := merged.child("TexCoords"); tc != nil {
 		w.texCoordL = attrFloat(tc, "left", 0)
 		w.texCoordR = attrFloat(tc, "right", 1)
@@ -548,6 +624,12 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 		if c := merged.child("Color"); c != nil {
 			w.textColor = rgba{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), 1}
 		}
+		if w.width == 0 {
+			w.width = parent.width
+		}
+		if w.height == 0 {
+			w.height = 20
+		}
 	}
 	if s := merged.child("Size"); s != nil {
 		w.width = attrFloat(s, "x", w.width)
@@ -555,6 +637,17 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 		if d := s.child("AbsDimension"); d != nil {
 			w.width = attrFloat(d, "x", w.width)
 			w.height = attrFloat(d, "y", w.height)
+		}
+	}
+	if kind == kindFontString {
+		if w.width == 0 {
+			w.width = parent.width
+			if w.width == 0 {
+				w.width = 600
+			}
+		}
+		if w.height == 0 {
+			w.height = 20
 		}
 	}
 	if a := merged.child("Anchors"); a != nil {
@@ -572,6 +665,22 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 	parent.children = append(parent.children, w)
 	l.rt.register(w)
 	return w, nil
+}
+
+func buttonTextNode(group *xmlNode, parent *widget, button *xmlNode) *xmlNode {
+	attrs := make(map[string]string, len(group.attrs)+2)
+	for key, value := range group.attrs {
+		attrs[key] = value
+	}
+	if attrs["text"] == "" && parent.text != "" {
+		attrs["text"] = parent.text
+	}
+	if attrs["inherits"] == "" {
+		if normal := button.child("NormalFont"); normal != nil {
+			attrs["inherits"] = normal.attrDefault("style", "")
+		}
+	}
+	return &xmlNode{name: "FontString", attrs: attrs, children: append([]*xmlNode(nil), group.children...)}
 }
 
 // applyWidgetAttrs reads the merged widget element attributes.

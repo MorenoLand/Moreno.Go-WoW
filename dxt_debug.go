@@ -6,11 +6,26 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/MorenoLand/Moreno.WoW/config"
 	"github.com/MorenoLand/Moreno.WoW/ui"
 )
 
 func main() {
-	data, err := os.ReadFile(`G:\Development\Rust\Warcraft\Research\mpq-extract/Interface-tree\Interface\Glues\Common\Glue-Panel-Button-Up-Blue.blp`)
+	configPath, err := config.Path()
+	if err != nil {
+		panic(err)
+	}
+	options, err := config.Load(configPath)
+	if err != nil {
+		panic(err)
+	}
+	rt := ui.NewRuntime(nil)
+	loader, err := ui.NewMPQLoader(options.DataPath, options.Locale, rt)
+	if err != nil {
+		panic(err)
+	}
+	defer loader.Close()
+	data, err := loader.ReadAsset("Interface\\Glues\\Common\\Glue-Panel-Button-Up-Blue")
 	if err != nil {
 		panic(err)
 	}

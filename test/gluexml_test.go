@@ -98,3 +98,25 @@ func TestGlueXMLSmoke(t *testing.T) {
 		t.Logf("LOGIN global absent (localization entry names vary)")
 	}
 }
+
+func TestMPQGlueXMLSmoke(t *testing.T) {
+	data := os.Getenv("WOW_TEST_DATA")
+	if data == "" {
+		t.Skip("WOW_TEST_DATA not set; skipped")
+	}
+	locale := os.Getenv("WOW_TEST_LOCALE")
+	if locale == "" {
+		locale = "enUS"
+	}
+	engine, err := ui.LoadUIEngineFromMPQ(data, locale, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if errs := engine.Rt.ScriptErrors(); len(errs) != 0 {
+		t.Fatalf("script errors: %v", errs)
+	}
+	if image := engine.Render(960, 640); image.Bounds().Dx() != 960 || image.Bounds().Dy() != 640 {
+		t.Fatalf("render bounds = %v", image.Bounds())
+	}
+}

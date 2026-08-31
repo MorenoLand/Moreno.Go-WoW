@@ -35,6 +35,12 @@ func main() {
 	if value := os.Getenv("WOW_DATA"); value != "" {
 		options.DataPath = value
 	}
+	if value := os.Getenv("WOW_INTERFACE"); value != "" {
+		options.InterfacePath = value
+	}
+	if value := os.Getenv("WOW_BACKGROUND"); value != "" {
+		options.BackgroundPath = value
+	}
 	password := os.Getenv("WOW_PASSWORD")
 	debug := false
 	timeout := network.DefaultConfig().Timeout
@@ -46,13 +52,21 @@ func main() {
 	flag.StringVar(&options.DataPath, "data", options.DataPath, "Warcraft data directory")
 	flag.DurationVar(&timeout, "timeout", timeout, "network operation timeout")
 	flag.BoolVar(&debug, "debug", false, "write session status to the terminal")
+	flag.StringVar(&options.InterfacePath, "interface", options.InterfacePath, "loose Interface data root")
+	flag.StringVar(&options.BackgroundPath, "background", options.BackgroundPath, "optional login background image")
+	flag.BoolVar(&options.RememberMe, "remember-me", options.RememberMe, "remember the password in the OS credential store")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: MorenoWoW [options]")
 		flag.VisitAll(func(option *flag.Flag) { fmt.Fprintf(os.Stderr, "  --%s\t%s\n", option.Name, option.Usage) })
 	}
 	flag.Parse()
+	if password == "" && options.RememberMe {
+		if saved, err := config.LoadPassword(options.Account, options.AuthAddress); err == nil {
+			password = saved
+		}
+	}
 	if err := config.Save(configPath, options); err != nil {
 		log.Printf("saving %s: %v", configPath, err)
 	}
-	render.Run(network.Config{AuthAddress: options.AuthAddress, Account: options.Account, Password: password, Locale: options.Locale, Realm: options.Realm, Timeout: timeout, Debug: debug}, options.DataPath, options.InterfacePath, options.BackgroundPath, options.Character, configPath, debug)
+	render.Run(network.Config{AuthAddress: options.AuthAddress, Account: options.Account, Password: password, Locale: options.Locale, Realm: options.Realm, Timeout: timeout, Debug: debug}, options.DataPath, options.InterfacePath, options.BackgroundPath, options.Character, configPath, debug, options.RememberMe)
 }

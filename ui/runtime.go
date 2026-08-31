@@ -30,6 +30,7 @@ type Runtime struct {
 	scriptErrors []ScriptError
 	chunkSource  string
 	nested       int
+	focused      *widget
 
 	// Glue carries the connection-flow state surfaced by the realm and
 	// character list API functions.
@@ -72,6 +73,10 @@ type Host interface {
 	Screenshot()
 }
 
+type LoginHost interface {
+	DefaultServerLogin(account, password string)
+}
+
 // Font is a named font object created from a <Font> element.
 type Font struct {
 	Name     string
@@ -103,6 +108,35 @@ func NewRuntime(host Host) *Runtime {
 
 // Close releases the Lua state.
 func (rt *Runtime) Close() { rt.L.Close() }
+
+func (rt *Runtime) setFocus(w *widget) {
+	if w != nil && (!w.shown || !w.enabled) {
+		return
+	}
+	if rt.focused == w {
+		return
+	}
+	old := rt.focused
+	rt.focused = w
+	if old != nil {
+		rt.fireHandler(old, "OnEditFocusLost")
+	}
+	if w != nil {
+		w.cursor = len([]rune(w.text))
+		rt.fireHandler(w, "OnEditFocusGained")
+	}
+}
+
+func (rt *Runtime) setText(w *widget, text string) {
+	text = strings.ReplaceAll(text, "\n", "")
+	if w.text == text {
+		w.cursor = len([]rune(text))
+		return
+	}
+	w.text = text
+	w.cursor = len([]rune(text))
+	rt.fire(w, "OnTextChanged", []lua.LValue{w.luaValue(rt.L), lua.LBool(true)})
+}
 
 // ScriptErrors returns the script failures recorded so far.
 func (rt *Runtime) ScriptErrors() []ScriptError { return rt.scriptErrors }

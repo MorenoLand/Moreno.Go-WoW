@@ -47,6 +47,10 @@ func pointFactor(point string) (float64, float64) {
 
 // ResolveRect computes the layout rect of a widget against its parent rect.
 func ResolveRect(w *widget, parent Rect) Rect {
+	return resolveRect(w, parent, nil)
+}
+
+func resolveRect(w *widget, parent Rect, relative func(string) (Rect, bool)) Rect {
 	// setAllPoints or explicit fill anchors.
 	if len(w.points) == 0 || (len(w.points) == 2 && w.points[0].point == "TOPLEFT" && w.points[1].point == "BOTTOMRIGHT" && w.points[0].relativePoint == "TOPLEFT" && w.points[1].relativePoint == "BOTTOMRIGHT" && w.points[0].x == 0 && w.points[0].y == 0 && w.points[1].x == 0 && w.points[1].y == 0) {
 		if len(w.points) == 0 {
@@ -63,10 +67,10 @@ func ResolveRect(w *widget, parent Rect) Rect {
 	anchorPos := make(map[string][2]float64)
 	for _, p := range w.points {
 		base := parent
-		if p.relativeTo != "" {
-			// Resolve later during the tree walk; unavailable targets
-			// fall back to the parent.
-			base = parent
+		if p.relativeTo != "" && relative != nil {
+			if target, ok := relative(p.relativeTo); ok {
+				base = target
+			}
 		}
 		fx, fy := pointFactor(p.point)
 		gx, gy := pointFactor(p.relativePoint)
@@ -124,8 +128,18 @@ func ResolveRect(w *widget, parent Rect) Rect {
 	}
 
 	if !x0Set && !x1Set {
-		cx := (parent.X0 + parent.X1) / 2
-		rect.X0, rect.X1 = cx-w.width/2, cx+w.width/2
+		aligned := false
+		for _, point := range []string{"TOP", "BOTTOM", "CENTER"} {
+			if v, ok := anchorPos[point]; ok {
+				rect.X0, rect.X1 = v[0]-w.width/2, v[0]+w.width/2
+				aligned = true
+				break
+			}
+		}
+		if !aligned {
+			cx := (parent.X0 + parent.X1) / 2
+			rect.X0, rect.X1 = cx-w.width/2, cx+w.width/2
+		}
 	} else if x0Set && !x1Set {
 		rect.X1 = rect.X0 + w.width
 	} else if !x0Set && x1Set {
@@ -133,8 +147,18 @@ func ResolveRect(w *widget, parent Rect) Rect {
 	}
 
 	if !y0Set && !y1Set {
-		cy := (parent.Y0 + parent.Y1) / 2
-		rect.Y0, rect.Y1 = cy-w.height/2, cy+w.height/2
+		aligned := false
+		for _, point := range []string{"LEFT", "RIGHT", "CENTER"} {
+			if v, ok := anchorPos[point]; ok {
+				rect.Y0, rect.Y1 = v[1]-w.height/2, v[1]+w.height/2
+				aligned = true
+				break
+			}
+		}
+		if !aligned {
+			cy := (parent.Y0 + parent.Y1) / 2
+			rect.Y0, rect.Y1 = cy-w.height/2, cy+w.height/2
+		}
 	} else if y0Set && !y1Set {
 		rect.Y1 = rect.Y0 + w.height
 	} else if !y0Set && y1Set {

@@ -71,11 +71,20 @@ func registerGlueAPI(rt *Runtime) {
 
 	// Build and platform info.
 	reg("GetBuildInfo", func(L *lua.LState) int {
+		versionType := L.GetGlobal("NORMAL_BUILD")
+		if versionType.Type() != lua.LTString {
+			versionType = lua.LString("")
+		}
+		buildType := L.GetGlobal("RELEASE_BUILD")
+		if buildType.Type() != lua.LTString {
+			buildType = lua.LString("")
+		}
+		L.Push(versionType)
+		L.Push(buildType)
 		L.Push(lua.LString(buildVersion))
 		L.Push(lua.LString(buildNumber))
 		L.Push(lua.LString(buildDate))
-		L.Push(lua.LNumber(buildTOC))
-		return 4
+		return 5
 	})
 	reg("IsWindowsClient", func(L *lua.LState) int { L.Push(lua.LBool(runtime.GOOS == "windows")); return 1 })
 	reg("IsMacClient", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
@@ -278,6 +287,17 @@ func registerGlueAPI(rt *Runtime) {
 		}
 		return 1
 	})
+	reg("DefaultServerLogin", func(L *lua.LState) int {
+		if host, ok := rt.Host.(LoginHost); ok {
+			host.DefaultServerLogin(L.CheckString(1), L.CheckString(2))
+		}
+		return 0
+	})
+	reg("EULAAccepted", func(L *lua.LState) int { L.Push(lua.LBool(true)); return 1 })
+	reg("TOSAccepted", func(L *lua.LState) int { L.Push(lua.LBool(true)); return 1 })
+	reg("TerminationWithoutNoticeAccepted", func(L *lua.LState) int { L.Push(lua.LBool(true)); return 1 })
+	reg("ScanningAccepted", func(L *lua.LState) int { L.Push(lua.LBool(true)); return 1 })
+	reg("ContestAccepted", func(L *lua.LState) int { L.Push(lua.LBool(true)); return 1 })
 
 	// Connection flow queries. The login shell drives actual network actions;
 	// these return the current glue state the scripts render from.

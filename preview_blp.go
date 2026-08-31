@@ -5,20 +5,26 @@ package main
 import (
 	"image/png"
 	"os"
-	"path/filepath"
 
 	"github.com/MorenoLand/Moreno.WoW/config"
 	"github.com/MorenoLand/Moreno.WoW/ui"
 )
 
 func main() {
-	options, _ := config.Load("")
-	if options.InterfacePath == "" {
-		options.InterfacePath = `G:\Development\Rust\Warcraft\Research\mpq-extract`
+	configPath, err := config.Path()
+	if err != nil {
+		panic(err)
 	}
-	assets := filepath.Join(options.InterfacePath, "Interface-tree")
+	options, err := config.Load(configPath)
+	if err != nil {
+		panic(err)
+	}
 	rt := ui.NewRuntime(nil)
-	loader := ui.NewLoader(assets, rt)
+	loader, err := ui.NewMPQLoader(options.DataPath, options.Locale, rt)
+	if err != nil {
+		panic(err)
+	}
+	defer loader.Close()
 
 	name := "Interface/Glues/MODELS/UI_MainMenu_Northrend/Login_SkyBowlA"
 	data, err := loader.ReadAsset(name)

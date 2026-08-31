@@ -5,23 +5,21 @@ package main
 import (
 	"image/png"
 	"os"
-	"path/filepath"
 
 	"github.com/MorenoLand/Moreno.WoW/config"
 	"github.com/MorenoLand/Moreno.WoW/ui"
 )
 
 func main() {
-	options, _ := config.Load("config.json")
-	if options.InterfacePath == "" {
-	    options.InterfacePath = `G:\Development\Rust\Warcraft\Research\mpq-extract`
+	configPath, err := config.Path()
+	if err != nil {
+		panic(err)
 	}
-	engine, err := ui.LoadUIEngine(
-		filepath.Join(options.InterfacePath, "GlueXML"),
-		filepath.Join(options.InterfacePath, "FrameXML"),
-		filepath.Join(options.InterfacePath, "Interface-tree"),
-		options.BackgroundPath,
-	)
+	options, err := config.Load(configPath)
+	if err != nil {
+		panic(err)
+	}
+	engine, err := ui.LoadUIEngineFromMPQ(options.DataPath, options.Locale, options.BackgroundPath)
 	if err != nil {
 		panic(err)
 	}

@@ -97,20 +97,25 @@ type widget struct {
 	backdrop        *backdrop
 
 	// Button and CheckButton state.
-	buttonState      string
-	desaturated      bool
-	highlighted      bool
-	enabled          bool
-	normalTexture    *widget
-	pushedTexture    *widget
-	highlightTexture *widget
-	normalFont       string
-	highlightFont    string
-	disabledFont     string
-	checked          bool
+	buttonState            string
+	desaturated            bool
+	highlighted            bool
+	enabled                bool
+	normalTexture          *widget
+	pushedTexture          *widget
+	highlightTexture       *widget
+	disabledTexture        *widget
+	checkedTexture         *widget
+	disabledCheckedTexture *widget
+	buttonLabel            *widget
+	normalFont             string
+	highlightFont          string
+	disabledFont           string
+	checked                bool
 
 	// EditBox state.
 	text         string
+	cursor       int
 	password     bool
 	autoFocus    bool
 	maxLetters   int
@@ -149,6 +154,10 @@ type widget struct {
 	justifyV   string
 	textColor  rgba
 	textWidth  float64
+	textInsetL float64
+	textInsetR float64
+	textInsetT float64
+	textInsetB float64
 
 	// Tooltip/HTML text lines.
 	lines []string
@@ -255,11 +264,17 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"Show": func(L *lua.LState, w *widget) int {
+			if w.shown {
+				return 0
+			}
 			w.shown = true
 			rt.fireHandler(w, "OnShow")
 			return 0
 		},
 		"Hide": func(L *lua.LState, w *widget) int {
+			if !w.shown {
+				return 0
+			}
 			w.shown = false
 			rt.fireHandler(w, "OnHide")
 			return 0
@@ -492,8 +507,18 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"SetChecked": func(L *lua.LState, w *widget) int {
-			// nil (unset cvars read through GetCVarBool) counts as false.
-			w.checked = L.Get(2) == lua.LTrue
+			value := L.Get(2)
+			switch value.Type() {
+			case lua.LTBool:
+				w.checked = L.CheckBool(2)
+			case lua.LTNumber:
+				w.checked = L.CheckNumber(2) != 0
+			case lua.LTString:
+				text := L.CheckString(2)
+				w.checked = text != "" && text != "0"
+			default:
+				w.checked = false
+			}
 			return 0
 		},
 		"GetChecked": func(L *lua.LState, w *widget) int {
@@ -501,7 +526,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 1
 		},
 		"SetText": func(L *lua.LState, w *widget) int {
-			w.text = L.CheckString(2)
+			rt.setText(w, L.CheckString(2))
 			return 0
 		},
 		"SetFormattedText": func(L *lua.LState, w *widget) int {
@@ -510,7 +535,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			for i := 3; i <= L.GetTop(); i++ {
 				args = append(args, L.Get(i).String())
 			}
-			w.text = sprintf(format, args)
+			rt.setText(w, sprintf(format, args))
 			return 0
 		},
 		"GetText": func(L *lua.LState, w *widget) int {
@@ -532,8 +557,13 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		"SetAlphaAttr":  func(L *lua.LState, w *widget) int { return 0 },
 		"SetTextInsets": func(L *lua.LState, w *widget) int { return 0 },
 		"HighlightText": func(L *lua.LState, w *widget) int { return 0 },
-		"SetFocus":      func(L *lua.LState, w *widget) int { return 0 },
-		"ClearFocus":    func(L *lua.LState, w *widget) int { return 0 },
+		"SetFocus":      func(L *lua.LState, w *widget) int { rt.setFocus(w); return 0 },
+		"ClearFocus": func(L *lua.LState, w *widget) int {
+			if rt.focused == w {
+				rt.setFocus(nil)
+			}
+			return 0
+		},
 		"SetAutoFocus": func(L *lua.LState, w *widget) int {
 			w.autoFocus = L.CheckBool(2)
 			return 0
