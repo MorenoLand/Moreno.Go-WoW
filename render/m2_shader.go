@@ -8,8 +8,8 @@ in vec2 VertexTexcoord2;
 out vec2 FragTexcoord;
 out vec2 FragTexcoord2;
 void main() {
-    FragTexcoord = vec2(VertexTexcoord.x, 1.0 - VertexTexcoord.y);
-    FragTexcoord2 = vec2(VertexTexcoord2.x, 1.0 - VertexTexcoord2.y);
+    FragTexcoord = VertexTexcoord;
+    FragTexcoord2 = VertexTexcoord2;
     gl_Position = MVP * vec4(VertexPosition, 1.0);
 }`
 

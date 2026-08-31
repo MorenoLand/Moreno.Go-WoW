@@ -56,9 +56,12 @@ type m2Bone struct {
 }
 
 type skinSubmesh struct {
-	vertexStart uint32
-	indexStart  uint32
-	indexCount  uint32
+	vertexStart    uint32
+	indexStart     uint32
+	indexCount     uint32
+	boneCount      uint32
+	boneComboIndex uint32
+	boneInfluences uint32
 }
 
 type skinBatch struct {
@@ -294,11 +297,12 @@ func parseM2(data []byte) (parsedM2, error) {
 }
 
 type parsedSkin struct {
-	vertices  []uint16
-	indices   []uint16
-	bones     [][4]uint8
-	submeshes []skinSubmesh
-	batches   []skinBatch
+	vertices   []uint16
+	indices    []uint16
+	bones      [][4]uint8
+	boneCombos []uint16
+	submeshes  []skinSubmesh
+	batches    []skinBatch
 }
 
 func parseSkin(data []byte) (parsedSkin, error) {
@@ -317,6 +321,10 @@ func parseSkin(data []byte) (parsedSkin, error) {
 	if err != nil {
 		return parsedSkin{}, err
 	}
+	boneCombos, err := readSkinArray(data, 0x2c, 2)
+	if err != nil {
+		return parsedSkin{}, err
+	}
 	submeshes, err := readSkinArray(data, 0x1c, skinSubmeshSize)
 	if err != nil {
 		return parsedSkin{}, err
@@ -325,7 +333,7 @@ func parseSkin(data []byte) (parsedSkin, error) {
 	if err != nil {
 		return parsedSkin{}, err
 	}
-	result := parsedSkin{vertices: make([]uint16, vertices.count), indices: make([]uint16, indices.count), bones: make([][4]uint8, bones.count), submeshes: make([]skinSubmesh, submeshes.count), batches: make([]skinBatch, batches.count)}
+	result := parsedSkin{vertices: make([]uint16, vertices.count), indices: make([]uint16, indices.count), bones: make([][4]uint8, bones.count), boneCombos: make([]uint16, boneCombos.count), submeshes: make([]skinSubmesh, submeshes.count), batches: make([]skinBatch, batches.count)}
 	for index := range result.vertices {
 		result.vertices[index] = binary.LittleEndian.Uint16(data[vertices.offset+index*2:])
 	}
@@ -336,9 +344,12 @@ func parseSkin(data []byte) (parsedSkin, error) {
 		base := bones.offset + index*4
 		result.bones[index] = [4]uint8{data[base], data[base+1], data[base+2], data[base+3]}
 	}
+	for index := range result.boneCombos {
+		result.boneCombos[index] = binary.LittleEndian.Uint16(data[boneCombos.offset+index*2:])
+	}
 	for index := range result.submeshes {
 		base := submeshes.offset + index*skinSubmeshSize
-		result.submeshes[index] = skinSubmesh{vertexStart: uint32(binary.LittleEndian.Uint16(data[base+4 : base+6])), indexStart: uint32(binary.LittleEndian.Uint16(data[base+8 : base+10])), indexCount: uint32(binary.LittleEndian.Uint16(data[base+10 : base+12]))}
+		result.submeshes[index] = skinSubmesh{vertexStart: uint32(binary.LittleEndian.Uint16(data[base+4 : base+6])), indexStart: uint32(binary.LittleEndian.Uint16(data[base+8 : base+10])), indexCount: uint32(binary.LittleEndian.Uint16(data[base+10 : base+12])), boneCount: uint32(binary.LittleEndian.Uint16(data[base+12 : base+14])), boneComboIndex: uint32(binary.LittleEndian.Uint16(data[base+14 : base+16])), boneInfluences: uint32(binary.LittleEndian.Uint16(data[base+16 : base+18]))}
 	}
 	for index := range result.batches {
 		base := batches.offset + index*skinBatchSize
@@ -351,7 +362,11 @@ func parseSkin(data []byte) (parsedSkin, error) {
 
 func buildM2Parts(model parsedM2, skin parsedSkin) map[string]*m2Part {
 	parts := make(map[string]*m2Part)
-	posed := make(map[int]posedM2Vertex)
+	type poseKey struct {
+		local          int
+		boneComboIndex uint32
+	}
+	posed := make(map[poseKey]posedM2Vertex)
 	for batchIndex, batch := range skin.batches {
 		if int(batch.submeshIndex) >= len(skin.submeshes) {
 			continue
@@ -420,10 +435,11 @@ func buildM2Parts(model parsedM2, skin parsedSkin) map[string]*m2Part {
 					continue
 				}
 				vertex := model.vertices[vertexIndex]
-				transformed, ok := posed[local]
+				key := poseKey{local: local, boneComboIndex: submesh.boneComboIndex}
+				transformed, ok := posed[key]
 				if !ok {
-					transformed = poseM2Vertex(model, skin, local, vertex)
-					posed[local] = transformed
+					transformed = poseM2Vertex(model, skin, local, vertex, int(submesh.boneComboIndex))
+					posed[key] = transformed
 				}
 				position := modelVector(transformed.position)
 				normal := modelVector(transformed.normal)
@@ -539,7 +555,7 @@ func decodeM2Quaternion(value uint16) float32 {
 	return float32(int16(value)) / 32767
 }
 
-func poseM2Vertex(model parsedM2, skin parsedSkin, local int, vertex m2Vertex) posedM2Vertex {
+func poseM2Vertex(model parsedM2, skin parsedSkin, local int, vertex m2Vertex, boneComboIndex int) posedM2Vertex {
 	weights := vertex.weights
 	bones := vertex.bones
 	if local >= 0 && local < len(skin.bones) {
@@ -552,6 +568,9 @@ func poseM2Vertex(model parsedM2, skin parsedSkin, local int, vertex m2Vertex) p
 			continue
 		}
 		boneIndex := int(bones[slot])
+		if boneComboIndex >= 0 && boneComboIndex+boneIndex < len(skin.boneCombos) {
+			boneIndex = int(skin.boneCombos[boneComboIndex+boneIndex])
+		}
 		if boneIndex >= len(model.bones) {
 			continue
 		}
