@@ -39,23 +39,23 @@ type RealmInfo struct {
 
 // CharacterEntry describes one character in the character list.
 type CharacterEntry struct {
-	Name            string
-	Race            string
-	RaceID          int
-	Class           string
-	ClassID         int
-	Gender          int
-	Level           int
-	Zone            string
-	ZoneID          uint32
-	MapID           uint32
-	Flags           uint32
-	CustomizeFlags  uint32
-	Ghost           bool
+	Name              string
+	Race              string
+	RaceID            int
+	Class             string
+	ClassID           int
+	Gender            int
+	Level             int
+	Zone              string
+	ZoneID            uint32
+	MapID             uint32
+	Flags             uint32
+	CustomizeFlags    uint32
+	Ghost             bool
 	PaidCustomization bool
-	PaidRaceChange  bool
+	PaidRaceChange    bool
 	PaidFactionChange bool
-	BackgroundModel string
+	BackgroundModel   string
 }
 
 func registerGlueAPI(rt *Runtime) {
@@ -102,7 +102,7 @@ func registerGlueAPI(rt *Runtime) {
 	reg("IsMacClient", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
 	reg("IsLinuxClient", func(L *lua.LState) int { L.Push(lua.LBool(runtime.GOOS == "linux")); return 1 })
 	reg("GetLocale", func(L *lua.LState) int { L.Push(lua.LString("enUS")); return 1 })
-	reg("GetClientExpansionLevel", func(L *lua.LState) int { L.Push(lua.LNumber(2)); return 1 })
+	reg("GetClientExpansionLevel", func(L *lua.LState) int { L.Push(lua.LNumber(3)); return 1 })
 	reg("GetAccountExpansionLevel", func(L *lua.LState) int { L.Push(lua.LNumber(2)); return 1 })
 	reg("IsShiftKeyDown", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
 
@@ -143,6 +143,8 @@ func registerGlueAPI(rt *Runtime) {
 	reg("GetCVar", func(L *lua.LState) int {
 		if v, ok := rt.GetCVar(L.CheckString(1)); ok {
 			L.Push(lua.LString(v))
+		} else if value, ok := defaultCVarValue(L.CheckString(1)); ok {
+			L.Push(lua.LString(value))
 		} else {
 			L.Push(lua.LString("0"))
 		}
@@ -168,11 +170,16 @@ func registerGlueAPI(rt *Runtime) {
 			value = L.Get(2).String()
 		}
 		rt.SetCVar(name, value)
+		if host, ok := rt.Host.(AudioHost); ok {
+			host.SetAudioCVar(name, value)
+		}
 		return 0
 	})
 	reg("GetCVarDefault", func(L *lua.LState) int {
 		if v, ok := rt.cvarDefaults[strings.ToLower(L.CheckString(1))]; ok {
 			L.Push(lua.LString(v))
+		} else if value, ok := defaultCVarValue(L.CheckString(1)); ok {
+			L.Push(lua.LString(value))
 		} else {
 			L.Push(lua.LString("0"))
 		}
@@ -227,6 +234,33 @@ func registerGlueAPI(rt *Runtime) {
 	reg("PlayCreditsMusic", func(L *lua.LState) int {
 		if rt.Host != nil {
 			rt.Host.PlayMusic(L.CheckString(1))
+		}
+		return 0
+	})
+	reg("ActionStatus_DisplayMessage", func(L *lua.LState) int { return 0 })
+	reg("Sound_ToggleMusic", func(L *lua.LState) int {
+		value, ok := rt.GetCVar("Sound_EnableMusic")
+		if !ok {
+			value, _ = defaultCVarValue("Sound_EnableMusic")
+		}
+		if value == "0" {
+			rt.SetCVar("Sound_EnableMusic", "1")
+		} else {
+			rt.SetCVar("Sound_EnableMusic", "0")
+		}
+		return 0
+	})
+	reg("Sound_ToggleSound", func(L *lua.LState) int {
+		value, ok := rt.GetCVar("Sound_EnableSFX")
+		if !ok {
+			value, _ = defaultCVarValue("Sound_EnableSFX")
+		}
+		if value == "0" {
+			rt.SetCVar("Sound_EnableSFX", "1")
+			rt.SetCVar("Sound_EnableAmbience", "1")
+		} else {
+			rt.SetCVar("Sound_EnableSFX", "0")
+			rt.SetCVar("Sound_EnableAmbience", "0")
 		}
 		return 0
 	})
@@ -373,8 +407,8 @@ func registerGlueAPI(rt *Runtime) {
 		}
 		c := rt.Glue.Characters[idx-1]
 		L.Push(lua.LString(c.Name))
-		L.Push(lua.LString(c.Race))
-		L.Push(lua.LString(c.Class))
+		L.Push(lua.LString(localizedValue(L, c.Race)))
+		L.Push(lua.LString(localizedValue(L, c.Class)))
 		L.Push(lua.LNumber(c.Level))
 		L.Push(lua.LString(c.Zone))
 		L.Push(lua.LNumber(c.Gender))
@@ -629,6 +663,22 @@ func kindFromObjectType(objectType string) widgetKind {
 	default:
 		return kindFrame
 	}
+}
+
+func defaultCVarValue(name string) (string, bool) {
+	switch strings.ToLower(name) {
+	case "sound_enableallsound", "sound_enablemusic", "sound_enablesfx", "sound_enableambience", "sound_mastervolume", "sound_musicvolume", "sound_sfxvolume", "sound_ambiencevolume":
+		return "1", true
+	default:
+		return "", false
+	}
+}
+
+func localizedValue(L *lua.LState, key string) string {
+	if value := L.GetGlobal(key); value.Type() == lua.LTString {
+		return value.String()
+	}
+	return key
 }
 
 // registerStringHelpers installs the string-function globals the interface

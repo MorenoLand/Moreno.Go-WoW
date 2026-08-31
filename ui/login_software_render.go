@@ -1,17 +1,20 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
 	_ "image/jpeg" // register JPEG decoder for image.Decode
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/g3n/engine/window"
+	mpeg4 "github.com/mgvs/go-mpeg4"
 	lua "github.com/yuin/gopher-lua"
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
@@ -37,6 +40,8 @@ type UIEngine struct {
 	rects        map[*widget]Rect
 	layoutActive map[*widget]bool
 	textFaces    map[string]font.Face
+	movieFile    string
+	movieImage   image.Image
 }
 
 func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, error) {
@@ -117,6 +122,9 @@ func newUIEngine(rt *Runtime, loader *Loader, bgImagePath string) (*UIEngine, er
 	if dialog := rt.widgets["ChangedOptionsDialog"]; dialog != nil {
 		dialog.shown = false
 	}
+	if data, err := loader.ReadFile("Interface\\FrameXML\\Sound.lua"); err == nil {
+		rt.doFileBody(string(data), "Interface\\FrameXML\\Sound.lua")
+	}
 
 	rt.Execute("GlueParent_OnEvent('FRAMES_LOADED')", "@render.lua")
 	rt.FireEvent("FRAMES_LOADED")
@@ -164,6 +172,39 @@ func (eng *UIEngine) Close() {
 		_ = eng.AssetLoader.Close()
 		eng.AssetLoader = nil
 	}
+}
+
+func (eng *UIEngine) Update(elapsed float64) {
+	if elapsed <= 0 {
+		return
+	}
+	var update func(*widget)
+	update = func(w *widget) {
+		if !w.shown {
+			return
+		}
+		eng.Rt.fire(w, "OnUpdate", []lua.LValue{w.luaValue(eng.Rt.L), lua.LNumber(elapsed)})
+		for _, child := range w.children {
+			update(child)
+		}
+	}
+	if root := eng.Rt.widgets["GlueParent"]; root != nil {
+		for _, child := range root.children {
+			update(child)
+		}
+	}
+}
+
+func (eng *UIEngine) drawMovieFrame(canvas *image.RGBA, dst image.Rectangle, frame image.Image) {
+	if dst.Dx() <= 0 || dst.Dy() <= 0 || frame.Bounds().Dx() <= 0 || frame.Bounds().Dy() <= 0 {
+		return
+	}
+	scale := math.Min(float64(dst.Dx())/float64(frame.Bounds().Dx()), float64(dst.Dy())/float64(frame.Bounds().Dy()))
+	width := int(float64(frame.Bounds().Dx()) * scale)
+	height := int(float64(frame.Bounds().Dy()) * scale)
+	left := dst.Min.X + (dst.Dx()-width)/2
+	top := dst.Min.Y + (dst.Dy()-height)/2
+	xdraw.BiLinear.Scale(canvas, image.Rect(left, top, left+width, top+height), frame, frame.Bounds(), xdraw.Src, nil)
 }
 
 // resolveText looks up a string that may be a Lua global (e.g. "ACCOUNT_NAME")
@@ -302,6 +343,27 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 
 		case kindEditBox:
 			eng.drawEditBoxBg(canvas, scaledRect)
+		case kindMovieFrame:
+			if w.movieActive {
+				if eng.movieFile != w.movieFile {
+					eng.movieFile = w.movieFile
+					cacheKey := "movie:" + strings.ToLower(w.movieFile)
+					if frame, ok := eng.Cache[cacheKey]; ok {
+						eng.movieImage = frame
+					} else if data, err := eng.AssetLoader.ReadFile(w.movieFile + ".avi"); err == nil {
+						frame, decodeErr := mpeg4.DecodeAVIFirstFrame(bytes.NewReader(data))
+						if decodeErr == nil {
+							eng.movieImage = frame
+						}
+						eng.Cache[cacheKey] = eng.movieImage
+					}
+				}
+				dst := ScreenRect(rect, float64(canvas.Bounds().Dy()))
+				draw.Draw(canvas, dst, &image.Uniform{C: color.Black}, image.Point{}, draw.Src)
+				if eng.movieImage != nil {
+					eng.drawMovieFrame(canvas, dst, eng.movieImage)
+				}
+			}
 		}
 
 		if w.kind == kindButton || w.kind == kindCheckButton {
@@ -484,7 +546,7 @@ func (eng *UIEngine) SetStatusKey(key string) {
 func (eng *UIEngine) SetInitialCredentials(account, password string, rememberMe bool) {
 	eng.rememberMe = rememberMe
 	eng.Rt.SetCVar("accountName", account)
-	eng.Rt.Execute("for _, name in ipairs({'VideoOptionsFrame', 'AudioOptionsFrame', 'OptionsSelectFrame', 'RealmList', 'AddonList', 'GlueDialog'}) do local frame = _G[name]; if frame then frame:Hide() end end", "@credentials.lua")
+	eng.Rt.Execute("for _, name in ipairs({'VideoOptionsFrame', 'AudioOptionsFrame', 'OptionsSelectFrame', 'CinematicsFrame', 'MovieFrame', 'RealmList', 'AddonList', 'GlueDialog'}) do local frame = _G[name]; if frame then frame:Hide() end end", "@credentials.lua")
 	eng.Rt.Execute("GlueParent_OnEvent('SET_GLUE_SCREEN', 'login')", "@credentials.lua")
 	eng.Rt.Execute("SetGlueScreen('login')", "@credentials.lua")
 	eng.Rt.FireEvent("SET_GLUE_SCREEN", lua.LString("login"))
@@ -502,7 +564,7 @@ func (eng *UIEngine) SetInitialCredentials(account, password string, rememberMe 
 func (eng *UIEngine) SetGlueState(state GlueState) {
 	eng.Rt.Glue = state
 	eng.statusKey = ""
-	eng.Rt.Execute("for _, name in ipairs({'VideoOptionsFrame', 'AudioOptionsFrame', 'OptionsSelectFrame', 'RealmList', 'AddonList', 'GlueDialog'}) do local frame = _G[name]; if frame then frame:Hide() end end", "@network.lua")
+	eng.Rt.Execute("for _, name in ipairs({'VideoOptionsFrame', 'AudioOptionsFrame', 'OptionsSelectFrame', 'CinematicsFrame', 'MovieFrame', 'RealmList', 'AddonList', 'GlueDialog'}) do local frame = _G[name]; if frame then frame:Hide() end end", "@network.lua")
 	eng.Rt.Execute("GlueParent_OnEvent('SET_GLUE_SCREEN', 'charselect')", "@network.lua")
 	eng.Rt.Execute("SetGlueScreen('charselect')", "@network.lua")
 	eng.Rt.FireEvent("SET_GLUE_SCREEN", lua.LString("charselect"))
@@ -650,6 +712,20 @@ func (eng *UIEngine) HandleKey(key window.Key) bool {
 	return true
 }
 
+func (eng *UIEngine) HandleKeyWithMods(key window.Key, mods window.ModifierKey) bool {
+	if eng.Rt.focused == nil && mods&window.ModControl != 0 {
+		switch key {
+		case window.KeyM:
+			eng.Rt.Execute("Sound_ToggleMusic()", "@bindings.lua")
+			return true
+		case window.KeyS:
+			eng.Rt.Execute("Sound_ToggleSound()", "@bindings.lua")
+			return true
+		}
+	}
+	return eng.HandleKey(key)
+}
+
 func (eng *UIEngine) isLoginTarget(target *widget) bool {
 	for current := target; current != nil; current = current.parent {
 		if current.name == "AccountLogin" {
@@ -669,6 +745,10 @@ func (eng *UIEngine) HandleKeyUp(key window.Key) bool {
 		return false
 	}
 	eng.Rt.fire(target, "OnKeyUp", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString(name)})
+	if target.name == "MovieFrame" && !target.shown {
+		eng.Rt.Execute("SetGlueScreen('login')", "@movie.lua")
+		eng.Rt.FireEvent("SET_GLUE_SCREEN", lua.LString("login"))
+	}
 	return true
 }
 

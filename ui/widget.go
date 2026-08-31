@@ -144,7 +144,9 @@ type widget struct {
 	hasFog          bool
 
 	// MovieFrame state.
-	subtitles bool
+	subtitles   bool
+	movieFile   string
+	movieActive bool
 
 	// Texture state.
 	textureFile                                string
@@ -865,15 +867,23 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.hasFog = false
 			return 0
 		},
-		"SetLight":    func(L *lua.LState, w *widget) int { return 0 },
-		"ResetLights": func(L *lua.LState, w *widget) int { return 0 },
+		"SetLight":          func(L *lua.LState, w *widget) int { return 0 },
+		"ResetLights":       func(L *lua.LState, w *widget) int { return 0 },
 		"AddCharacterLight": func(L *lua.LState, w *widget) int { return 0 },
-		"AddLight": func(L *lua.LState, w *widget) int { return 0 },
-		"AddPetLight": func(L *lua.LState, w *widget) int { return 0 },
-		"SetPosition": func(L *lua.LState, w *widget) int { return 0 },
-		"AdvanceTime": func(L *lua.LState, w *widget) int { return 0 },
-		"StartMovie":  func(L *lua.LState, w *widget) int { return 0 },
-		"StopMovie":   func(L *lua.LState, w *widget) int { return 0 },
+		"AddLight":          func(L *lua.LState, w *widget) int { return 0 },
+		"AddPetLight":       func(L *lua.LState, w *widget) int { return 0 },
+		"SetPosition":       func(L *lua.LState, w *widget) int { return 0 },
+		"AdvanceTime":       func(L *lua.LState, w *widget) int { return 0 },
+		"StartMovie": func(L *lua.LState, w *widget) int {
+			w.movieFile = L.CheckString(2)
+			w.movieActive = true
+			L.Push(lua.LTrue)
+			return 1
+		},
+		"StopMovie": func(L *lua.LState, w *widget) int {
+			w.movieActive = false
+			return 0
+		},
 		"EnableSubtitles": func(L *lua.LState, w *widget) int {
 			w.subtitles = L.CheckBool(2)
 			return 0

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/MorenoLand/Moreno.WoW/config"
 	"github.com/MorenoLand/Moreno.WoW/network"
@@ -34,17 +35,47 @@ type clientHost struct {
 	startLogin   func(string, string)
 	enterWorld   func(int)
 	quit         func()
+	audio        *audioManager
 	loginRunning bool
 }
 
 func (h *clientHost) ScreenSize() (float64, float64) { return h.width, h.height }
-func (h *clientHost) PlaySound(string)               {}
-func (h *clientHost) PlayMusic(string)               {}
-func (h *clientHost) PlayAmbience(string)            {}
-func (h *clientHost) StopMusic()                     {}
-func (h *clientHost) StopAmbience()                  {}
-func (h *clientHost) StopAllSFX()                    {}
-func (h *clientHost) LaunchURL(string)               {}
+func (h *clientHost) PlaySound(name string) {
+	if h.audio != nil {
+		h.audio.PlaySound(name)
+	}
+}
+func (h *clientHost) PlayMusic(name string) {
+	if h.audio != nil {
+		h.audio.PlayMusic(name)
+	}
+}
+func (h *clientHost) PlayAmbience(name string) {
+	if h.audio != nil {
+		h.audio.PlayAmbience(name)
+	}
+}
+func (h *clientHost) StopMusic() {
+	if h.audio != nil {
+		h.audio.StopMusic()
+	}
+}
+func (h *clientHost) StopAmbience() {
+	if h.audio != nil {
+		h.audio.StopAmbience()
+	}
+}
+func (h *clientHost) StopAllSFX() {
+	if h.audio != nil {
+		h.audio.StopAllSFX()
+	}
+}
+func (h *clientHost) SetAudioCVar(name, value string) {
+	if h.audio != nil {
+		h.audio.SetAudioCVar(name, value)
+	}
+}
+func (h *clientHost) LaunchURL(string) {}
 func (h *clientHost) Quit(bool) {
 	if h.quit != nil {
 		h.quit()
@@ -128,6 +159,14 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		uiEngine = eng
 		defer uiEngine.Close()
 		uiEngine.Rt.Host = host
+		if audio, audioErr := newAudioManager(uiEngine.AssetLoader, debug); audioErr != nil {
+			if debug {
+				log.Printf("audio: %v", audioErr)
+			}
+		} else {
+			host.audio = audio
+			defer audio.Close()
+		}
 		uiEngine.SetInitialCredentials(clientConfig.Account, clientConfig.Password, rememberMe)
 		if lastCharacter != "" {
 			uiEngine.Rt.SetCVar("lastCharacter", lastCharacter)
@@ -202,7 +241,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		})
 		win.Subscribe(window.OnKeyDown, func(_ string, event interface{}) {
 			key := event.(*window.KeyEvent)
-			if uiEngine.HandleKey(key.Key) {
+			if uiEngine.HandleKeyWithMods(key.Key, key.Mods) {
 				refresh()
 			}
 		})
@@ -218,6 +257,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
+	lastUpdate := time.Now()
 	for !win.ShouldClose() {
 		select {
 		case <-signals:
@@ -225,6 +265,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		default:
 		}
 		if uiEngine != nil {
+			now := time.Now()
+			uiEngine.Update(now.Sub(lastUpdate).Seconds())
+			lastUpdate = now
 			select {
 			case result := <-results:
 				host.loginRunning = false

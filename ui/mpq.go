@@ -66,12 +66,12 @@ type mpqFileRef struct {
 }
 
 type mpqSet struct {
-	archives []*mpqArchive
-	locale   uint16
-	files    map[string]mpqFileRef
-	loose    map[string]string
+	archives   []*mpqArchive
+	locale     uint16
+	files      map[string]mpqFileRef
+	loose      map[string]string
 	looseRoots []string
-	missing  map[string]struct{}
+	missing    map[string]struct{}
 }
 
 func openMPQSet(dataPath, locale string) (*mpqSet, error) {

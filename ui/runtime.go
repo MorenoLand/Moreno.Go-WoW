@@ -81,6 +81,10 @@ type WorldHost interface {
 	EnterWorld(index int)
 }
 
+type AudioHost interface {
+	SetAudioCVar(name, value string)
+}
+
 // Font is a named font object created from a <Font> element.
 type Font struct {
 	Name     string
