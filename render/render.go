@@ -16,6 +16,7 @@ import (
 	"github.com/g3n/engine/core"
 	"github.com/g3n/engine/gls"
 	"github.com/g3n/engine/gui"
+	"github.com/g3n/engine/math32"
 	"github.com/g3n/engine/renderer"
 	"github.com/g3n/engine/texture"
 	"github.com/g3n/engine/window"
@@ -111,8 +112,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		log.Printf("renderer: %v", err)
 		return
 	}
+	installM2Shaders(r)
 	scene := core.NewNode()
 	gui.Manager().Set(scene)
+	cam := camera.New(1)
+	resetSceneCamera(cam)
+	scene.Add(cam)
 	host := &clientHost{width: 960, height: 640}
 	results := make(chan loginResult, 1)
 	var uiEngine *ui.UIEngine
@@ -148,6 +153,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var uiImage *gui.Image
 	var eng *ui.UIEngine
 	var err error
+	var sceneModel *core.Node
+	sceneModelPath := ""
+	sceneCameraDiagonalFOV := float32(0)
+	var setSceneModel func()
 	if dataPath != "" {
 		eng, err = ui.LoadUIEngineFromMPQ(dataPath, clientConfig.Locale, backgroundPath)
 	} else if root := resolveInterfaceRoot(dataPath, interfacePath); root != "" {
@@ -171,7 +180,47 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		if lastCharacter != "" {
 			uiEngine.Rt.SetCVar("lastCharacter", lastCharacter)
 		}
-		uiImage = gui.NewImageFromRGBA(eng.Render(960, 640))
+		setSceneModel = func() {
+			path := uiEngine.CurrentModelPath()
+			if path == sceneModelPath {
+				return
+			}
+			if sceneModel != nil {
+				scene.Remove(sceneModel)
+				sceneModel.Dispose()
+				sceneModel = nil
+			}
+			resetSceneCamera(cam)
+			sceneCameraDiagonalFOV = 0
+			sceneModelPath = path
+			uiEngine.SetSceneBackground(false)
+			if path == "" {
+				return
+			}
+			if debug {
+				log.Printf("scene: loading %s", path)
+			}
+			model, modelErr := loadGlueModel(uiEngine.AssetLoader, path)
+			if modelErr != nil {
+				if debug {
+					log.Printf("model %s: %v", path, modelErr)
+				}
+				return
+			}
+			sceneModel = model
+			scene.Add(sceneModel)
+			if info, ok := sceneModel.UserData().(glueModelInfo); ok {
+				sceneCameraDiagonalFOV = info.fov
+			}
+			configureSceneCamera(cam, sceneModel)
+			uiEngine.SetSceneBackground(true)
+			if debug {
+				log.Printf("scene: loaded %s with %d parts", path, len(sceneModel.Children()))
+			}
+		}
+		setSceneModel()
+		initialUI := eng.Render(960, 640)
+		uiImage = gui.NewImageFromRGBA(initialUI)
 		uiImage.SetPosition(0, 0)
 		scene.Add(uiImage)
 	}
@@ -198,18 +247,19 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		if width < 1 || height < 1 {
 			return
 		}
+		if setSceneModel != nil {
+			setSceneModel()
+		}
 		uiImage.SetTexture(texture.NewTexture2DFromRGBA(uiEngine.Render(width, height)))
 		uiImage.SetSize(float32(width), float32(height))
 	}
 
-	cam := camera.New(1)
-	cam.SetPosition(0, 0, 3)
-	scene.Add(cam)
 	onResize := func(string, interface{}) {
 		width, height := win.GetSize()
 		gl.Viewport(0, 0, int32(width), int32(height))
 		if height > 0 {
 			cam.SetAspect(float32(width) / float32(height))
+			setSceneCameraFOV(cam, sceneCameraDiagonalFOV)
 		}
 		refresh()
 	}
@@ -295,7 +345,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 		}
 		gl.Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
-		_ = r.Render(scene, cam)
+		if renderErr := r.Render(scene, cam); renderErr != nil && debug {
+			log.Printf("render: %v", renderErr)
+		}
 		win.SwapBuffers()
 		win.PollEvents()
 	}
@@ -365,4 +417,37 @@ func raceModelName(id uint8) string {
 		return name
 	}
 	return "CharacterSelect"
+}
+
+func resetSceneCamera(cam *camera.Camera) {
+	cam.SetPosition(0, 0, 3)
+	cam.SetFov(60)
+	cam.SetNear(0.3)
+	cam.SetFar(1000)
+	cam.LookAt(math32.NewVector3(0, 0, 0), math32.NewVector3(0, 1, 0))
+}
+
+func configureSceneCamera(cam *camera.Camera, model *core.Node) {
+	resetSceneCamera(cam)
+	info, ok := model.UserData().(glueModelInfo)
+	if !ok {
+		return
+	}
+	cam.SetPositionVec(&info.position)
+	cam.LookAt(&info.target, math32.NewVector3(0, 1, 0))
+	setSceneCameraFOV(cam, info.fov)
+	if info.near > 0 {
+		cam.SetNear(info.near)
+	}
+	if info.far > info.near {
+		cam.SetFar(info.far)
+	}
+}
+
+func setSceneCameraFOV(cam *camera.Camera, diagonal float32) {
+	if diagonal <= 0 {
+		return
+	}
+	vertical := 2 * math32.Atan(math32.Tan(diagonal/2)/math32.Sqrt(cam.Aspect()*cam.Aspect()+1))
+	cam.SetFov(math32.RadToDeg(vertical))
 }

@@ -23,25 +23,26 @@ import (
 )
 
 type UIEngine struct {
-	Rt           *Runtime
-	FontObj      *opentype.Font
-	FontObjSm    *opentype.Font
-	AssetLoader  *Loader
-	Cache        map[string]image.Image
-	BgImagePath  string // Path to a static background image (JPEG/PNG)
-	statusKey    string
-	rememberMe   bool
-	pressed      *widget
-	hovered      *widget
-	screen       Rect
-	uiScale      float64
-	screenWidth  int
-	screenHeight int
-	rects        map[*widget]Rect
-	layoutActive map[*widget]bool
-	textFaces    map[string]font.Face
-	movieFile    string
-	movieImage   image.Image
+	Rt              *Runtime
+	FontObj         *opentype.Font
+	FontObjSm       *opentype.Font
+	AssetLoader     *Loader
+	Cache           map[string]image.Image
+	BgImagePath     string // Path to a static background image (JPEG/PNG)
+	statusKey       string
+	rememberMe      bool
+	pressed         *widget
+	hovered         *widget
+	screen          Rect
+	uiScale         float64
+	screenWidth     int
+	screenHeight    int
+	rects           map[*widget]Rect
+	layoutActive    map[*widget]bool
+	textFaces       map[string]font.Face
+	movieFile       string
+	movieImage      image.Image
+	sceneBackground bool
 }
 
 func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, error) {
@@ -401,6 +402,13 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 		status := eng.resolveText(eng.statusKey)
 		drawTextAligned(canvas, face, status, screenScaledRect(Rect{X0: 80, Y0: 96, X1: virtualWidth - 80, Y1: 128}, uiScale), float64(screenHeight), color.RGBA{R: 255, G: 100, B: 80, A: 255}, "CENTER")
 	}
+	if eng.sceneBackground {
+		for index := 3; index < len(canvas.Pix); index += 4 {
+			if canvas.Pix[index] == 0 {
+				canvas.Pix[index] = 1
+			}
+		}
+	}
 
 	return canvas
 }
@@ -543,9 +551,60 @@ func (eng *UIEngine) SetStatusKey(key string) {
 	eng.statusKey = key
 }
 
+func (eng *UIEngine) SetSceneBackground(enabled bool) { eng.sceneBackground = enabled }
+
+func (eng *UIEngine) CurrentModelPath() string {
+	if frame := eng.Rt.widgets["CharacterSelect"]; frame != nil && frame.shown {
+		if path, ok := eng.Rt.GetCVar("charSelectBackground"); ok && path != "" {
+			return path
+		}
+	}
+	if frame := eng.Rt.widgets["CharacterCreate"]; frame != nil && frame.shown {
+		if path, ok := eng.Rt.GetCVar("charCustomizeBackground"); ok && path != "" {
+			return path
+		}
+	}
+	if frame := eng.Rt.widgets["AccountLogin"]; frame != nil && frame.shown && frame.modelFile != "" {
+		return frame.modelFile
+	}
+	if value, ok := eng.Rt.GetCVar("currentGlueScreen"); ok {
+		switch strings.ToLower(value) {
+		case "charselect":
+			if path, ok := eng.Rt.GetCVar("charSelectBackground"); ok && path != "" {
+				return path
+			}
+		case "charcreate":
+			if path, ok := eng.Rt.GetCVar("charCustomizeBackground"); ok && path != "" {
+				return path
+			}
+		}
+	}
+	var path string
+	var visit func(*widget)
+	visit = func(w *widget) {
+		if path != "" || !w.shown {
+			return
+		}
+		if (w.kind == kindModel || w.kind == kindModelFFX) && w.modelFile != "" {
+			path = w.modelFile
+			return
+		}
+		for _, child := range w.children {
+			visit(child)
+		}
+	}
+	if root := eng.Rt.widgets["GlueParent"]; root != nil {
+		for _, child := range root.children {
+			visit(child)
+		}
+	}
+	return path
+}
+
 func (eng *UIEngine) SetInitialCredentials(account, password string, rememberMe bool) {
 	eng.rememberMe = rememberMe
 	eng.Rt.SetCVar("accountName", account)
+	eng.Rt.SetCVar("currentGlueScreen", "login")
 	eng.Rt.Execute("for _, name in ipairs({'VideoOptionsFrame', 'AudioOptionsFrame', 'OptionsSelectFrame', 'CinematicsFrame', 'MovieFrame', 'RealmList', 'AddonList', 'GlueDialog'}) do local frame = _G[name]; if frame then frame:Hide() end end", "@credentials.lua")
 	eng.Rt.Execute("GlueParent_OnEvent('SET_GLUE_SCREEN', 'login')", "@credentials.lua")
 	eng.Rt.Execute("SetGlueScreen('login')", "@credentials.lua")
@@ -564,6 +623,7 @@ func (eng *UIEngine) SetInitialCredentials(account, password string, rememberMe 
 func (eng *UIEngine) SetGlueState(state GlueState) {
 	eng.Rt.Glue = state
 	eng.statusKey = ""
+	eng.Rt.SetCVar("currentGlueScreen", "charselect")
 	eng.Rt.Execute("for _, name in ipairs({'VideoOptionsFrame', 'AudioOptionsFrame', 'OptionsSelectFrame', 'CinematicsFrame', 'MovieFrame', 'RealmList', 'AddonList', 'GlueDialog'}) do local frame = _G[name]; if frame then frame:Hide() end end", "@network.lua")
 	eng.Rt.Execute("GlueParent_OnEvent('SET_GLUE_SCREEN', 'charselect')", "@network.lua")
 	eng.Rt.Execute("SetGlueScreen('charselect')", "@network.lua")
@@ -836,8 +896,9 @@ func (eng *UIEngine) hitTest(x, y float64) *widget {
 // in software yet, we use the reference screenshot (Wow.jpg / Wow.png) from the
 // config or a fallback gradient.
 func (eng *UIEngine) renderBackground(canvas *image.RGBA, w, h int) {
-	// Try loading a reference background image from the game data directory.
-	// The user has Wow.jpg on the desktop which is the actual game rendering.
+	if eng.sceneBackground {
+		return
+	}
 	bgPaths := []string{}
 	if eng.BgImagePath != "" {
 		bgPaths = append(bgPaths, eng.BgImagePath)

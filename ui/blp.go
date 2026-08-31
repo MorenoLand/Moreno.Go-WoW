@@ -172,10 +172,10 @@ func decodeDXT1Block(block []byte, img *image.RGBA, bx, by int) {
 	palette[0] = [3]uint8{r0, g0, b0}
 	palette[1] = [3]uint8{r1, g1, b1}
 	if c0 > c1 {
-		palette[2] = [3]uint8{(2*r0 + r1) / 3, (2*g0 + g1) / 3, (2*b0 + b1) / 3}
-		palette[3] = [3]uint8{(r0 + 2*r1) / 3, (g0 + 2*g1) / 3, (b0 + 2*b1) / 3}
+		palette[2] = [3]uint8{uint8((2*uint16(r0) + uint16(r1)) / 3), uint8((2*uint16(g0) + uint16(g1)) / 3), uint8((2*uint16(b0) + uint16(b1)) / 3)}
+		palette[3] = [3]uint8{uint8((uint16(r0) + 2*uint16(r1)) / 3), uint8((uint16(g0) + 2*uint16(g1)) / 3), uint8((uint16(b0) + 2*uint16(b1)) / 3)}
 	} else {
-		palette[2] = [3]uint8{(r0 + r1) / 2, (g0 + g1) / 2, (b0 + b1) / 2}
+		palette[2] = [3]uint8{uint8((uint16(r0) + uint16(r1)) / 2), uint8((uint16(g0) + uint16(g1)) / 2), uint8((uint16(b0) + uint16(b1)) / 2)}
 		palette[3] = [3]uint8{0, 0, 0}
 	}
 	bits := binary.LittleEndian.Uint32(block[4:8])
@@ -202,8 +202,8 @@ func decodeDXT3Block(block []byte, img *image.RGBA, bx, by int) {
 	r1, g1, b1 := rgb565(c1)
 	palette := [4][3]uint8{
 		{r0, g0, b0}, {r1, g1, b1},
-		{(2*r0 + r1) / 3, (2*g0 + g1) / 3, (2*b0 + b1) / 3},
-		{(r0 + 2*r1) / 3, (g0 + 2*g1) / 3, (b0 + 2*b1) / 3},
+		{uint8((2*uint16(r0) + uint16(r1)) / 3), uint8((2*uint16(g0) + uint16(g1)) / 3), uint8((2*uint16(b0) + uint16(b1)) / 3)},
+		{uint8((uint16(r0) + 2*uint16(r1)) / 3), uint8((uint16(g0) + 2*uint16(g1)) / 3), uint8((uint16(b0) + 2*uint16(b1)) / 3)},
 	}
 	bits := binary.LittleEndian.Uint32(block[12:16])
 	for py := 0; py < 4; py++ {
@@ -251,8 +251,8 @@ func decodeDXT5Block(block []byte, img *image.RGBA, bx, by int) {
 	r1, g1, b1 := rgb565(c1)
 	palette := [4][3]uint8{
 		{r0, g0, b0}, {r1, g1, b1},
-		{(2*r0 + r1) / 3, (2*g0 + g1) / 3, (2*b0 + b1) / 3},
-		{(r0 + 2*r1) / 3, (g0 + 2*g1) / 3, (b0 + 2*b1) / 3},
+		{uint8((2*uint16(r0) + uint16(r1)) / 3), uint8((2*uint16(g0) + uint16(g1)) / 3), uint8((2*uint16(b0) + uint16(b1)) / 3)},
+		{uint8((uint16(r0) + 2*uint16(r1)) / 3), uint8((uint16(g0) + 2*uint16(g1)) / 3), uint8((uint16(b0) + 2*uint16(b1)) / 3)},
 	}
 	bits := binary.LittleEndian.Uint32(block[12:16])
 	for py := 0; py < 4; py++ {

@@ -451,8 +451,8 @@ func registerGlueAPI(rt *Runtime) {
 	reg("CycleCharCustomization", func(L *lua.LState) int { return 0 })
 	reg("UpdateCustomizationScene", func(L *lua.LState) int { return 0 })
 	reg("UpdateSelectionCustomizationScene", func(L *lua.LState) int { return 0 })
-	reg("SetCharCustomizeBackground", func(L *lua.LState) int { return 0 })
-	reg("SetCharSelectBackground", func(L *lua.LState) int { return 0 })
+	reg("SetCharCustomizeBackground", func(L *lua.LState) int { rt.SetCVar("charCustomizeBackground", L.CheckString(1)); return 0 })
+	reg("SetCharSelectBackground", func(L *lua.LState) int { rt.SetCVar("charSelectBackground", L.CheckString(1)); return 0 })
 	reg("ReadyForAccountDataTimes", func(L *lua.LState) int { return 0 })
 	reg("RequestRealmSplitInfo", func(L *lua.LState) int { return 0 })
 
