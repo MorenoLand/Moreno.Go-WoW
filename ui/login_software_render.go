@@ -618,16 +618,19 @@ func (eng *UIEngine) setEditCursorAt(w *widget, x float64, extend bool) {
 	}
 	dst := ScreenRect(screenScaledRect(textRect, scale), float64(eng.screenHeight))
 	origin := eng.editTextOrigin(face, string(display), dst, eng.editTextWidget(w))
-	position := (x - float64(origin)) / scale
-	for index := 0; index < len(display); index++ {
-		left := float64(font.MeasureString(face, string(display[:index])).Ceil())
-		right := float64(font.MeasureString(face, string(display[:index+1])).Ceil())
+	position := x - float64(origin)
+	moveEditCursor(w, editCursorIndex(face, display, position), extend)
+}
+
+func editCursorIndex(face font.Face, text []rune, position float64) int {
+	for index := 0; index < len(text); index++ {
+		left := float64(font.MeasureString(face, string(text[:index])).Ceil())
+		right := float64(font.MeasureString(face, string(text[:index+1])).Ceil())
 		if position < (left+right)/2 {
-			moveEditCursor(w, index, extend)
-			return
+			return index
 		}
 	}
-	moveEditCursor(w, len(display), extend)
+	return len(text)
 }
 
 func (eng *UIEngine) drawEditText(canvas *image.RGBA, face, faceLg font.Face, w *widget, rect Rect, screenHeight float64) {

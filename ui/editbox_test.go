@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/g3n/engine/window"
+	"golang.org/x/image/font/basicfont"
 )
 
 func TestEditBoxSelectionReplacement(t *testing.T) {
@@ -19,6 +20,12 @@ func TestEditBoxSelectionReplacement(t *testing.T) {
 	eng := &UIEngine{Rt: rt}
 	if !eng.HandleChar('x') || edit.text != "x" || edit.cursor != 1 {
 		t.Fatalf("replacement text=%q cursor=%d", edit.text, edit.cursor)
+	}
+}
+
+func TestEditBoxCursorUsesPhysicalTextPosition(t *testing.T) {
+	if position := editCursorIndex(basicfont.Face7x13, []rune("abcd"), 14); position != 2 {
+		t.Fatalf("cursor index=%d", position)
 	}
 }
 
