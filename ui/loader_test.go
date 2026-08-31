@@ -128,6 +128,22 @@ func TestFontShadowLoadsFromXML(t *testing.T) {
 	}
 }
 
+func TestZeroHeightFontStringAutosizes(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"Interface/GlueXML/Font.xml": `<Ui><Font name="TestFont" font="Fonts\FRIZQT__.TTF" virtual="true"><FontHeight><AbsValue val="12"/></FontHeight></Font><Frame name="Panel"><Layers><Layer><FontString name="Body" inherits="TestFont"><Size x="220" y="0"/></FontString></Layer></Layers></Frame></Ui>`,
+	})
+	rt := NewRuntime(nil)
+	defer rt.Close()
+	loader := NewLoader(root, rt)
+	if err := loader.LoadInterfaceFile("Interface\\GlueXML\\Font.xml"); err != nil {
+		t.Fatal(err)
+	}
+	body := rt.lookup("Body")
+	if body == nil || !body.autoTextHeight || body.explicitHeight {
+		t.Fatalf("zero-height FontString = %#v", body)
+	}
+}
+
 func TestScriptParamsAndEvents(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"Interface/GlueXML/E.xml": `<Ui>

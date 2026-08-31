@@ -1,10 +1,13 @@
 package ui
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
+	"image/jpeg"
 )
 
 // BLP2 texture decoding for interface assets. Format reference: the
@@ -20,6 +23,7 @@ const (
 	blpEncodingAlpha  = 1
 	blpEncodingDXT    = 2
 	blpEncodingUncomp = 3
+	blpHeaderSize     = 0x494
 )
 
 // DecodeBLP decodes the first (largest) mip level of a BLP2 texture.
@@ -35,6 +39,7 @@ func DecodeBLP(data []byte) (image.Image, error) {
 	// data[9] is the alpha depth (0, 1, 4, 8)
 	encoding := data[8]
 	alphaDepth := uint32(data[9])
+	alphaType := data[10]
 	width := int(binary.LittleEndian.Uint32(data[12:16]))
 	height := int(binary.LittleEndian.Uint32(data[16:20]))
 	if width <= 0 || height <= 0 || width > 4096 || height > 4096 {
@@ -52,15 +57,20 @@ func DecodeBLP(data []byte) (image.Image, error) {
 	switch encoding {
 	case blpEncodingAlpha:
 		var palette [256]color.RGBA
-		if len(data) >= 148+1024 {
-			palData := data[148 : 148+1024]
-			for i := 0; i < 256; i++ {
-				palette[i] = color.RGBA{R: palData[i*4+2], G: palData[i*4+1], B: palData[i*4+0], A: 255}
-			}
+		if len(data) < blpHeaderSize {
+			return nil, fmt.Errorf("blp: palette out of range")
+		}
+		palData := data[148:blpHeaderSize]
+		for i := 0; i < 256; i++ {
+			palette[i] = color.RGBA{R: palData[i*4+2], G: palData[i*4+1], B: palData[i*4+0], A: 255}
 		}
 		return decodeBLPPalette(mip, width, height, alphaDepth, palette)
-	case blpEncodingDXT, blpEncodingUncomp:
-		return decodeBLPDXT(mip, width, height, alphaDepth)
+	case blpEncodingDXT:
+		return decodeBLPDXT(mip, width, height, alphaDepth, alphaType)
+	case blpEncodingUncomp:
+		return decodeBLPRaw(mip, width, height)
+	case blpEncodingJPEG:
+		return decodeBLPJPEG(data, mip, width, height)
 	}
 	return nil, fmt.Errorf("blp: unknown encoding %d", encoding)
 }
@@ -71,7 +81,8 @@ func decodeBLPPalette(mip []byte, width, height int, alphaDepth uint32, palette 
 		return nil, fmt.Errorf("blp: palette pixel data short (%d < %d)", len(pixels), width*height)
 	}
 	img := image.NewNRGBA(image.Rect(0, 0, width, height))
-	if alphaDepth == 8 {
+	switch alphaDepth {
+	case 8:
 		alpha := pixels[width*height:]
 		if len(alpha) < width*height {
 			return nil, fmt.Errorf("blp: alpha data short")
@@ -83,7 +94,25 @@ func decodeBLPPalette(mip []byte, width, height int, alphaDepth uint32, palette 
 				img.Set(x, y, color.NRGBA{R: c.R, G: c.G, B: c.B, A: c.A})
 			}
 		}
-	} else if alphaDepth == 1 {
+	case 4:
+		alpha := pixels[width*height:]
+		if len(alpha) < (width*height+1)/2 {
+			return nil, fmt.Errorf("blp: alpha data short")
+		}
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				c := palette[pixels[y*width+x]]
+				index := y*width + x
+				nibble := alpha[index/2]
+				if index&1 != 0 {
+					nibble >>= 4
+				} else {
+					nibble &= 0x0f
+				}
+				img.Set(x, y, color.NRGBA{R: c.R, G: c.G, B: c.B, A: nibble | nibble<<4})
+			}
+		}
+	case 1:
 		alphaBits := pixels[width*height:]
 		need := (width*height + 7) / 8
 		if len(alphaBits) < need {
@@ -99,21 +128,23 @@ func decodeBLPPalette(mip []byte, width, height int, alphaDepth uint32, palette 
 				img.Set(x, y, color.NRGBA{R: c.R, G: c.G, B: c.B, A: c.A})
 			}
 		}
-	} else {
+	case 0:
 		for y := 0; y < height; y++ {
 			for x := 0; x < width; x++ {
 				c := palette[pixels[y*width+x]]
 				img.Set(x, y, color.NRGBA{R: c.R, G: c.G, B: c.B, A: c.A})
 			}
 		}
+	default:
+		return nil, fmt.Errorf("blp: unsupported palette alpha depth %d", alphaDepth)
 	}
 	return img, nil
 }
 
-func decodeBLPDXT(mip []byte, width, height int, alphaDepth uint32) (image.Image, error) {
+func decodeBLPDXT(mip []byte, width, height int, alphaDepth uint32, alphaType uint8) (image.Image, error) {
 	img := image.NewNRGBA(image.Rect(0, 0, width, height))
-	switch alphaDepth {
-	case 0: // DXT1
+	switch alphaType {
+	case 0:
 		need := ((width + 3) / 4) * ((height + 3) / 4) * 8
 		if len(mip) < need {
 			return nil, fmt.Errorf("blp: dxt1 data short (%d < %d)", len(mip), need)
@@ -121,21 +152,10 @@ func decodeBLPDXT(mip []byte, width, height int, alphaDepth uint32) (image.Image
 		for by := 0; by < height; by += 4 {
 			for bx := 0; bx < width; bx += 4 {
 				off := ((bx / 4) + (by/4)*((width+3)/4)) * 8
-				decodeDXT1Block(mip[off:off+8], img, bx, by, false)
+				decodeDXT1Block(mip[off:off+8], img, bx, by, alphaDepth == 1)
 			}
 		}
-	case 1: // DXT1 with 1-bit alpha (same layout)
-		need := ((width + 3) / 4) * ((height + 3) / 4) * 8
-		if len(mip) < need {
-			return nil, fmt.Errorf("blp: dxt1a data short")
-		}
-		for by := 0; by < height; by += 4 {
-			for bx := 0; bx < width; bx += 4 {
-				off := ((bx / 4) + (by/4)*((width+3)/4)) * 8
-				decodeDXT1Block(mip[off:off+8], img, bx, by, true)
-			}
-		}
-	case 4: // DXT3
+	case 1:
 		need := ((width + 3) / 4) * ((height + 3) / 4) * 16
 		if len(mip) < need {
 			return nil, fmt.Errorf("blp: dxt3 data short")
@@ -146,7 +166,7 @@ func decodeBLPDXT(mip []byte, width, height int, alphaDepth uint32) (image.Image
 				decodeDXT3Block(mip[off:off+16], img, bx, by)
 			}
 		}
-	case 8: // DXT5
+	case 7:
 		need := ((width + 3) / 4) * ((height + 3) / 4) * 16
 		if len(mip) < need {
 			return nil, fmt.Errorf("blp: dxt5 data short")
@@ -158,8 +178,43 @@ func decodeBLPDXT(mip []byte, width, height int, alphaDepth uint32) (image.Image
 			}
 		}
 	default:
-		return nil, fmt.Errorf("blp: unsupported alpha depth %d", alphaDepth)
+		return nil, fmt.Errorf("blp: unsupported DXT alpha type %d", alphaType)
 	}
+	return img, nil
+}
+
+func decodeBLPRaw(mip []byte, width, height int) (image.Image, error) {
+	need := width * height * 4
+	if len(mip) < need {
+		return nil, fmt.Errorf("blp: raw data short (%d < %d)", len(mip), need)
+	}
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			off := (y*width + x) * 4
+			img.SetNRGBA(x, y, color.NRGBA{R: mip[off+2], G: mip[off+1], B: mip[off], A: mip[off+3]})
+		}
+	}
+	return img, nil
+}
+
+func decodeBLPJPEG(data, mip []byte, width, height int) (image.Image, error) {
+	jpegHeader := []byte{}
+	if len(data) >= 152 {
+		headerSize := int(binary.LittleEndian.Uint32(data[148:152]))
+		if headerSize > 0 && 152+headerSize <= len(data) {
+			jpegHeader = data[152 : 152+headerSize]
+		}
+	}
+	jpegData := make([]byte, 0, len(jpegHeader)+len(mip))
+	jpegData = append(jpegData, jpegHeader...)
+	jpegData = append(jpegData, mip...)
+	decoded, err := jpeg.Decode(bytes.NewReader(jpegData))
+	if err != nil {
+		return nil, fmt.Errorf("blp: jpeg decode: %w", err)
+	}
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
+	draw.Draw(img, img.Bounds(), decoded, image.Point{}, draw.Src)
 	return img, nil
 }
 

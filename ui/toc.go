@@ -683,19 +683,19 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 	if s := merged.child("Size"); s != nil {
 		w.width = attrFloat(s, "x", w.width)
 		w.height = attrFloat(s, "y", w.height)
-		if _, ok := s.attr("x"); ok {
+		if _, ok := s.attr("x"); ok && attrFloat(s, "x", 0) > 0 {
 			w.explicitWidth = true
 		}
-		if _, ok := s.attr("y"); ok {
+		if _, ok := s.attr("y"); ok && attrFloat(s, "y", 0) > 0 {
 			w.explicitHeight = true
 		}
 		if d := s.child("AbsDimension"); d != nil {
 			w.width = attrFloat(d, "x", w.width)
 			w.height = attrFloat(d, "y", w.height)
-			if _, ok := d.attr("x"); ok {
+			if _, ok := d.attr("x"); ok && attrFloat(d, "x", 0) > 0 {
 				w.explicitWidth = true
 			}
-			if _, ok := d.attr("y"); ok {
+			if _, ok := d.attr("y"); ok && attrFloat(d, "y", 0) > 0 {
 				w.explicitHeight = true
 			}
 		}
