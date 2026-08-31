@@ -356,12 +356,11 @@ func parseM2(data []byte) (parsedM2, error) {
 }
 
 type parsedSkin struct {
-	vertices   []uint16
-	indices    []uint16
-	bones      [][4]uint8
-	boneCombos []uint16
-	submeshes  []skinSubmesh
-	batches    []skinBatch
+	vertices  []uint16
+	indices   []uint16
+	bones     [][4]uint8
+	submeshes []skinSubmesh
+	batches   []skinBatch
 }
 
 func parseSkin(data []byte) (parsedSkin, error) {
@@ -380,11 +379,6 @@ func parseSkin(data []byte) (parsedSkin, error) {
 	if err != nil {
 		return parsedSkin{}, err
 	}
-	boneComboCount := int(binary.LittleEndian.Uint32(data[0x2c:0x30]))
-	if boneComboCount < 0 || boneComboCount > 1<<24 || boneComboCount > (len(data)-0x30)/2 {
-		return parsedSkin{}, fmt.Errorf("SKIN bone index table out of range count=%d", boneComboCount)
-	}
-	boneCombos := m2Array{count: boneComboCount, offset: 0x30}
 	submeshes, err := readSkinArray(data, 0x1c, skinSubmeshSize)
 	if err != nil {
 		return parsedSkin{}, err
@@ -393,7 +387,7 @@ func parseSkin(data []byte) (parsedSkin, error) {
 	if err != nil {
 		return parsedSkin{}, err
 	}
-	result := parsedSkin{vertices: make([]uint16, vertices.count), indices: make([]uint16, indices.count), bones: make([][4]uint8, bones.count), boneCombos: make([]uint16, boneCombos.count), submeshes: make([]skinSubmesh, submeshes.count), batches: make([]skinBatch, batches.count)}
+	result := parsedSkin{vertices: make([]uint16, vertices.count), indices: make([]uint16, indices.count), bones: make([][4]uint8, bones.count), submeshes: make([]skinSubmesh, submeshes.count), batches: make([]skinBatch, batches.count)}
 	for index := range result.vertices {
 		result.vertices[index] = binary.LittleEndian.Uint16(data[vertices.offset+index*2:])
 	}
@@ -403,9 +397,6 @@ func parseSkin(data []byte) (parsedSkin, error) {
 	for index := range result.bones {
 		base := bones.offset + index*4
 		result.bones[index] = [4]uint8{data[base], data[base+1], data[base+2], data[base+3]}
-	}
-	for index := range result.boneCombos {
-		result.boneCombos[index] = binary.LittleEndian.Uint16(data[boneCombos.offset+index*2:])
 	}
 	for index := range result.submeshes {
 		base := submeshes.offset + index*skinSubmeshSize
@@ -629,6 +620,9 @@ func decodeM2Quaternion(value uint16) float32 {
 func poseM2Vertex(model parsedM2, skin parsedSkin, local int, vertex m2Vertex, boneComboIndex int) posedM2Vertex {
 	weights := vertex.weights
 	bones := vertex.bones
+	if local >= 0 && local < len(skin.bones) {
+		bones = skin.bones[local]
+	}
 	var position, normal [3]float32
 	weightTotal := 0
 	for slot, weight := range weights {
