@@ -28,6 +28,8 @@ type UIEngine struct {
 	Cache           map[string]image.Image
 	BgImagePath     string // Path to a static background image (JPEG/PNG)
 	statusKey       string
+	statusText      string
+	statusTTL       float64
 	rememberMe      bool
 	pressed         *widget
 	hovered         *widget
@@ -179,6 +181,15 @@ func (eng *UIEngine) Update(elapsed float64) bool {
 	if elapsed <= 0 {
 		return false
 	}
+	statusChanged := false
+	if eng.statusTTL > 0 {
+		eng.statusTTL -= elapsed
+		if eng.statusTTL <= 0 {
+			eng.statusTTL = 0
+			eng.statusText = ""
+			statusChanged = true
+		}
+	}
 	var update func(*widget)
 	update = func(w *widget) {
 		if !w.shown {
@@ -194,7 +205,7 @@ func (eng *UIEngine) Update(elapsed float64) bool {
 			update(child)
 		}
 	}
-	return eng.updateMovie(elapsed)
+	return statusChanged || eng.updateMovie(elapsed)
 }
 
 func (eng *UIEngine) drawMovieFrame(canvas *image.RGBA, dst image.Rectangle, frame image.Image) {
@@ -398,6 +409,9 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 	if eng.statusKey != "" {
 		status := eng.resolveText(eng.statusKey)
 		drawTextAligned(canvas, face, status, screenScaledRect(Rect{X0: 80, Y0: 96, X1: virtualWidth - 80, Y1: 128}, uiScale), float64(screenHeight), color.RGBA{R: 255, G: 100, B: 80, A: 255}, "CENTER")
+	}
+	if eng.statusText != "" {
+		drawTextAligned(canvas, face, eng.statusText, screenScaledRect(Rect{X0: 80, Y0: 620, X1: virtualWidth - 80, Y1: 656}, uiScale), float64(screenHeight), color.RGBA{R: 255, G: 220, B: 80, A: 255}, "CENTER")
 	}
 	if eng.sceneBackground {
 		for index := 3; index < len(canvas.Pix); index += 4 {
@@ -644,6 +658,11 @@ func (eng *UIEngine) SetStatusKey(key string) {
 	eng.statusKey = key
 }
 
+func (eng *UIEngine) SetStatusText(text string) {
+	eng.statusText = text
+	eng.statusTTL = 3
+}
+
 func (eng *UIEngine) SetSceneBackground(enabled bool) { eng.sceneBackground = enabled }
 
 func (eng *UIEngine) CurrentModelPath() string {
@@ -719,6 +738,8 @@ func (eng *UIEngine) SetGlueState(state GlueState) {
 	}
 	eng.Rt.Glue = state
 	eng.statusKey = ""
+	eng.statusText = ""
+	eng.statusTTL = 0
 	eng.Rt.SetCVar("currentGlueScreen", "charselect")
 	eng.Rt.Execute("for _, name in ipairs({'VideoOptionsFrame', 'AudioOptionsFrame', 'OptionsSelectFrame', 'CinematicsFrame', 'MovieFrame', 'RealmList', 'AddonList', 'GlueDialog'}) do local frame = _G[name]; if frame then frame:Hide() end end", "@network.lua")
 	eng.Rt.Execute("GlueParent_OnEvent('SET_GLUE_SCREEN', 'charselect')", "@network.lua")
@@ -995,9 +1016,19 @@ func (eng *UIEngine) HandleKeyWithMods(key window.Key, mods window.ModifierKey) 
 		switch key {
 		case window.KeyM:
 			eng.Rt.Execute("Sound_ToggleMusic()", "@bindings.lua")
+			if value, ok := eng.Rt.GetCVar("Sound_EnableMusic"); ok && value == "0" {
+				eng.SetStatusText("Music Disabled")
+			} else {
+				eng.SetStatusText("Music Enabled")
+			}
 			return true
 		case window.KeyS:
 			eng.Rt.Execute("Sound_ToggleSound()", "@bindings.lua")
+			if value, ok := eng.Rt.GetCVar("Sound_EnableSFX"); ok && value == "0" {
+				eng.SetStatusText("Sound Effects Disabled")
+			} else {
+				eng.SetStatusText("Sound Effects Enabled")
+			}
 			return true
 		}
 	}
