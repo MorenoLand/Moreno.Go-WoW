@@ -486,7 +486,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				configureWorldCamera(cam, entry.position)
 				gl.ClearColor(.08, .12, .16, 1)
 				if debug {
-					log.Printf("world: loaded %s tile %d,%d chunks=%d vertices=%d triangles=%d textures=%d wmoMeshes=%d", info.mapName, info.tileX, info.tileY, info.chunks, info.vertices, info.triangles, info.textures, info.wmoMeshes)
+					log.Printf("world: loaded %s tile %d,%d chunks=%d vertices=%d triangles=%d textures=%d wmoMeshes=%d m2Meshes=%d", info.mapName, info.tileX, info.tileY, info.chunks, info.vertices, info.triangles, info.textures, info.wmoMeshes, info.m2Meshes)
 				}
 			default:
 			}

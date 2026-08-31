@@ -35,9 +35,10 @@ func TestLiveWorldSceneBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if root == nil || info.chunks != 256 || info.triangles == 0 || info.wmoMeshes == 0 {
-		t.Fatalf("root=%v chunks=%d triangles=%d wmoMeshes=%d", root != nil, info.chunks, info.triangles, info.wmoMeshes)
+	if root == nil || info.chunks != 256 || info.triangles == 0 || info.wmoMeshes == 0 || info.m2Meshes == 0 {
+		t.Fatalf("root=%v chunks=%d triangles=%d wmoMeshes=%d m2Meshes=%d", root != nil, info.chunks, info.triangles, info.wmoMeshes, info.m2Meshes)
 	}
+	t.Logf("world scene: %+v", info)
 }
 
 func TestLiveAzerothADT(t *testing.T) {
@@ -69,6 +70,9 @@ func TestLiveAzerothADT(t *testing.T) {
 	}
 	if adt.version != 18 || len(adt.chunks) != 256 || len(adt.textures) == 0 {
 		t.Fatalf("version=%d chunks=%d textures=%d", adt.version, len(adt.chunks), len(adt.textures))
+	}
+	if len(adt.m2Names) == 0 || len(adt.m2Placements) == 0 {
+		t.Fatalf("M2 names=%d placements=%d", len(adt.m2Names), len(adt.m2Placements))
 	}
 	if len(adt.wmoNames) == 0 || len(adt.wmoPlacements) == 0 {
 		t.Fatalf("WMO names=%d placements=%d", len(adt.wmoNames), len(adt.wmoPlacements))

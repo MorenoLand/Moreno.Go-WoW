@@ -29,6 +29,8 @@ const (
 type worldADT struct {
 	version       uint32
 	textures      []string
+	m2Names       []string
+	m2Placements  []worldM2Placement
 	wmoNames      []string
 	wmoPlacements []worldWMOPlacement
 	chunks        []worldADTChunk
@@ -52,6 +54,14 @@ type worldWMOPlacement struct {
 	upper     [3]float32
 	doodadSet uint16
 	scale     float32
+}
+
+type worldM2Placement struct {
+	path     string
+	position [3]float32
+	rotation [3]float32
+	scale    float32
+	flags    uint16
 }
 
 type worldWMOMaterial struct {
@@ -100,6 +110,7 @@ type worldSceneInfo struct {
 	triangles int
 	textures  int
 	wmoMeshes int
+	m2Meshes  int
 }
 
 func loadWorldTerrain(loader *ui.Loader, position world.WorldPosition) (*core.Node, worldSceneInfo, error) {
@@ -196,7 +207,7 @@ func worldTileAt(x, y float32) (int, int) {
 func parseWorldADT(data []byte) (worldADT, error) {
 	result := worldADT{}
 	var main []byte
-	var mwmo, mwid, modf []byte
+	var mmdx, mmid, mddf, mwmo, mwid, modf []byte
 	for offset := 0; offset < len(data); {
 		id, _, payload, _, next, ok := worldChunk(data, offset)
 		if !ok {
@@ -209,6 +220,12 @@ func parseWorldADT(data []byte) (worldADT, error) {
 			}
 		case "MTEX":
 			result.textures = parseWorldTextureNames(payload)
+		case "MMDX":
+			mmdx = payload
+		case "MMID":
+			mmid = payload
+		case "MDDF":
+			mddf = payload
 		case "MCIN":
 			main = payload
 		case "MWMO":
@@ -226,6 +243,8 @@ func parseWorldADT(data []byte) (worldADT, error) {
 	if len(main) < 256*16 {
 		return worldADT{}, fmt.Errorf("MCIN is short (%d)", len(main))
 	}
+	result.m2Names = parseWorldOffsetNames(mmdx, mmid)
+	result.m2Placements = parseWorldM2Placements(mddf, result.m2Names)
 	result.wmoNames = parseWorldOffsetNames(mwmo, mwid)
 	result.wmoPlacements = parseWorldWMOPlacements(modf, result.wmoNames)
 	for index := 0; index < 256; index++ {
@@ -280,6 +299,27 @@ func parseWorldWMOPlacements(data []byte, names []string) []worldWMOPlacement {
 			placement.upper[index] = math.Float32frombits(binary.LittleEndian.Uint32(data[offset+44+index*4 : offset+48+index*4]))
 		}
 		placement.doodadSet = binary.LittleEndian.Uint16(data[offset+58 : offset+60])
+		result = append(result, placement)
+	}
+	return result
+}
+
+func parseWorldM2Placements(data []byte, names []string) []worldM2Placement {
+	const size = 36
+	result := make([]worldM2Placement, 0, len(data)/size)
+	for offset := 0; offset+size <= len(data); offset += size {
+		nameID := int(binary.LittleEndian.Uint32(data[offset : offset+4]))
+		if nameID < 0 || nameID >= len(names) || names[nameID] == "" {
+			continue
+		}
+		placement := worldM2Placement{path: names[nameID], scale: float32(binary.LittleEndian.Uint16(data[offset+32:offset+34])) / 1024, flags: binary.LittleEndian.Uint16(data[offset+34 : offset+36])}
+		if placement.scale <= 0 {
+			placement.scale = 1
+		}
+		for index := range placement.position {
+			placement.position[index] = math.Float32frombits(binary.LittleEndian.Uint32(data[offset+8+index*4 : offset+12+index*4]))
+			placement.rotation[index] = math.Float32frombits(binary.LittleEndian.Uint32(data[offset+20+index*4 : offset+24+index*4]))
+		}
 		result = append(result, placement)
 	}
 	return result
@@ -397,6 +437,157 @@ func worldFloat32s(data []byte, components int) []float32 {
 		result = append(result, math.Float32frombits(binary.LittleEndian.Uint32(data[index*4:index*4+4])))
 	}
 	return result
+}
+
+func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.WorldPosition, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) (*core.Node, int) {
+	root := core.NewNode()
+	modelCache := make(map[string]map[string]*m2Part)
+	meshCount := 0
+	for _, placement := range adt.m2Placements {
+		origin := worldWMOPosition(placement.position)
+		dx, dy := origin[0]-position.X, origin[1]-position.Y
+		if dx*dx+dy*dy > (worldTileSize*2)*(worldTileSize*2) {
+			continue
+		}
+		parts, ok := modelCache[placement.path]
+		if !ok {
+			var err error
+			parts, err = loadWorldM2Parts(loader, placement.path)
+			if err != nil {
+				continue
+			}
+			modelCache[placement.path] = parts
+		}
+		instance := buildWorldM2Instance(loader, parts, textures, placeholder)
+		if instance == nil {
+			continue
+		}
+		instance.SetPosition(origin[0], origin[1], origin[2])
+		instance.SetRotationQuat(worldM2Rotation(placement.rotation))
+		instance.SetScale(placement.scale, placement.scale, placement.scale)
+		root.Add(instance)
+		meshCount += len(instance.Children())
+	}
+	if meshCount == 0 {
+		return nil, 0
+	}
+	return root, meshCount
+}
+
+func loadWorldM2Parts(loader *ui.Loader, modelPath string) (map[string]*m2Part, error) {
+	modelPath = normalizeModelPath(modelPath)
+	if modelPath == "" {
+		return nil, fmt.Errorf("empty M2 path")
+	}
+	modelData, err := loader.ReadFile(modelPath)
+	if err != nil {
+		return nil, err
+	}
+	model, err := parseM2(modelData)
+	if err != nil {
+		return nil, err
+	}
+	skinData, err := loader.ReadFile(worldM2SkinPath(modelPath))
+	if err != nil {
+		return nil, err
+	}
+	skin, err := parseSkin(skinData)
+	if err != nil {
+		return nil, err
+	}
+	return buildM2Parts(model, skin), nil
+}
+
+func buildWorldM2Instance(loader *ui.Loader, parts map[string]*m2Part, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) *core.Node {
+	root := core.NewNode()
+	for _, part := range parts {
+		if len(part.texturePaths) == 0 || len(part.indices) == 0 {
+			continue
+		}
+		geom := geometry.NewGeometry()
+		geom.SetIndices(part.indices)
+		geom.AddVBO(gls.NewVBO(part.positions).AddAttrib(gls.VertexPosition))
+		geom.AddVBO(gls.NewVBO(part.normals).AddAttrib(gls.VertexNormal))
+		geom.AddVBO(gls.NewVBO(part.uvs).AddAttrib(gls.VertexTexcoord))
+		if len(part.uvSets) > 1 {
+			geom.AddVBO(gls.NewVBO(part.uvs2).AddCustomAttrib("VertexTexcoord2", 2))
+		}
+		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
+		if part.material.blend == 1 {
+			mat.SetShader("morenowow_m2_alpha_key")
+		} else {
+			mat.SetShader("morenowow_m2")
+		}
+		mat.SetShaderUnique(true)
+		if part.material.flags&0x04 != 0 {
+			mat.SetSide(material.SideDouble)
+		} else {
+			mat.SetSide(material.SideFront)
+		}
+		mat.SetUseLights(material.UseLightNone)
+		mat.SetDepthTest(part.material.flags&0x08 == 0)
+		mat.SetDepthMask(part.material.flags&0x10 == 0)
+		switch part.material.blend {
+		case 0, 1:
+			mat.SetTransparent(false)
+			mat.SetBlending(material.BlendNone)
+		case 3, 4:
+			mat.SetTransparent(true)
+			mat.SetBlending(material.BlendAdditive)
+		case 5, 6:
+			mat.SetTransparent(true)
+			mat.SetBlending(material.BlendMultiply)
+		default:
+			mat.SetTransparent(true)
+			mat.SetBlending(material.BlendNormal)
+		}
+		for textureIndex, texturePath := range part.texturePaths {
+			tex := textures[texturePath]
+			if tex == nil {
+				tex = loadModelTexture(loader, texturePath)
+				if tex != nil {
+					textures[texturePath] = tex
+				}
+			}
+			if tex == nil {
+				tex = placeholder
+			}
+			if textureIndex < len(part.textureFlags) {
+				if part.textureFlags[textureIndex]&0x01 != 0 {
+					tex.SetWrapS(gls.REPEAT)
+				}
+				if part.textureFlags[textureIndex]&0x02 != 0 {
+					tex.SetWrapT(gls.REPEAT)
+				}
+			}
+			mat.AddTexture(tex)
+		}
+		mesh := graphic.NewMesh(geom, mat)
+		mesh.SetRenderOrder(m2RenderOrder(part))
+		root.Add(mesh)
+	}
+	if len(root.Children()) == 0 {
+		return nil
+	}
+	return root
+}
+
+func worldM2SkinPath(path string) string {
+	lower := strings.ToLower(path)
+	if strings.HasSuffix(lower, ".m2") {
+		return path[:len(path)-3] + "00.skin"
+	}
+	if strings.HasSuffix(lower, ".mdx") {
+		return path[:len(path)-4] + "00.skin"
+	}
+	return path + "00.skin"
+}
+
+func worldM2Rotation(rotation [3]float32) *math32.Quaternion {
+	qz := math32.NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(math32.NewVector3(0, 0, 1), float32(float64(rotation[1]+180)*math.Pi/180))
+	qy := math32.NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(math32.NewVector3(0, 1, 0), float32(float64(rotation[0])*math.Pi/180))
+	qx := math32.NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(math32.NewVector3(1, 0, 0), float32(float64(rotation[2])*math.Pi/180))
+	return qz.Multiply(qy).Multiply(qx).Normalize()
 }
 
 func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.WorldPosition, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) (*core.Node, int) {
@@ -712,7 +903,12 @@ func buildWorldTerrain(loader *ui.Loader, adt worldADT, position world.WorldPosi
 	if wmoRoot != nil {
 		root.Add(wmoRoot)
 	}
+	m2Root, m2Count := buildWorldM2Instances(loader, adt, position, textures, placeholder)
+	if m2Root != nil {
+		root.Add(m2Root)
+	}
 	info.wmoMeshes = wmoCount
+	info.m2Meshes = m2Count
 	return root, info, nil
 }
 
