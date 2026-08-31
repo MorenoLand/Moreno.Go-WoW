@@ -1637,11 +1637,11 @@ func drawSubMode(canvas *image.RGBA, img image.Image, r Rect, screenHeight float
 		return
 	}
 	if !additive {
-		xdraw.NearestNeighbor.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
+		xdraw.BiLinear.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
 		return
 	}
 	blend := image.NewRGBA(dst)
-	xdraw.NearestNeighbor.Scale(blend, blend.Bounds(), src, src.Bounds(), xdraw.Src, nil)
+	xdraw.BiLinear.Scale(blend, blend.Bounds(), src, src.Bounds(), xdraw.Src, nil)
 	for y := dst.Min.Y; y < dst.Max.Y; y++ {
 		for x := dst.Min.X; x < dst.Max.X; x++ {
 			sr, sg, sb, sa := blend.At(x, y).RGBA()
