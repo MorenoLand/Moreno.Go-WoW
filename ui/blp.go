@@ -92,7 +92,7 @@ func decodeBLPPalette(mip []byte, width, height int, alphaDepth uint32, palette 
 		for y := 0; y < height; y++ {
 			for x := 0; x < width; x++ {
 				c := palette[pixels[y*width+x]]
-				bit := uint(alphaBits[(y*width+x)/8]) >> (7 - uint((y*width+x)%8))
+				bit := uint(alphaBits[(y*width+x)/8]) >> uint((y*width+x)%8)
 				if bit&1 == 0 {
 					c.A = 0
 				}

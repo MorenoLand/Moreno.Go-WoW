@@ -18,6 +18,7 @@ import (
 	"github.com/g3n/engine/renderer"
 	"github.com/g3n/engine/texture"
 	"github.com/g3n/engine/window"
+	"github.com/go-gl/glfw/v3.3/glfw"
 )
 
 type loginResult struct {
@@ -119,6 +120,18 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		uiImage.SetPosition(0, 0)
 		scene.Add(uiImage)
 	}
+	var wowCursor *glfw.Cursor
+	if uiEngine != nil {
+		if wowCursor, err = installCursor(win, uiEngine.AssetLoader); err != nil {
+			if debug {
+				log.Printf("cursor: %v", err)
+			}
+			wowCursor = nil
+		}
+	}
+	if wowCursor != nil {
+		defer wowCursor.Destroy()
+	}
 
 	refresh := func() {
 		if uiImage == nil || uiEngine == nil {
@@ -177,6 +190,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				refresh()
 			}
 		})
+		win.Subscribe(window.OnKeyUp, func(_ string, event interface{}) {
+			key := event.(*window.KeyEvent)
+			if uiEngine.HandleKeyUp(key.Key) {
+				refresh()
+			}
+		})
 	}
 	onResize("", nil)
 	gl.ClearColor(.04, .06, .1, 1)
@@ -224,6 +243,23 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	if activeSession != nil {
 		_ = activeSession.Close()
 	}
+}
+
+func installCursor(win *window.GlfwWindow, loader *ui.Loader) (*glfw.Cursor, error) {
+	data, err := loader.ReadAsset("Interface\\Cursor\\Point")
+	if err != nil {
+		return nil, err
+	}
+	image, err := ui.DecodeBLP(data)
+	if err != nil {
+		return nil, err
+	}
+	cursor := glfw.CreateCursor(image, 0, 0)
+	if cursor == nil {
+		return nil, os.ErrInvalid
+	}
+	win.Window.SetCursor(cursor)
+	return cursor, nil
 }
 
 func resolveInterfaceRoot(dataPath, interfacePath string) string {

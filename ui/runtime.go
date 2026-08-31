@@ -128,7 +128,9 @@ func (rt *Runtime) setFocus(w *widget) {
 }
 
 func (rt *Runtime) setText(w *widget, text string) {
-	text = strings.ReplaceAll(text, "\n", "")
+	if w.kind == kindEditBox {
+		text = strings.ReplaceAll(text, "\n", "")
+	}
 	if w.text == text {
 		w.cursor = len([]rune(text))
 		return

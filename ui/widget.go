@@ -147,17 +147,20 @@ type widget struct {
 	textureFile                                string
 	texCoordL, texCoordR, texCoordT, texCoordB float64
 	vertexColor                                rgba
+	alphaMode                                  string
 
 	// FontString state.
-	fontObject string
-	justifyH   string
-	justifyV   string
-	textColor  rgba
-	textWidth  float64
-	textInsetL float64
-	textInsetR float64
-	textInsetT float64
-	textInsetB float64
+	fontObject     string
+	justifyH       string
+	justifyV       string
+	textColor      rgba
+	textWidth      float64
+	autoTextWidth  bool
+	autoTextHeight bool
+	textInsetL     float64
+	textInsetR     float64
+	textInsetT     float64
+	textInsetB     float64
 
 	// Tooltip/HTML text lines.
 	lines []string
@@ -555,7 +558,13 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"SetAlphaAttr":  func(L *lua.LState, w *widget) int { return 0 },
-		"SetTextInsets": func(L *lua.LState, w *widget) int { return 0 },
+		"SetTextInsets": func(L *lua.LState, w *widget) int {
+			w.textInsetL = float64(L.CheckNumber(2))
+			w.textInsetR = float64(L.CheckNumber(3))
+			w.textInsetT = float64(L.CheckNumber(4))
+			w.textInsetB = float64(L.CheckNumber(5))
+			return 0
+		},
 		"HighlightText": func(L *lua.LState, w *widget) int { return 0 },
 		"SetFocus":      func(L *lua.LState, w *widget) int { rt.setFocus(w); return 0 },
 		"ClearFocus": func(L *lua.LState, w *widget) int {

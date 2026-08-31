@@ -80,9 +80,15 @@ func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, er
 
 	l := NewLoaderWithAssets(root, assets, rt)
 	if err := l.LoadTOC("Interface/GlueXML/GlueXML.toc", nil); err != nil {
+		rt.Close()
 		return nil, err
 	}
-	return newUIEngine(rt, l, bgImagePath)
+	engine, err := newUIEngine(rt, l, bgImagePath)
+	if err != nil {
+		rt.Close()
+		return nil, err
+	}
+	return engine, nil
 }
 
 func LoadUIEngineFromMPQ(dataPath, locale, bgImagePath string) (*UIEngine, error) {
@@ -97,7 +103,13 @@ func LoadUIEngineFromMPQ(dataPath, locale, bgImagePath string) (*UIEngine, error
 		rt.Close()
 		return nil, err
 	}
-	return newUIEngine(rt, l, bgImagePath)
+	engine, err := newUIEngine(rt, l, bgImagePath)
+	if err != nil {
+		_ = l.Close()
+		rt.Close()
+		return nil, err
+	}
+	return engine, nil
 }
 
 func newUIEngine(rt *Runtime, loader *Loader, bgImagePath string) (*UIEngine, error) {
@@ -209,6 +221,9 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 
 	faceLg, _ := opentype.NewFace(eng.FontObj, &opentype.FaceOptions{Size: 16 * uiScale, DPI: 96})
 	defer faceLg.Close()
+	if root := eng.Rt.widgets["GlueParent"]; root != nil {
+		eng.prepareText(root, face, faceLg)
+	}
 
 	virtualWidth := eng.screen.W()
 	virtualHeight := eng.screen.H()
@@ -249,8 +264,10 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 					if tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0 {
 						tc = [4]float64{0, 1, 0, 1}
 					}
-					drawSub(canvas, img, scaledRect, float64(screenHeight), tc)
+					drawSubMode(canvas, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.alphaMode, "ADD"))
 				}
+			} else if !w.vertexColor.isZero() {
+				eng.drawTextureColor(canvas, scaledRect, w.vertexColor)
 			}
 
 		case kindFontString:
@@ -308,6 +325,35 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 	}
 
 	return canvas
+}
+
+func (eng *UIEngine) prepareText(w *widget, face, faceLg font.Face) {
+	if w.kind == kindFontString {
+		text := eng.resolveText(w.text)
+		if w.parent != nil && (w.parent.kind == kindButton || w.parent.kind == kindCheckButton) && w.parent.buttonLabel == w && w.parent.text != "" {
+			text = eng.resolveText(w.parent.text)
+		}
+		fontFace := face
+		if strings.Contains(strings.ToLower(w.fontObject), "large") || strings.Contains(strings.ToLower(w.fontObject), "huge") {
+			fontFace = faceLg
+		}
+		lines := strings.Split(cleanText(text), "\n")
+		if w.autoTextWidth {
+			maxWidth := 0
+			for _, line := range lines {
+				if width := font.MeasureString(fontFace, line).Ceil(); width > maxWidth {
+					maxWidth = width
+				}
+			}
+			w.width = float64(maxWidth) / eng.uiScale
+		}
+		if w.autoTextHeight {
+			w.height = float64(fontFace.Metrics().Height.Ceil()*len(lines)) / eng.uiScale
+		}
+	}
+	for _, child := range w.children {
+		eng.prepareText(child, face, faceLg)
+	}
 }
 
 func (eng *UIEngine) layoutRect(w *widget, parent Rect) Rect {
@@ -391,6 +437,18 @@ func (eng *UIEngine) drawEditText(canvas *image.RGBA, face font.Face, w *widget,
 		caret := image.Rect(caretX, dst.Min.Y+4, caretX+1, dst.Max.Y-4)
 		draw.Draw(canvas, caret, &image.Uniform{C: color.RGBA{R: 255, G: 220, B: 80, A: 255}}, image.Point{}, draw.Over)
 	}
+}
+
+func (eng *UIEngine) drawTextureColor(canvas *image.RGBA, r Rect, c rgba) {
+	dst := ScreenRect(r, float64(canvas.Bounds().Dy()))
+	if dst.Dx() <= 0 || dst.Dy() <= 0 || c.a <= 0 {
+		return
+	}
+	alpha := c.a
+	if alpha > 1 {
+		alpha = 1
+	}
+	draw.Draw(canvas, dst, &image.Uniform{C: color.RGBA{R: uint8(c.r * 255), G: uint8(c.g * 255), B: uint8(c.b * 255), A: uint8(alpha * 255)}}, image.Point{}, draw.Over)
 }
 
 func screenScaledRect(r Rect, scale float64) Rect {
@@ -499,45 +557,133 @@ func (eng *UIEngine) HandleChar(char rune) bool {
 
 func (eng *UIEngine) HandleKey(key window.Key) bool {
 	w := eng.Rt.focused
-	if w == nil || w.kind != kindEditBox {
+	if key == window.KeyEscape {
+		target := eng.keyboardTarget()
+		if target != nil && target != w && !eng.isLoginTarget(target) {
+			eng.Rt.fire(target, "OnKeyDown", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString("ESCAPE")})
+			return true
+		}
+		if w != nil {
+			eng.Rt.setFocus(nil)
+			return true
+		}
+		if target != nil {
+			eng.Rt.fire(target, "OnKeyDown", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString("ESCAPE")})
+			return true
+		}
 		return false
 	}
-	switch key {
-	case window.KeyTab:
-		eng.Rt.fire(w, "OnTabPressed", []lua.LValue{w.luaValue(eng.Rt.L)})
-	case window.KeyEscape:
-		eng.Rt.fire(w, "OnEscapePressed", []lua.LValue{w.luaValue(eng.Rt.L)})
-	case window.KeyEnter:
-		eng.Rt.fire(w, "OnEnterPressed", []lua.LValue{w.luaValue(eng.Rt.L)})
-	case window.KeyLeft:
-		if w.cursor > 0 {
-			w.cursor--
-		}
-	case window.KeyRight:
-		if w.cursor < len([]rune(w.text)) {
-			w.cursor++
-		}
-	case window.KeyHome:
-		w.cursor = 0
-	case window.KeyEnd:
-		w.cursor = len([]rune(w.text))
-	case window.KeyBackspace:
-		if w.cursor > 0 {
+	if w != nil && w.kind == kindEditBox {
+		switch key {
+		case window.KeyTab:
+			eng.Rt.fire(w, "OnTabPressed", []lua.LValue{w.luaValue(eng.Rt.L)})
+		case window.KeyEnter:
+			eng.Rt.fire(w, "OnEnterPressed", []lua.LValue{w.luaValue(eng.Rt.L)})
+		case window.KeyLeft:
+			if w.cursor > 0 {
+				w.cursor--
+			}
+		case window.KeyRight:
+			if w.cursor < len([]rune(w.text)) {
+				w.cursor++
+			}
+		case window.KeyHome:
+			w.cursor = 0
+		case window.KeyEnd:
+			w.cursor = len([]rune(w.text))
+		case window.KeyBackspace:
+			if w.cursor > 0 {
+				runes := []rune(w.text)
+				runes = append(runes[:w.cursor-1], runes[w.cursor:]...)
+				w.cursor--
+				eng.Rt.setText(w, string(runes))
+			}
+		case window.KeyDelete:
 			runes := []rune(w.text)
-			runes = append(runes[:w.cursor-1], runes[w.cursor:]...)
-			w.cursor--
-			eng.Rt.setText(w, string(runes))
+			if w.cursor < len(runes) {
+				runes = append(runes[:w.cursor], runes[w.cursor+1:]...)
+				eng.Rt.setText(w, string(runes))
+			}
+		default:
+			return false
 		}
-	case window.KeyDelete:
-		runes := []rune(w.text)
-		if w.cursor < len(runes) {
-			runes = append(runes[:w.cursor], runes[w.cursor+1:]...)
-			eng.Rt.setText(w, string(runes))
-		}
-	default:
+		return true
+	}
+	target := eng.keyboardTarget()
+	if target == nil {
 		return false
 	}
+	name := keyName(key)
+	if name == "" {
+		return false
+	}
+	eng.Rt.fire(target, "OnKeyDown", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString(name)})
 	return true
+}
+
+func (eng *UIEngine) isLoginTarget(target *widget) bool {
+	for current := target; current != nil; current = current.parent {
+		if current.name == "AccountLogin" {
+			return true
+		}
+	}
+	return false
+}
+
+func (eng *UIEngine) HandleKeyUp(key window.Key) bool {
+	target := eng.keyboardTarget()
+	if target == nil {
+		return false
+	}
+	name := keyName(key)
+	if name == "" {
+		return false
+	}
+	eng.Rt.fire(target, "OnKeyUp", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString(name)})
+	return true
+}
+
+func (eng *UIEngine) keyboardTarget() *widget {
+	root := eng.Rt.widgets["GlueParent"]
+	if root == nil {
+		return nil
+	}
+	for index := len(root.children) - 1; index >= 0; index-- {
+		if target := keyboardWidget(root.children[index]); target != nil {
+			return target
+		}
+	}
+	return nil
+}
+
+func keyboardWidget(w *widget) *widget {
+	if !w.shown {
+		return nil
+	}
+	for index := len(w.children) - 1; index >= 0; index-- {
+		if target := keyboardWidget(w.children[index]); target != nil {
+			return target
+		}
+	}
+	if w.enableKeyboard {
+		return w
+	}
+	return nil
+}
+
+func keyName(key window.Key) string {
+	switch key {
+	case window.KeyEscape:
+		return "ESCAPE"
+	case window.KeyEnter:
+		return "ENTER"
+	case window.KeySpace:
+		return "SPACE"
+	case window.KeyPrintScreen:
+		return "PRINTSCREEN"
+	default:
+		return ""
+	}
 }
 
 func (eng *UIEngine) hitTest(x, y float64) *widget {
@@ -646,8 +792,11 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 				bgCol = color.RGBA{R: 10, G: 20, B: 30, A: 180}
 			}
 			draw.Draw(canvas, inner, &image.Uniform{C: bgCol}, image.Point{}, draw.Over)
-			// Tile the actual texture over it
-			xdraw.NearestNeighbor.Scale(canvas, inner, bgImg, bgImg.Bounds(), xdraw.Over, nil)
+			if bd.tile {
+				eng.drawTiled(canvas, inner, bgImg, bd.tileSize)
+			} else {
+				xdraw.NearestNeighbor.Scale(canvas, inner, bgImg, bgImg.Bounds(), xdraw.Over, nil)
+			}
 		}
 	} else {
 		// Fallback: solid very dark box
@@ -665,6 +814,25 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 		drawBorder(canvas, dst, borderColor, 1)
 	} else {
 		drawBorder(canvas, dst, color.RGBA{R: 80, G: 120, B: 150, A: 200}, 1)
+	}
+}
+
+func (eng *UIEngine) drawTiled(canvas *image.RGBA, dst image.Rectangle, source image.Image, tileSize float64) {
+	tile := source
+	if tileSize > 0 {
+		size := int(tileSize)
+		if size > 0 {
+			tileImage := image.NewRGBA(image.Rect(0, 0, size, size))
+			xdraw.NearestNeighbor.Scale(tileImage, tileImage.Bounds(), source, source.Bounds(), xdraw.Src, nil)
+			tile = tileImage
+		}
+	}
+	bounds := tile.Bounds()
+	for y := dst.Min.Y; y < dst.Max.Y; y += bounds.Dy() {
+		for x := dst.Min.X; x < dst.Max.X; x += bounds.Dx() {
+			tileRect := image.Rect(x, y, x+bounds.Dx(), y+bounds.Dy())
+			draw.Draw(canvas, tileRect.Intersect(dst), tile, bounds.Min, draw.Over)
+		}
 	}
 }
 
@@ -720,6 +888,10 @@ func (h hostScreen) ConsoleExec(string)             {}
 func (h hostScreen) Screenshot()                    {}
 
 func drawSub(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64) {
+	drawSubMode(canvas, img, r, screenHeight, tc, false)
+}
+
+func drawSubMode(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64, additive bool) {
 	b := img.Bounds()
 	l := b.Min.X + int(float64(b.Dx())*tc[0])
 	rt := b.Min.X + int(float64(b.Dx())*tc[1])
@@ -735,7 +907,34 @@ func drawSub(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, 
 	if dst.Dx() <= 0 || dst.Dy() <= 0 {
 		return
 	}
-	xdraw.BiLinear.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
+	if !additive {
+		xdraw.BiLinear.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
+		return
+	}
+	blend := image.NewRGBA(dst)
+	xdraw.BiLinear.Scale(blend, blend.Bounds(), src, src.Bounds(), xdraw.Src, nil)
+	for y := dst.Min.Y; y < dst.Max.Y; y++ {
+		for x := dst.Min.X; x < dst.Max.X; x++ {
+			sr, sg, sb, sa := blend.At(x, y).RGBA()
+			dr, dg, db, da := canvas.At(x, y).RGBA()
+			canvas.SetRGBA(x, y, color.RGBA{R: addChannel(dr, sr), G: addChannel(dg, sg), B: addChannel(db, sb), A: maxChannel(da, sa)})
+		}
+	}
+}
+
+func addChannel(dst, src uint32) uint8 {
+	value := int(dst>>8) + int(src>>8)
+	if value > 255 {
+		value = 255
+	}
+	return uint8(value)
+}
+
+func maxChannel(left, right uint32) uint8 {
+	if right > left {
+		return uint8(right >> 8)
+	}
+	return uint8(left >> 8)
 }
 
 func drawText(canvas *image.RGBA, face font.Face, text string, r Rect, screenHeight float64, c color.Color) {
@@ -743,32 +942,43 @@ func drawText(canvas *image.RGBA, face font.Face, text string, r Rect, screenHei
 }
 
 func drawTextAligned(canvas *image.RGBA, face font.Face, text string, r Rect, screenHeight float64, c color.Color, justify string) {
+	text = cleanText(text)
 	dst := ScreenRect(r, screenHeight)
 	if dst.Dx() <= 0 || dst.Dy() <= 0 {
 		return
 	}
 
-	dotX := dst.Min.X + 4
-	width := font.MeasureString(face, text).Ceil()
 	if justify == "" {
 		justify = "CENTER"
 	}
-	switch strings.ToUpper(justify) {
-	case "CENTER":
-		dotX = dst.Min.X + (dst.Dx()-width)/2
-	case "RIGHT":
-		dotX = dst.Max.X - width - 4
-	}
-
 	ascent := face.Metrics().Ascent.Ceil()
 	height := face.Metrics().Height.Ceil()
-	dotY := dst.Min.Y + ascent + (dst.Dy()-height)/2
-
-	d := &font.Drawer{
-		Dst:  canvas,
-		Src:  image.NewUniform(c),
-		Face: face,
-		Dot:  fixed.P(dotX, dotY),
+	lines := strings.Split(text, "\n")
+	totalHeight := height * len(lines)
+	startY := dst.Min.Y + ascent + (dst.Dy()-totalHeight)/2
+	for index, line := range lines {
+		width := font.MeasureString(face, line).Ceil()
+		dotX := dst.Min.X + 4
+		switch strings.ToUpper(justify) {
+		case "CENTER":
+			dotX = dst.Min.X + (dst.Dx()-width)/2
+		case "RIGHT":
+			dotX = dst.Max.X - width - 4
+		}
+		d := &font.Drawer{Dst: canvas, Src: image.NewUniform(c), Face: face, Dot: fixed.P(dotX, startY+index*height)}
+		d.DrawString(line)
 	}
-	d.DrawString(text)
+}
+
+func cleanText(text string) string {
+	text = strings.ReplaceAll(text, "|n", "\n")
+	text = strings.ReplaceAll(text, "|r", "")
+	for {
+		index := strings.Index(text, "|c")
+		if index < 0 || len(text) < index+10 {
+			break
+		}
+		text = text[:index] + text[index+10:]
+	}
+	return text
 }

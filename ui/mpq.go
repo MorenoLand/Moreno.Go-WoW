@@ -51,13 +51,25 @@ type mpqArchive struct {
 	path         string
 	headerOffset int64
 	blockShift   uint16
-	hashes       []mpqHashEntry
+	index        map[mpqHashKey][]mpqHashEntry
 	blocks       []mpqBlockEntry
+}
+
+type mpqHashKey struct {
+	hashA uint32
+	hashB uint32
+}
+
+type mpqFileRef struct {
+	archive *mpqArchive
+	block   mpqBlockEntry
 }
 
 type mpqSet struct {
 	archives []*mpqArchive
 	locale   uint16
+	files    map[string]mpqFileRef
+	missing  map[string]struct{}
 }
 
 func openMPQSet(dataPath, locale string) (*mpqSet, error) {
@@ -69,7 +81,7 @@ func openMPQSet(dataPath, locale string) (*mpqSet, error) {
 	if err != nil {
 		return nil, err
 	}
-	set := &mpqSet{locale: mpqLocaleID(locale)}
+	set := &mpqSet{locale: mpqLocaleID(locale), files: make(map[string]mpqFileRef), missing: make(map[string]struct{})}
 	for _, path := range paths {
 		archive, err := openMPQArchive(path)
 		if err != nil {
@@ -96,14 +108,23 @@ func (set *mpqSet) Close() error {
 }
 
 func (set *mpqSet) ReadFile(name string) ([]byte, error) {
+	name = normalizeMPQPath(name)
+	if ref, ok := set.files[name]; ok {
+		return ref.archive.readBlock(name, ref.block)
+	}
+	if _, ok := set.missing[name]; ok {
+		return nil, os.ErrNotExist
+	}
 	for index := len(set.archives) - 1; index >= 0; index-- {
 		archive := set.archives[index]
 		block, ok := archive.findBlock(name, set.locale)
 		if !ok {
 			continue
 		}
+		set.files[name] = mpqFileRef{archive: archive, block: block}
 		return archive.readBlock(name, block)
 	}
+	set.missing[name] = struct{}{}
 	return nil, os.ErrNotExist
 }
 
@@ -140,34 +161,15 @@ func hasMPQFile(root string) bool {
 	return false
 }
 
-type mpqPathRank struct {
-	path string
-	rank int
-}
+var fixedMPQArchives = []string{"alternate.MPQ", "interface.MPQ", "misc.MPQ", "model.MPQ", "texture.MPQ", "terrain.MPQ", "wmo.MPQ", "sound.MPQ", "fonts.MPQ", "dbc.MPQ", "speech.MPQ", "expansionloc.MPQ", "lichkingloc.MPQ", "expansionspeech.MPQ", "lichkingspeech.MPQ", "expansion.MPQ", "lichking.MPQ", "common.MPQ", "common-2.MPQ"}
 
 func discoverMPQArchives(root, locale string) ([]string, error) {
 	locale = strings.ToLower(strings.TrimSpace(locale))
 	if locale == "" {
 		locale = "enus"
 	}
-	paths := make([]mpqPathRank, 0)
-	appendDir := func(dir string, localized bool) error {
-		entries, err := os.ReadDir(dir)
-		if os.IsNotExist(err) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".mpq") {
-				continue
-			}
-			paths = append(paths, mpqPathRank{path: filepath.Join(dir, entry.Name()), rank: archiveRank(strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name())), localized)})
-		}
-		return nil
-	}
-	if err := appendDir(root, false); err != nil {
+	rootEntries, err := mpqDirectory(root)
+	if err != nil {
 		return nil, err
 	}
 	localeDir := ""
@@ -179,78 +181,96 @@ func discoverMPQArchives(root, locale string) ([]string, error) {
 			}
 		}
 	}
-	if err := appendDir(localeDir, true); err != nil {
-		return nil, err
+	localeEntries := map[string]string{}
+	if localeDir != "" {
+		localeEntries, err = mpqDirectory(localeDir)
+		if err != nil {
+			return nil, err
+		}
+	}
+	paths := make([]string, 0, len(fixedMPQArchives)+6)
+	appendIfPresent := func(entries map[string]string, name string) {
+		if path, ok := entries[strings.ToLower(name)]; ok {
+			paths = append(paths, path)
+		}
+	}
+	for _, name := range fixedMPQArchives {
+		appendIfPresent(rootEntries, name)
+	}
+	for _, name := range []string{"locale-" + locale + ".MPQ", "speech-" + locale + ".MPQ", "expansion-locale-" + locale + ".MPQ", "lichking-locale-" + locale + ".MPQ", "expansion-speech-" + locale + ".MPQ", "lichking-speech-" + locale + ".MPQ"} {
+		appendIfPresent(localeEntries, name)
+	}
+	patches := make([]mpqPatchPath, 0)
+	for name, path := range rootEntries {
+		if number, ok := rootPatchNumber(name); ok {
+			patches = append(patches, mpqPatchPath{path: path, number: number})
+		}
+	}
+	for name, path := range localeEntries {
+		if number, ok := localePatchNumber(name, locale); ok {
+			patches = append(patches, mpqPatchPath{path: path, number: 100000 + number})
+		}
+	}
+	sort.SliceStable(patches, func(i, j int) bool {
+		if patches[i].number != patches[j].number {
+			return patches[i].number < patches[j].number
+		}
+		return strings.ToLower(patches[i].path) < strings.ToLower(patches[j].path)
+	})
+	for _, patch := range patches {
+		paths = append(paths, patch.path)
 	}
 	if len(paths) == 0 {
-		return nil, fmt.Errorf("no MPQ archives found under %s", root)
+		return nil, fmt.Errorf("no recognized MPQ archives found under %s", root)
 	}
-	sort.SliceStable(paths, func(i, j int) bool {
-		if paths[i].rank != paths[j].rank {
-			return paths[i].rank < paths[j].rank
+	return paths, nil
+}
+
+type mpqPatchPath struct {
+	path   string
+	number int
+}
+
+func mpqDirectory(root string) (map[string]string, error) {
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]string)
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.EqualFold(filepath.Ext(entry.Name()), ".mpq") {
+			result[strings.ToLower(entry.Name())] = filepath.Join(root, entry.Name())
 		}
-		return strings.ToLower(paths[i].path) < strings.ToLower(paths[j].path)
-	})
-	result := make([]string, len(paths))
-	for i, path := range paths {
-		result[i] = path.path
 	}
 	return result, nil
 }
 
-func archiveRank(name string, localized bool) int {
-	name = strings.ToLower(name)
-	if strings.HasPrefix(name, "backup") {
-		return 0
+func rootPatchNumber(name string) (int, bool) {
+	name = strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name)))
+	if name == "patch" {
+		return 0, true
 	}
-	if localized {
-		switch {
-		case strings.HasPrefix(name, "base-"):
-			return 4000
-		case strings.HasPrefix(name, "locale-"):
-			return 5000
-		case strings.HasPrefix(name, "expansion-locale-"):
-			return 5200
-		case strings.HasPrefix(name, "lichking-locale-"):
-			return 5300
-		case strings.HasPrefix(name, "patch-"):
-			return 7000 + archiveNumber(name, "patch-")
-		case strings.HasPrefix(name, "speech-"):
-			return 100
-		case strings.Contains(name, "speech-"):
-			return 100
-		}
-		return 4500
+	if !strings.HasPrefix(name, "patch-") {
+		return 0, false
 	}
-	switch {
-	case strings.HasPrefix(name, "common"):
-		return 1000 + archiveNumber(name, "common")
-	case strings.HasPrefix(name, "expansion"):
-		return 2000 + archiveNumber(name, "expansion")
-	case strings.HasPrefix(name, "lichking"):
-		return 3000 + archiveNumber(name, "lichking")
-	case strings.HasPrefix(name, "start"):
-		return 3500 + archiveNumber(name, "start")
-	case name == "patch" || strings.HasPrefix(name, "patch-"):
-		return 6000 + archiveNumber(name, "patch")
-	}
-	return 5500
+	number, err := strconv.Atoi(strings.TrimPrefix(name, "patch-"))
+	return number, err == nil && number >= 1
 }
 
-func archiveNumber(name, prefix string) int {
-	suffix := strings.TrimPrefix(name, prefix)
-	suffix = strings.TrimPrefix(suffix, "-")
-	if suffix == "" {
-		return 0
+func localePatchNumber(name, locale string) (int, bool) {
+	name = strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name)))
+	prefix := "patch-" + locale
+	if name == prefix {
+		return 0, true
 	}
-	if index := strings.LastIndexByte(suffix, '-'); index >= 0 {
-		suffix = suffix[index+1:]
+	if !strings.HasPrefix(name, prefix+"-") {
+		return 0, false
 	}
-	value, err := strconv.Atoi(suffix)
-	if err != nil || value < 0 {
-		return 0
-	}
-	return value
+	number, err := strconv.Atoi(strings.TrimPrefix(name, prefix+"-"))
+	return number, err == nil && number >= 1
 }
 
 func mpqLocaleID(locale string) uint16 {
@@ -321,10 +341,14 @@ func openMPQArchive(path string) (*mpqArchive, error) {
 		return closeOnError(err)
 	}
 	decryptMPQ(hashData, hashString("(hash table)", hashTypeFileKey))
-	archive.hashes = make([]mpqHashEntry, hashEntries)
-	for i := range archive.hashes {
+	archive.index = make(map[mpqHashKey][]mpqHashEntry, hashEntries/4)
+	for i := uint32(0); i < hashEntries; i++ {
 		at := i * 16
-		archive.hashes[i] = mpqHashEntry{hashA: binary.LittleEndian.Uint32(hashData[at:]), hashB: binary.LittleEndian.Uint32(hashData[at+4:]), locale: binary.LittleEndian.Uint16(hashData[at+8:]), platform: binary.LittleEndian.Uint16(hashData[at+10:]), block: binary.LittleEndian.Uint32(hashData[at+12:])}
+		entry := mpqHashEntry{hashA: binary.LittleEndian.Uint32(hashData[at:]), hashB: binary.LittleEndian.Uint32(hashData[at+4:]), locale: binary.LittleEndian.Uint16(hashData[at+8:]), platform: binary.LittleEndian.Uint16(hashData[at+10:]), block: binary.LittleEndian.Uint32(hashData[at+12:])}
+		if entry.block != mpqHashEmpty && entry.block != mpqHashDeleted {
+			key := mpqHashKey{hashA: entry.hashA, hashB: entry.hashB}
+			archive.index[key] = append(archive.index[key], entry)
+		}
 	}
 	blockData, err := readAt(file, headerOffset+int64(blockPosition), int(blockEntries)*16)
 	if err != nil {
@@ -361,15 +385,18 @@ func findMPQHeader(file *os.File) (int64, error) {
 }
 
 func (archive *mpqArchive) findBlock(name string, locale uint16) (mpqBlockEntry, bool) {
-	if len(archive.hashes) == 0 {
+	if len(archive.index) == 0 {
 		return mpqBlockEntry{}, false
 	}
 	name = normalizeMPQPath(name)
-	start := hashString(name, hashTypeName) % uint32(len(archive.hashes))
+	key := mpqHashKey{hashA: hashString(name, hashTypeA), hashB: hashString(name, hashTypeB)}
+	entries := archive.index[key]
+	if len(entries) == 0 {
+		return mpqBlockEntry{}, false
+	}
 	for _, wantedLocale := range []uint16{locale, localeNeutral, localeAny} {
-		for offset := uint32(0); offset < uint32(len(archive.hashes)); offset++ {
-			entry := archive.hashes[(start+offset)%uint32(len(archive.hashes))]
-			if entry.block == mpqHashEmpty || entry.block == mpqHashDeleted || entry.block >= uint32(len(archive.blocks)) || entry.hashA != hashString(name, hashTypeA) || entry.hashB != hashString(name, hashTypeB) {
+		for _, entry := range entries {
+			if entry.block >= uint32(len(archive.blocks)) {
 				continue
 			}
 			if wantedLocale != localeAny && entry.locale != wantedLocale {

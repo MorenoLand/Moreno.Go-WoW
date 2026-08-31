@@ -427,6 +427,12 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 	w := newWidget(kind, name)
 	w.parent = parent
 	l.applyWidgetAttrs(w, merged)
+	if w.parent == nil && w.topLevel {
+		if root := l.rt.lookup("GlueParent"); root != nil {
+			w.parent = root
+			root.children = append(root.children, w)
+		}
+	}
 
 	for _, group := range merged.children {
 		switch group.name {
@@ -538,10 +544,10 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 		}
 	}
 	if w.buttonLabel != nil {
-		if w.buttonLabel.width == 0 {
+		if w.buttonLabel.width == 0 && !w.buttonLabel.autoTextWidth {
 			w.buttonLabel.width = w.width
 		}
-		if w.buttonLabel.height == 0 {
+		if w.buttonLabel.height == 0 && !w.buttonLabel.autoTextHeight {
 			w.buttonLabel.height = w.height
 		}
 	}
@@ -562,6 +568,7 @@ func (l *Loader) buildButtonTexture(node *xmlNode, parent *widget, interfacePath
 	w := newWidget(kindTexture, resolveParentName(merged.attrDefault("name", ""), parent.name))
 	w.parent = parent
 	w.textureFile = merged.attrDefault("file", "")
+	w.alphaMode = merged.attrDefault("alphaMode", "")
 	if hidden, ok := merged.attr("hidden"); ok {
 		w.shown = !parseBool(hidden, false)
 	}
@@ -607,6 +614,7 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 	w.parent = parent
 	if kind == kindTexture {
 		w.textureFile = merged.attrDefault("file", "")
+		w.alphaMode = merged.attrDefault("alphaMode", "")
 		if tc := merged.child("TexCoords"); tc != nil {
 			w.texCoordL = attrFloat(tc, "left", 0)
 			w.texCoordR = attrFloat(tc, "right", 1)
@@ -621,14 +629,10 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 		w.fontObject = merged.attrDefault("inherits", "")
 		w.justifyH = merged.attrDefault("justifyH", "")
 		w.justifyV = merged.attrDefault("justifyV", "")
+		w.autoTextWidth = true
+		w.autoTextHeight = true
 		if c := merged.child("Color"); c != nil {
 			w.textColor = rgba{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), 1}
-		}
-		if w.width == 0 {
-			w.width = parent.width
-		}
-		if w.height == 0 {
-			w.height = 20
 		}
 	}
 	if s := merged.child("Size"); s != nil {
@@ -640,14 +644,11 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 		}
 	}
 	if kind == kindFontString {
-		if w.width == 0 {
-			w.width = parent.width
-			if w.width == 0 {
-				w.width = 600
-			}
+		if w.width > 0 {
+			w.autoTextWidth = false
 		}
-		if w.height == 0 {
-			w.height = 20
+		if w.height > 0 {
+			w.autoTextHeight = false
 		}
 	}
 	if a := merged.child("Anchors"); a != nil {
@@ -850,10 +851,14 @@ func parseAnchors(node *xmlNode) []anchorPoint {
 		if v, ok := a.attr("relativePoint"); ok {
 			p.relativePoint = v
 		}
+		p.x = attrFloat(a, "x", 0)
+		p.y = attrFloat(a, "y", 0)
 		if off := a.child("Offset"); off != nil {
+			p.x = attrFloat(off, "x", p.x)
+			p.y = attrFloat(off, "y", p.y)
 			if d := off.child("AbsDimension"); d != nil {
-				p.x = attrFloat(d, "x", 0)
-				p.y = attrFloat(d, "y", 0)
+				p.x = attrFloat(d, "x", p.x)
+				p.y = attrFloat(d, "y", p.y)
 			}
 		}
 		points = append(points, p)
@@ -953,13 +958,6 @@ func mergeTemplate(tpl, instance *xmlNode) *xmlNode {
 		}
 	}
 	merged.children = append(merged.children, instance.children...)
-	if scripts := merged.child("Scripts"); scripts != nil {
-		if instScripts := instance.child("Scripts"); instScripts != nil {
-			for _, s := range instScripts.children {
-				removeHandler(scripts, s.name)
-			}
-		}
-	}
 	return merged
 }
 
