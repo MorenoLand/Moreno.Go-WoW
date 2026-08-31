@@ -105,6 +105,16 @@ type glueModelInfo struct {
 	fov      float32
 	far      float32
 	near     float32
+	stats    glueModelStats
+}
+
+type glueModelStats struct {
+	parts              int
+	vertices           int
+	triangles          int
+	textures           int
+	opaqueBatches      int
+	transparentBatches int
 }
 
 func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
@@ -135,9 +145,22 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 	}
 	root := core.NewNode()
 	textures := make(map[string]*texture.Texture2D)
+	texturePaths := make(map[string]struct{})
+	stats := glueModelStats{}
 	for _, part := range parts {
 		if len(part.texturePaths) == 0 || len(part.indices) == 0 {
 			continue
+		}
+		stats.parts++
+		stats.vertices += len(part.positions) / 3
+		stats.triangles += len(part.indices) / 3
+		if part.material.blend >= 2 {
+			stats.transparentBatches++
+		} else {
+			stats.opaqueBatches++
+		}
+		for _, texturePath := range part.texturePaths {
+			texturePaths[texturePath] = struct{}{}
 		}
 		geom := geometry.NewGeometry()
 		geom.SetIndices(part.indices)
@@ -207,11 +230,18 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 	center, scale := modelTransform(model.vertices)
 	root.SetPosition(-center[0]*scale, -center[1]*scale, -center[2]*scale)
 	root.SetScale(scale, scale, scale)
+	stats.textures = len(texturePaths)
+	info := glueModelInfo{stats: stats}
 	if model.camera != nil {
 		position := modelPoint(model.camera.position, center, scale)
 		target := modelPoint(model.camera.target, center, scale)
-		root.SetUserData(glueModelInfo{position: *math32.NewVector3(position[0], position[1], position[2]), target: *math32.NewVector3(target[0], target[1], target[2]), fov: model.camera.fov, far: model.camera.farClip * scale, near: model.camera.nearClip * scale})
+		info.position = *math32.NewVector3(position[0], position[1], position[2])
+		info.target = *math32.NewVector3(target[0], target[1], target[2])
+		info.fov = model.camera.fov
+		info.far = model.camera.farClip * scale
+		info.near = model.camera.nearClip * scale
 	}
+	root.SetUserData(info)
 	return root, nil
 }
 

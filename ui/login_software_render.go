@@ -43,6 +43,7 @@ type UIEngine struct {
 	movieFile       string
 	movieImage      image.Image
 	sceneBackground bool
+	debugPanel      debugPanelState
 }
 
 func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, error) {
@@ -419,6 +420,9 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 			}
 		}
 	}
+	if eng.debugPanel.visible {
+		eng.drawDebugPanel(canvas, face, faceLg)
+	}
 
 	return canvas
 }
@@ -649,6 +653,22 @@ func (eng *UIEngine) SetGlueState(state GlueState) {
 }
 
 func (eng *UIEngine) HandleCursor(x, y float64) bool {
+	if eng.debugPanel.dragging {
+		eng.debugPanel.move(x, y, eng)
+		if eng.hovered != nil {
+			eng.hovered.highlighted = false
+			eng.hovered = nil
+		}
+		return true
+	}
+	if eng.debugPanel.contains(x, y, eng) {
+		if eng.hovered != nil {
+			eng.hovered.highlighted = false
+			eng.hovered = nil
+			return true
+		}
+		return false
+	}
 	target := eng.hitTest(x, y)
 	if target == eng.hovered {
 		return false
@@ -666,6 +686,9 @@ func (eng *UIEngine) HandleCursor(x, y float64) bool {
 func (eng *UIEngine) HandleMouse(x, y float64, button window.MouseButton, down bool) bool {
 	if button != window.MouseButtonLeft {
 		return false
+	}
+	if eng.debugPanel.handleMouse(x, y, down, eng) {
+		return true
 	}
 	target := eng.hitTest(x, y)
 	if down {
@@ -790,6 +813,10 @@ func (eng *UIEngine) HandleKey(key window.Key) bool {
 }
 
 func (eng *UIEngine) HandleKeyWithMods(key window.Key, mods window.ModifierKey) bool {
+	if key == window.KeyF2 {
+		eng.ToggleDebugPanel()
+		return true
+	}
 	if eng.Rt.focused == nil && mods&window.ModControl != 0 {
 		switch key {
 		case window.KeyM:

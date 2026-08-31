@@ -107,6 +107,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	}
 	defer win.Destroy()
 	gl := win.Gls()
+	gpuVendor := gl.GetString(gls.VENDOR)
+	gpuRenderer := gl.GetString(gls.RENDERER)
+	gpuVersion := gl.GetString(gls.VERSION)
 	r := renderer.NewRenderer(gl)
 	if err := r.AddDefaultShaders(); err != nil {
 		log.Printf("renderer: %v", err)
@@ -156,6 +159,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var sceneModel *core.Node
 	sceneModelPath := ""
 	sceneCameraDiagonalFOV := float32(0)
+	debugModelLoadMS := float64(0)
+	debugUIRenderMS := float64(0)
+	debugModelError := ""
 	var setSceneModel func()
 	if dataPath != "" {
 		eng, err = ui.LoadUIEngineFromMPQ(dataPath, clientConfig.Locale, backgroundPath)
@@ -193,6 +199,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			resetSceneCamera(cam)
 			sceneCameraDiagonalFOV = 0
 			sceneModelPath = path
+			debugModelError = ""
+			debugModelLoadMS = 0
 			uiEngine.SetSceneBackground(false)
 			if path == "" {
 				return
@@ -200,13 +208,17 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			if debug {
 				log.Printf("scene: loading %s", path)
 			}
+			modelStarted := time.Now()
 			model, modelErr := loadGlueModel(uiEngine.AssetLoader, path)
+			debugModelLoadMS = time.Since(modelStarted).Seconds() * 1000
 			if modelErr != nil {
+				debugModelError = modelErr.Error()
 				if debug {
 					log.Printf("model %s: %v", path, modelErr)
 				}
 				return
 			}
+			debugModelError = ""
 			sceneModel = model
 			scene.Add(sceneModel)
 			if info, ok := sceneModel.UserData().(glueModelInfo); ok {
@@ -236,6 +248,37 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	if wowCursor != nil {
 		defer wowCursor.Destroy()
 	}
+	debugFPS := float64(0)
+	debugFrameMS := float64(0)
+	debugPanelRefresh := time.Time{}
+	updateDebugPanel := func() {
+		width, height := win.GetSize()
+		parts := 0
+		if sceneModel != nil {
+			parts = len(sceneModel.Children())
+		}
+		connection := "idle"
+		if host.loginRunning {
+			connection = "connecting"
+		} else if activeSession != nil {
+			connection = "connected"
+		}
+		modelStats := glueModelStats{}
+		if sceneModel != nil {
+			if info, ok := sceneModel.UserData().(glueModelInfo); ok {
+				modelStats = info.stats
+			}
+		}
+		assetStats := uiEngine.AssetLoader.AssetStats()
+		uiEngine.SetDebugPanelLines(debugPanelLines(debugPanelData{
+			width: width, height: height, fps: debugFPS, frameMS: debugFrameMS, uiRenderMS: debugUIRenderMS,
+			modelLoadMS: debugModelLoadMS, gpuVendor: gpuVendor, gpuRenderer: gpuRenderer, gpuVersion: gpuVersion,
+			dataPath: dataPath, scenePath: sceneModelPath, connection: connection, authAddress: clientConfig.AuthAddress,
+			model: modelStats, sceneParts: parts, assetCache: len(uiEngine.Cache), mpqArchives: assetStats.Archives,
+			mpqCachedFiles: assetStats.CachedFiles, mpqMissingFiles: assetStats.MissingFiles, audio: host.audio != nil,
+			cursor: wowCursor != nil, modelError: debugModelError, terminalDebug: debug,
+		}))
+	}
 
 	refresh := func() {
 		if uiImage == nil || uiEngine == nil {
@@ -250,7 +293,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		if setSceneModel != nil {
 			setSceneModel()
 		}
+		uiStarted := time.Now()
 		uiImage.SetTexture(texture.NewTexture2DFromRGBA(uiEngine.Render(width, height)))
+		debugUIRenderMS = time.Since(uiStarted).Seconds() * 1000
 		uiImage.SetSize(float32(width), float32(height))
 	}
 
@@ -291,6 +336,13 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		})
 		win.Subscribe(window.OnKeyDown, func(_ string, event interface{}) {
 			key := event.(*window.KeyEvent)
+			if key.Key == window.KeyF2 {
+				uiEngine.HandleKeyWithMods(key.Key, key.Mods)
+				updateDebugPanel()
+				debugPanelRefresh = time.Now()
+				refresh()
+				return
+			}
 			if uiEngine.HandleKeyWithMods(key.Key, key.Mods) {
 				refresh()
 			}
@@ -308,7 +360,18 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
 	lastUpdate := time.Now()
+	lastFrame := lastUpdate
 	for !win.ShouldClose() {
+		frameAt := time.Now()
+		if elapsed := frameAt.Sub(lastFrame).Seconds(); elapsed > 0 {
+			debugFrameMS = elapsed * 1000
+			if debugFPS == 0 {
+				debugFPS = 1 / elapsed
+			} else {
+				debugFPS = debugFPS*.9 + (1/elapsed)*.1
+			}
+		}
+		lastFrame = frameAt
 		select {
 		case <-signals:
 			win.SetShouldClose(true)
@@ -342,6 +405,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				}
 				refresh()
 			default:
+			}
+			if uiEngine.DebugPanelVisible() && (debugPanelRefresh.IsZero() || frameAt.Sub(debugPanelRefresh) >= 250*time.Millisecond) {
+				updateDebugPanel()
+				debugPanelRefresh = frameAt
+				refresh()
 			}
 		}
 		gl.Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
