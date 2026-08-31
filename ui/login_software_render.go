@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/g3n/engine/window"
@@ -366,19 +367,20 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 		}
 
 		if w.kind == kindButton || w.kind == kindCheckButton {
-			for _, child := range w.children {
+			children := orderedChildren(w.children)
+			for _, child := range children {
 				if child.shown && child.layerLevel < layerArtwork {
 					paint(child, rect)
 				}
 			}
 			eng.paintButtonState(w, rect, paint)
-			for _, child := range w.children {
+			for _, child := range children {
 				if child.shown && child.layerLevel >= layerArtwork {
 					paint(child, rect)
 				}
 			}
 		} else {
-			for _, child := range w.children {
+			for _, child := range orderedChildren(w.children) {
 				if child.shown && !(w.kind == kindEditBox && w.text != "" && child.kind == kindFontString && strings.HasSuffix(strings.ToLower(child.name), "fill")) {
 					paint(child, rect)
 				}
@@ -400,7 +402,7 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 
 	glueParent := eng.Rt.widgets["GlueParent"]
 	if glueParent != nil {
-		for _, child := range glueParent.children {
+		for _, child := range orderedChildren(glueParent.children) {
 			if child.shown {
 				paint(child, screen)
 			}
@@ -1067,7 +1069,8 @@ func (eng *UIEngine) keyboardTarget() *widget {
 		return nil
 	}
 	for index := len(root.children) - 1; index >= 0; index-- {
-		if target := keyboardWidget(root.children[index]); target != nil {
+		children := orderedChildren(root.children)
+		if target := keyboardWidget(children[index]); target != nil {
 			return target
 		}
 	}
@@ -1078,8 +1081,9 @@ func keyboardWidget(w *widget) *widget {
 	if !w.shown {
 		return nil
 	}
-	for index := len(w.children) - 1; index >= 0; index-- {
-		if target := keyboardWidget(w.children[index]); target != nil {
+	children := orderedChildren(w.children)
+	for index := len(children) - 1; index >= 0; index-- {
+		if target := keyboardWidget(children[index]); target != nil {
 			return target
 		}
 	}
@@ -1115,8 +1119,9 @@ func (eng *UIEngine) hitTest(x, y float64) *widget {
 			return nil
 		}
 		rect := eng.layoutRect(w, parent)
-		for i := len(w.children) - 1; i >= 0; i-- {
-			if target := visit(w.children[i], rect); target != nil {
+		children := orderedChildren(w.children)
+		for i := len(children) - 1; i >= 0; i-- {
+			if target := visit(children[i], rect); target != nil {
 				return target
 			}
 		}
@@ -1132,12 +1137,73 @@ func (eng *UIEngine) hitTest(x, y float64) *widget {
 	if root == nil {
 		return nil
 	}
-	for i := len(root.children) - 1; i >= 0; i-- {
-		if target := visit(root.children[i], eng.screen); target != nil {
+	children := orderedChildren(root.children)
+	for i := len(children) - 1; i >= 0; i-- {
+		if target := visit(children[i], eng.screen); target != nil {
 			return target
 		}
 	}
 	return nil
+}
+
+func frameStrataOrder(value string) int {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "BACKGROUND":
+		return 0
+	case "LOW":
+		return 1
+	case "HIGH":
+		return 3
+	case "DIALOG":
+		return 4
+	case "FULLSCREEN":
+		return 5
+	case "FULLSCREEN_DIALOG":
+		return 6
+	case "TOOLTIP":
+		return 7
+	default:
+		return 2
+	}
+}
+
+func frameStrataName(value int) string {
+	switch value {
+	case 0:
+		return "BACKGROUND"
+	case 1:
+		return "LOW"
+	case 3:
+		return "HIGH"
+	case 4:
+		return "DIALOG"
+	case 5:
+		return "FULLSCREEN"
+	case 6:
+		return "FULLSCREEN_DIALOG"
+	case 7:
+		return "TOOLTIP"
+	default:
+		return "MEDIUM"
+	}
+}
+
+func orderedChildren(children []*widget) []*widget {
+	if len(children) < 2 {
+		return children
+	}
+	ordered := append([]*widget(nil), children...)
+	sort.SliceStable(ordered, func(left, right int) bool {
+		first, second := ordered[left], ordered[right]
+		if first.frameStrata != second.frameStrata {
+			return first.frameStrata < second.frameStrata
+		}
+		if first.frameLevel != second.frameLevel {
+			return first.frameLevel < second.frameLevel
+		}
+		return first.layerLevel < second.layerLevel
+	})
+	return ordered
 }
 
 // renderBackground draws the WotLK Northrend background.

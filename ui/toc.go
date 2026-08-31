@@ -81,7 +81,7 @@ func installTemplateFactory(l *Loader) {
 				for _, frameEl := range group.children {
 					if isWidgetElement(frameEl.name) {
 						if child, err := l.buildWidget(frameEl, w, "CreateFrame:"+template); err == nil {
-							w.children = append(w.children, child)
+							addWidgetChild(w, child)
 						}
 					}
 				}
@@ -455,7 +455,7 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 	if w.parent == nil && w.topLevel {
 		if root := l.rt.lookup("GlueParent"); root != nil {
 			w.parent = root
-			root.children = append(root.children, w)
+			addWidgetChild(root, w)
 		}
 	}
 
@@ -491,7 +491,7 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 					if err != nil {
 						return nil, err
 					}
-					w.children = append(w.children, child)
+					addWidgetChild(w, child)
 				}
 			}
 		case "ScrollChild":
@@ -501,7 +501,7 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 					if err != nil {
 						return nil, err
 					}
-					w.children = append(w.children, child)
+					addWidgetChild(w, child)
 				}
 			}
 		case "Scripts":
@@ -706,7 +706,7 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 	if hidden, ok := merged.attr("hidden"); ok {
 		w.shown = !parseBool(hidden, false)
 	}
-	parent.children = append(parent.children, w)
+	addWidgetChild(parent, w)
 	l.rt.register(w)
 	return w, nil
 }
@@ -755,7 +755,7 @@ func (l *Loader) applyWidgetAttrs(w *widget, node *xmlNode) {
 	if parentName, ok := node.attr("parent"); ok && parentName != "" {
 		if p := l.rt.lookup(parentName); p != nil {
 			w.parent = p
-			p.children = append(p.children, w)
+			addWidgetChild(p, w)
 		}
 	}
 	if v, ok := node.attr("hidden"); ok {
@@ -775,6 +775,9 @@ func (l *Loader) applyWidgetAttrs(w *widget, node *xmlNode) {
 	}
 	if v, ok := node.attr("clampedToScreen"); ok {
 		w.clampedToScreen = parseBool(v, false)
+	}
+	if v, ok := node.attr("frameStrata"); ok {
+		w.frameStrata = frameStrataOrder(v)
 	}
 	if v, ok := node.attr("frameLevel"); ok {
 		if n, err := strconv.Atoi(v); err == nil {

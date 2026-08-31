@@ -95,6 +95,7 @@ type widget struct {
 	enableMouse     bool
 	enableKeyboard  bool
 	clampedToScreen bool
+	frameStrata     int
 	frameLevel      int
 	layerLevel      int
 	renderRect      Rect
@@ -215,12 +216,25 @@ func newWidget(kind widgetKind, name string) *widget {
 		alpha:       1,
 		buttonState: "NORMAL",
 		enabled:     true,
+		frameStrata: 2,
 		layerLevel:  layerArtwork,
 		orientation: "VERTICAL",
 		scripts:     make(map[string]*lua.LFunction),
 		events:      make(map[string]bool),
 		texCoordL:   0, texCoordR: 1, texCoordT: 0, texCoordB: 1,
 	}
+}
+
+func addWidgetChild(parent, child *widget) {
+	if parent == nil || child == nil {
+		return
+	}
+	for _, existing := range parent.children {
+		if existing == child {
+			return
+		}
+	}
+	parent.children = append(parent.children, child)
 }
 
 func (w *widget) objectType() string { return w.kind.objectType() }
@@ -289,7 +303,17 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		"SetParent": func(L *lua.LState, w *widget) int {
 			ud := L.CheckUserData(2)
 			if p, ok := ud.Value.(*widget); ok {
+				if w.parent != nil && w.parent != p {
+					children := w.parent.children[:0]
+					for _, child := range w.parent.children {
+						if child != w {
+							children = append(children, child)
+						}
+					}
+					w.parent.children = children
+				}
 				w.parent = p
+				addWidgetChild(p, w)
 			}
 			return 0
 		},
@@ -393,11 +417,30 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.frameLevel = L.CheckInt(2)
 			return 0
 		},
+		"SetFrameStrata": func(L *lua.LState, w *widget) int {
+			w.frameStrata = frameStrataOrder(L.CheckString(2))
+			return 0
+		},
+		"GetFrameStrata": func(L *lua.LState, w *widget) int {
+			L.Push(lua.LString(frameStrataName(w.frameStrata)))
+			return 1
+		},
 		"GetFrameLevel": func(L *lua.LState, w *widget) int {
 			L.Push(lua.LNumber(w.frameLevel))
 			return 1
 		},
-		"Raise": func(L *lua.LState, w *widget) int { return 0 },
+		"Raise": func(L *lua.LState, w *widget) int {
+			if w.parent != nil {
+				level := w.frameLevel
+				for _, sibling := range w.parent.children {
+					if sibling != w && sibling.frameLevel >= level {
+						level = sibling.frameLevel + 1
+					}
+				}
+				w.frameLevel = level
+			}
+			return 0
+		},
 		"EnableKeyboard": func(L *lua.LState, w *widget) int {
 			w.enableKeyboard = L.CheckBool(2)
 			return 0
