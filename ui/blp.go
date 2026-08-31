@@ -121,7 +121,7 @@ func decodeBLPDXT(mip []byte, width, height int, alphaDepth uint32) (image.Image
 		for by := 0; by < height; by += 4 {
 			for bx := 0; bx < width; bx += 4 {
 				off := ((bx / 4) + (by/4)*((width+3)/4)) * 8
-				decodeDXT1Block(mip[off:off+8], img, bx, by)
+				decodeDXT1Block(mip[off:off+8], img, bx, by, false)
 			}
 		}
 	case 1: // DXT1 with 1-bit alpha (same layout)
@@ -132,7 +132,7 @@ func decodeBLPDXT(mip []byte, width, height int, alphaDepth uint32) (image.Image
 		for by := 0; by < height; by += 4 {
 			for bx := 0; bx < width; bx += 4 {
 				off := ((bx / 4) + (by/4)*((width+3)/4)) * 8
-				decodeDXT1Block(mip[off:off+8], img, bx, by)
+				decodeDXT1Block(mip[off:off+8], img, bx, by, true)
 			}
 		}
 	case 4: // DXT3
@@ -163,7 +163,7 @@ func decodeBLPDXT(mip []byte, width, height int, alphaDepth uint32) (image.Image
 	return img, nil
 }
 
-func decodeDXT1Block(block []byte, img *image.NRGBA, bx, by int) {
+func decodeDXT1Block(block []byte, img *image.NRGBA, bx, by int, hasAlpha bool) {
 	c0 := binary.LittleEndian.Uint16(block[0:2])
 	c1 := binary.LittleEndian.Uint16(block[2:4])
 	r0, g0, b0 := rgb565(c0)
@@ -187,7 +187,7 @@ func decodeDXT1Block(block []byte, img *image.NRGBA, bx, by int) {
 			}
 			code := uint8(bits >> (2 * uint(py*4+px)) & 3)
 			c := color.RGBA{R: palette[code][0], G: palette[code][1], B: palette[code][2], A: 255}
-			if c0 <= c1 && code == 3 {
+			if hasAlpha && c0 <= c1 && code == 3 {
 				c.A = 0
 			}
 			img.Set(x, y, color.NRGBA{R: c.R, G: c.G, B: c.B, A: c.A})
