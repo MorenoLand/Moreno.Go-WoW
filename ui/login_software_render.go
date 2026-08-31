@@ -1362,14 +1362,9 @@ func drawBackdropEdge(canvas *image.RGBA, dst image.Rectangle, source image.Imag
 	if b.Dx() < 8 || b.Dy() < 1 || dst.Dx() < 2 || dst.Dy() < 2 {
 		return
 	}
-	tileWidth := b.Dx() / 8
-	tileHeight := b.Dy()
-	if tileWidth < 1 || tileHeight < 1 {
-		return
-	}
-	edge := int(edgeSize)
+	edge := int(math.Round(edgeSize))
 	if edge <= 0 {
-		edge = tileHeight
+		edge = b.Dy()
 	}
 	if edge > dst.Dx()/2 {
 		edge = dst.Dx() / 2
@@ -1380,29 +1375,61 @@ func drawBackdropEdge(canvas *image.RGBA, dst image.Rectangle, source image.Imag
 	if edge < 1 {
 		return
 	}
+	atlas := [8][4]float64{
+		{0.0078125, 0.1171875, 0.0625, 0.9375},
+		{0.1328125, 0.2421875, 0.0625, 0.9375},
+		{0.2578125, 0.3671875, 0.0625, 0.9375},
+		{0.3828125, 0.4921875, 0.0625, 0.9375},
+		{0.5078125, 0.6171875, 0.0625, 0.9375},
+		{0.6328125, 0.7421875, 0.0625, 0.9375},
+		{0.7578125, 0.8671875, 0.0625, 0.9375},
+		{0.8828125, 0.9921875, 0.0625, 0.9375},
+	}
 	drawPart := func(target image.Rectangle, index int, transpose bool, fraction float64) {
 		if target.Dx() <= 0 || target.Dy() <= 0 {
 			return
 		}
 		fraction = math.Max(0, math.Min(1, fraction))
+		coords := atlas[index]
+		x0 := b.Min.X + int(math.Round(float64(b.Dx())*coords[0]))
+		x1 := b.Min.X + int(math.Round(float64(b.Dx())*coords[1]))
+		y0 := b.Min.Y + int(math.Round(float64(b.Dy())*coords[2]))
+		y1 := b.Min.Y + int(math.Round(float64(b.Dy())*coords[3]))
+		if x0 < b.Min.X {
+			x0 = b.Min.X
+		}
+		if x1 > b.Max.X {
+			x1 = b.Max.X
+		}
+		if y0 < b.Min.Y {
+			y0 = b.Min.Y
+		}
+		if y1 > b.Max.Y {
+			y1 = b.Max.Y
+		}
+		if x1 <= x0 || y1 <= y0 {
+			return
+		}
+		sourceWidth := x1 - x0
+		sourceHeight := y1 - y0
 		mapped := image.NewNRGBA(image.Rect(0, 0, target.Dx(), target.Dy()))
 		for y := 0; y < target.Dy(); y++ {
 			for x := 0; x < target.Dx(); x++ {
 				var sourceX, sourceY int
 				if transpose {
-					sourceX = int(float64(y) / float64(target.Dy()) * float64(tileWidth))
-					sourceY = int(float64(x) / float64(target.Dx()) * float64(tileHeight) * fraction)
+					sourceX = x0 + int(float64(y)/float64(target.Dy())*float64(sourceWidth))
+					sourceY = y0 + int(float64(x)/float64(target.Dx())*float64(sourceHeight)*fraction)
 				} else {
-					sourceX = int(float64(x) / float64(target.Dx()) * float64(tileWidth))
-					sourceY = int(float64(y) / float64(target.Dy()) * float64(tileHeight) * fraction)
+					sourceX = x0 + int(float64(x)/float64(target.Dx())*float64(sourceWidth))
+					sourceY = y0 + int(float64(y)/float64(target.Dy())*float64(sourceHeight)*fraction)
 				}
-				if sourceX >= tileWidth {
-					sourceX = tileWidth - 1
+				if sourceX >= x1 {
+					sourceX = x1 - 1
 				}
-				if sourceY >= tileHeight {
-					sourceY = tileHeight - 1
+				if sourceY >= y1 {
+					sourceY = y1 - 1
 				}
-				mapped.Set(x, y, source.At(b.Min.X+index*tileWidth+sourceX, b.Min.Y+sourceY))
+				mapped.Set(x, y, source.At(sourceX, sourceY))
 			}
 		}
 		draw.Draw(canvas, target, mapped, image.Point{}, draw.Over)
