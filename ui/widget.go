@@ -128,13 +128,16 @@ type widget struct {
 	checked                bool
 
 	// EditBox state.
-	text         string
-	cursor       int
-	password     bool
-	autoFocus    bool
-	maxLetters   int
-	maxBytes     int
-	historyLines int
+	text            string
+	cursor          int
+	selectionStart  int
+	selectionEnd    int
+	selectionAnchor int
+	password        bool
+	autoFocus       bool
+	maxLetters      int
+	maxBytes        int
+	historyLines    int
 
 	// Slider state.
 	minValue, maxValue float64
@@ -158,6 +161,7 @@ type widget struct {
 	subtitles   bool
 	movieFile   string
 	movieActive bool
+	movieVolume int
 
 	// Texture state.
 	textureFile                                string
@@ -653,8 +657,22 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.textInsetB = float64(L.CheckNumber(5))
 			return 0
 		},
-		"HighlightText": func(L *lua.LState, w *widget) int { return 0 },
-		"SetFocus":      func(L *lua.LState, w *widget) int { rt.setFocus(w); return 0 },
+		"HighlightText": func(L *lua.LState, w *widget) int {
+			length := len([]rune(w.text))
+			start, end := 0, length
+			if L.GetTop() >= 2 && L.Get(2).Type() != lua.LTNil {
+				start = L.CheckInt(2)
+			}
+			if L.GetTop() >= 3 && L.Get(3).Type() != lua.LTNil {
+				end = L.CheckInt(3)
+			}
+			w.selectionStart = clampCursor(start, length)
+			w.selectionEnd = clampCursor(end, length)
+			w.selectionAnchor = w.selectionStart
+			w.cursor = w.selectionEnd
+			return 0
+		},
+		"SetFocus": func(L *lua.LState, w *widget) int { rt.setFocus(w); return 0 },
 		"ClearFocus": func(L *lua.LState, w *widget) int {
 			if rt.focused == w {
 				rt.setFocus(nil)
@@ -956,6 +974,10 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		"AdvanceTime":       func(L *lua.LState, w *widget) int { return 0 },
 		"StartMovie": func(L *lua.LState, w *widget) int {
 			w.movieFile = L.CheckString(2)
+			w.movieVolume = 255
+			if L.GetTop() >= 3 {
+				w.movieVolume = L.CheckInt(3)
+			}
 			w.movieActive = true
 			L.Push(lua.LTrue)
 			return 1

@@ -345,7 +345,7 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 
 		case kindMovieFrame:
 			if w.movieActive {
-				eng.ensureMovie(w.movieFile)
+				eng.ensureMovie(w.movieFile, float64(w.movieVolume)/255)
 				dst := ScreenRect(rect, float64(canvas.Bounds().Dy()))
 				draw.Draw(canvas, dst, &image.Uniform{C: color.Black}, image.Point{}, draw.Src)
 				if eng.movieImage != nil {
@@ -502,23 +502,23 @@ func (eng *UIEngine) paintButtonState(w *widget, rect Rect, paint func(*widget, 
 	}
 }
 
-func (eng *UIEngine) drawEditText(canvas *image.RGBA, face, faceLg font.Face, w *widget, rect Rect, screenHeight float64) {
-	if w.text == "" {
-		return
-	}
-	text := w.text
-	if w.password {
-		text = strings.Repeat("*", len([]rune(text)))
-	}
-	textWidget := w
-	textFace := face
+func (eng *UIEngine) editTextWidget(w *widget) *widget {
 	for _, child := range w.children {
 		if child.kind == kindFontString {
-			textWidget = child
-			textFace = eng.faceFor(child, face, faceLg)
-			break
+			return child
 		}
 	}
+	return w
+}
+
+func editDisplayText(w *widget) string {
+	if w.password {
+		return strings.Repeat("*", len([]rune(w.text)))
+	}
+	return w.text
+}
+
+func (eng *UIEngine) editTextRect(rect Rect, w *widget) Rect {
 	left := w.textInsetL
 	right := w.textInsetR
 	top := w.textInsetT
@@ -532,15 +532,91 @@ func (eng *UIEngine) drawEditText(canvas *image.RGBA, face, faceLg font.Face, w 
 	if top == 0 && bottom == 0 {
 		bottom = 4
 	}
-	textRect := Rect{X0: rect.X0 + left, Y0: rect.Y0 + bottom, X1: rect.X1 - right, Y1: rect.Y1 - top}
+	return Rect{X0: rect.X0 + left, Y0: rect.Y0 + bottom, X1: rect.X1 - right, Y1: rect.Y1 - top}
+}
+
+func (eng *UIEngine) editFace(w *widget) (font.Face, func()) {
+	textWidget := eng.editTextWidget(w)
+	style := eng.fontStyle(textWidget)
+	fontObj := eng.FontObj
+	size := 13.0
+	if style != nil {
+		if style.Height > 0 {
+			size = style.Height
+		}
+		if strings.Contains(strings.ToLower(style.FontFile), "morpheus") {
+			fontObj = eng.FontObjSm
+		}
+	}
+	if fontObj == nil {
+		return nil, func() {}
+	}
+	face, err := opentype.NewFace(fontObj, &opentype.FaceOptions{Size: size * eng.uiScale, DPI: 96})
+	if err != nil {
+		return nil, func() {}
+	}
+	return face, func() { face.Close() }
+}
+
+func (eng *UIEngine) setEditCursor(w *widget, x float64) {
+	if w == nil || w.kind != kindEditBox {
+		return
+	}
+	rect, ok := eng.rects[w]
+	if !ok {
+		parent := eng.screen
+		if w.parent != nil {
+			parent = eng.layoutRect(w.parent, eng.screen)
+		}
+		rect = eng.layoutRect(w, parent)
+	}
+	textRect := eng.editTextRect(rect, w)
+	scale := eng.uiScale
+	if scale <= 0 {
+		scale = 1
+	}
+	position := (x - textRect.X0*scale) / scale
+	display := []rune(editDisplayText(w))
+	face, release := eng.editFace(w)
+	defer release()
+	if face == nil {
+		moveEditCursor(w, int(math.Round(position/8)), false)
+		return
+	}
+	for index := 0; index < len(display); index++ {
+		left := float64(font.MeasureString(face, string(display[:index])).Ceil())
+		right := float64(font.MeasureString(face, string(display[:index+1])).Ceil())
+		if position < (left+right)/2 {
+			moveEditCursor(w, index, false)
+			return
+		}
+	}
+	moveEditCursor(w, len(display), false)
+}
+
+func (eng *UIEngine) drawEditText(canvas *image.RGBA, face, faceLg font.Face, w *widget, rect Rect, screenHeight float64) {
+	text := editDisplayText(w)
+	textWidget := eng.editTextWidget(w)
+	textFace := eng.faceFor(textWidget, face, faceLg)
+	textRect := eng.editTextRect(rect, w)
 	screenTextRect := screenScaledRect(textRect, eng.uiScale)
 	textColor := color.RGBA{R: 235, G: 235, B: 235, A: 255}
 	if !textWidget.textColor.isZero() {
 		textColor = color.RGBA{R: uint8(textWidget.textColor.r * 255), G: uint8(textWidget.textColor.g * 255), B: uint8(textWidget.textColor.b * 255), A: uint8(textWidget.textColor.a * 255)}
 	}
-	eng.drawTextAlignedWidget(canvas, textFace, text, screenTextRect, screenHeight, textColor, textWidget)
+	start, end := editSelection(w)
+	if eng.Rt.focused == w && start != end {
+		startWidth := font.MeasureString(textFace, string([]rune(text)[:start])).Ceil()
+		endWidth := font.MeasureString(textFace, string([]rune(text)[:end])).Ceil()
+		dst := ScreenRect(screenTextRect, screenHeight)
+		selection := image.Rect(dst.Min.X+startWidth, dst.Min.Y+2, dst.Min.X+endWidth, dst.Max.Y-2)
+		draw.Draw(canvas, selection, &image.Uniform{C: color.RGBA{R: 35, G: 100, B: 180, A: 180}}, image.Point{}, draw.Over)
+	}
+	if text != "" {
+		eng.drawTextAlignedWidget(canvas, textFace, text, screenTextRect, screenHeight, textColor, textWidget)
+	}
 	if eng.Rt.focused == w {
-		width := font.MeasureString(textFace, text).Ceil()
+		width := font.MeasureString(textFace, string([]rune(text)[:clampCursor(w.cursor, len([]rune(text)))])).Ceil()
 		dst := ScreenRect(screenTextRect, screenHeight)
 		caretX := dst.Min.X + width + 1
 		caret := image.Rect(caretX, dst.Min.Y+4, caretX+1, dst.Max.Y-4)
@@ -698,6 +774,7 @@ func (eng *UIEngine) HandleMouse(x, y float64, button window.MouseButton, down b
 		}
 		if target.kind == kindEditBox {
 			eng.Rt.setFocus(target)
+			eng.setEditCursor(target, x)
 		} else if target.kind == kindButton || target.kind == kindCheckButton {
 			target.buttonState = "PUSHED"
 		}
@@ -727,25 +804,97 @@ func (eng *UIEngine) HandleChar(char rune) bool {
 		return false
 	}
 	runes := []rune(w.text)
-	if w.cursor < 0 || w.cursor > len(runes) {
-		w.cursor = len(runes)
-	}
-	if w.maxLetters > 0 && len(runes) >= w.maxLetters {
+	start, end := editSelection(w)
+	if w.maxLetters > 0 && len(runes)-(end-start)+1 > w.maxLetters {
 		return true
 	}
-	runes = append(runes, 0)
-	copy(runes[w.cursor+1:], runes[w.cursor:])
-	runes[w.cursor] = char
-	if w.maxBytes > 0 && len([]byte(string(runes))) > w.maxBytes {
+	updated := make([]rune, 0, len(runes)-(end-start)+1)
+	updated = append(updated, runes[:start]...)
+	updated = append(updated, char)
+	updated = append(updated, runes[end:]...)
+	if w.maxBytes > 0 && len([]byte(string(updated))) > w.maxBytes {
 		return true
 	}
-	position := w.cursor + 1
-	eng.Rt.setText(w, string(runes))
+	position := start + 1
+	eng.Rt.setText(w, string(updated))
 	w.cursor = position
+	w.selectionStart = position
+	w.selectionEnd = position
+	w.selectionAnchor = position
 	return true
 }
 
-func (eng *UIEngine) HandleKey(key window.Key) bool {
+func clampCursor(value, length int) int {
+	if value < 0 {
+		return 0
+	}
+	if value > length {
+		return length
+	}
+	return value
+}
+
+func editSelection(w *widget) (int, int) {
+	length := len([]rune(w.text))
+	start := clampCursor(w.selectionStart, length)
+	end := clampCursor(w.selectionEnd, length)
+	if start > end {
+		start, end = end, start
+	}
+	return start, end
+}
+
+func moveEditCursor(w *widget, position int, extend bool) {
+	position = clampCursor(position, len([]rune(w.text)))
+	if !extend {
+		w.cursor = position
+		w.selectionStart = position
+		w.selectionEnd = position
+		w.selectionAnchor = position
+		return
+	}
+	if w.selectionStart == w.selectionEnd {
+		w.selectionAnchor = w.cursor
+		w.selectionStart = w.cursor
+	}
+	w.cursor = position
+	w.selectionEnd = position
+}
+
+func collapseEditSelection(w *widget, left bool) bool {
+	start, end := editSelection(w)
+	if start == end {
+		return false
+	}
+	if left {
+		w.cursor = start
+	} else {
+		w.cursor = end
+	}
+	w.selectionStart = w.cursor
+	w.selectionEnd = w.cursor
+	w.selectionAnchor = w.cursor
+	return true
+}
+
+func deleteEditSelection(eng *UIEngine, w *widget) bool {
+	start, end := editSelection(w)
+	if start == end {
+		return false
+	}
+	runes := []rune(w.text)
+	runes = append(runes[:start], runes[end:]...)
+	eng.Rt.setText(w, string(runes))
+	w.cursor = start
+	w.selectionStart = start
+	w.selectionEnd = start
+	w.selectionAnchor = start
+	return true
+}
+
+func (eng *UIEngine) HandleKey(key window.Key) bool { return eng.handleKey(key, false) }
+
+func (eng *UIEngine) handleKey(key window.Key, extendSelection bool) bool {
 	w := eng.Rt.focused
 	if key == window.KeyEscape {
 		target := eng.keyboardTarget()
@@ -770,29 +919,43 @@ func (eng *UIEngine) HandleKey(key window.Key) bool {
 		case window.KeyEnter:
 			eng.Rt.fire(w, "OnEnterPressed", []lua.LValue{w.luaValue(eng.Rt.L)})
 		case window.KeyLeft:
-			if w.cursor > 0 {
-				w.cursor--
+			if !extendSelection && collapseEditSelection(w, true) {
+				break
 			}
+			moveEditCursor(w, w.cursor-1, extendSelection)
 		case window.KeyRight:
-			if w.cursor < len([]rune(w.text)) {
-				w.cursor++
+			if !extendSelection && collapseEditSelection(w, false) {
+				break
 			}
+			moveEditCursor(w, w.cursor+1, extendSelection)
 		case window.KeyHome:
-			w.cursor = 0
+			moveEditCursor(w, 0, extendSelection)
 		case window.KeyEnd:
-			w.cursor = len([]rune(w.text))
+			moveEditCursor(w, len([]rune(w.text)), extendSelection)
 		case window.KeyBackspace:
+			if deleteEditSelection(eng, w) {
+				break
+			}
 			if w.cursor > 0 {
 				runes := []rune(w.text)
 				runes = append(runes[:w.cursor-1], runes[w.cursor:]...)
 				w.cursor--
 				eng.Rt.setText(w, string(runes))
+				w.selectionStart = w.cursor
+				w.selectionEnd = w.cursor
+				w.selectionAnchor = w.cursor
 			}
 		case window.KeyDelete:
+			if deleteEditSelection(eng, w) {
+				break
+			}
 			runes := []rune(w.text)
 			if w.cursor < len(runes) {
 				runes = append(runes[:w.cursor], runes[w.cursor+1:]...)
 				eng.Rt.setText(w, string(runes))
+				w.selectionStart = w.cursor
+				w.selectionEnd = w.cursor
+				w.selectionAnchor = w.cursor
 			}
 		default:
 			return false
@@ -815,6 +978,18 @@ func (eng *UIEngine) HandleKeyWithMods(key window.Key, mods window.ModifierKey) 
 	if key == window.KeyF2 {
 		eng.ToggleDebugPanel()
 		return true
+	}
+	if w := eng.Rt.focused; w != nil && w.kind == kindEditBox {
+		if mods&window.ModControl != 0 && key == window.KeyA {
+			w.selectionStart = 0
+			w.selectionEnd = len([]rune(w.text))
+			w.selectionAnchor = 0
+			w.cursor = w.selectionEnd
+			return true
+		}
+		if mods&window.ModShift != 0 {
+			return eng.handleKey(key, true)
+		}
 	}
 	if eng.Rt.focused == nil && mods&window.ModControl != 0 {
 		switch key {

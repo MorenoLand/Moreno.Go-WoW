@@ -66,6 +66,16 @@ func (h *clientHost) StopAmbience() {
 		h.audio.StopAmbience()
 	}
 }
+func (h *clientHost) PlayMovieAudio(data []byte, sampleRate, channels int, volume float64) {
+	if h.audio != nil {
+		h.audio.PlayMovieAudio(data, sampleRate, channels, volume)
+	}
+}
+func (h *clientHost) StopMovieAudio() {
+	if h.audio != nil {
+		h.audio.StopMovieAudio()
+	}
+}
 func (h *clientHost) StopAllSFX() {
 	if h.audio != nil {
 		h.audio.StopAllSFX()

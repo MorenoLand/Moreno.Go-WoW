@@ -12,6 +12,7 @@ import (
 
 	"github.com/MorenoLand/Moreno.WoW/ui"
 	"github.com/ebitengine/oto/v3"
+	"github.com/hajimehoshi/go-mp3"
 )
 
 const audioSampleRate = 44100
@@ -29,6 +30,7 @@ type audioManager struct {
 	failed          map[string]struct{}
 	music           *oto.Player
 	ambience        *oto.Player
+	movie           *oto.Player
 	sfx             []*oto.Player
 	allEnabled      bool
 	musicEnabled    bool
@@ -67,11 +69,15 @@ func (m *audioManager) Close() {
 	if m.ambience != nil {
 		m.ambience.Pause()
 	}
+	if m.movie != nil {
+		m.movie.Pause()
+	}
 	for _, player := range m.sfx {
 		player.Pause()
 	}
 	m.music = nil
 	m.ambience = nil
+	m.movie = nil
 	m.sfx = nil
 }
 
@@ -187,6 +193,48 @@ func (m *audioManager) StopAmbience() {
 	if m.ambience != nil {
 		m.ambience.Pause()
 		m.ambience = nil
+	}
+}
+
+func (m *audioManager) PlayMovieAudio(data []byte, _ int, _ int, volume float64) {
+	if m == nil || len(data) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.allEnabled || !m.musicEnabled || m.context == nil {
+		return
+	}
+	decoder, err := mp3.NewDecoder(bytes.NewReader(data))
+	if err != nil {
+		m.reportFailure("cinematic", err)
+		return
+	}
+	pcm, err := io.ReadAll(decoder)
+	if err != nil || len(pcm) == 0 {
+		if err == nil {
+			err = fmt.Errorf("cinematic audio has no samples")
+		}
+		m.reportFailure("cinematic", err)
+		return
+	}
+	if m.movie != nil {
+		m.movie.Pause()
+	}
+	m.movie = m.context.NewPlayer(bytes.NewReader(pcm))
+	m.movie.SetVolume(math.Max(0, math.Min(1, volume)))
+	m.movie.Play()
+}
+
+func (m *audioManager) StopMovieAudio() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.movie != nil {
+		m.movie.Pause()
+		m.movie = nil
 	}
 }
 

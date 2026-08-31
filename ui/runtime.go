@@ -89,6 +89,11 @@ type AudioHost interface {
 	SetAudioCVar(name, value string)
 }
 
+type MovieAudioHost interface {
+	PlayMovieAudio(data []byte, sampleRate, channels int, volume float64)
+	StopMovieAudio()
+}
+
 // Font is a named font object created from a <Font> element.
 type Font struct {
 	Name          string
@@ -144,6 +149,9 @@ func (rt *Runtime) setFocus(w *widget) {
 	}
 	if w != nil {
 		w.cursor = len([]rune(w.text))
+		w.selectionStart = w.cursor
+		w.selectionEnd = w.cursor
+		w.selectionAnchor = w.cursor
 		rt.fireHandler(w, "OnEditFocusGained")
 	}
 }
@@ -154,10 +162,16 @@ func (rt *Runtime) setText(w *widget, text string) {
 	}
 	if w.text == text {
 		w.cursor = len([]rune(text))
+		w.selectionStart = w.cursor
+		w.selectionEnd = w.cursor
+		w.selectionAnchor = w.cursor
 		return
 	}
 	w.text = text
 	w.cursor = len([]rune(text))
+	w.selectionStart = w.cursor
+	w.selectionEnd = w.cursor
+	w.selectionAnchor = w.cursor
 	rt.fire(w, "OnTextChanged", []lua.LValue{w.luaValue(rt.L), lua.LBool(true)})
 }
 

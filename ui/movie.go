@@ -18,11 +18,16 @@ type movieClip struct {
 	data        []byte
 	prefix      []byte
 	frames      []movieSample
+	audio       []byte
 	keyframes   []int
 	fps         float64
 	width       int
 	height      int
 	videoStream int
+	audioStream int
+	audioFormat uint16
+	audioChannels int
+	audioRate int
 }
 
 type moviePlayback struct {
@@ -36,16 +41,25 @@ type moviePlayback struct {
 
 type movieHeaderInfo struct {
 	videoStream  int
+	audioStream  int
 	width        int
 	height       int
 	microseconds uint32
 	rate         uint32
 	scale        uint32
+	audioFormat  uint16
+	audioChannels int
+	audioRate int
 }
 
-func (eng *UIEngine) ensureMovie(file string) {
+func (eng *UIEngine) ensureMovie(file string, volume float64) {
 	if eng.movieFile == file {
 		return
+	}
+	if eng.movie != nil {
+		if host, ok := eng.Rt.Host.(MovieAudioHost); ok {
+			host.StopMovieAudio()
+		}
 	}
 	eng.movieFile = file
 	eng.movieImage = nil
@@ -71,6 +85,11 @@ func (eng *UIEngine) ensureMovie(file string) {
 	}
 	eng.movie = playback
 	eng.movieImage = playback.image
+	if len(clip.audio) > 0 && clip.audioFormat == 85 && clip.audioRate > 0 && clip.audioChannels > 0 {
+		if host, ok := eng.Rt.Host.(MovieAudioHost); ok {
+			host.PlayMovieAudio(clip.audio, clip.audioRate, clip.audioChannels, volume)
+		}
+	}
 }
 
 func (eng *UIEngine) updateMovie(elapsed float64) bool {
@@ -95,6 +114,9 @@ func (eng *UIEngine) updateMovie(elapsed float64) bool {
 	}
 	if active == nil {
 		if eng.movie != nil {
+			if host, ok := eng.Rt.Host.(MovieAudioHost); ok {
+				host.StopMovieAudio()
+			}
 			eng.movie = nil
 			eng.movieFile = ""
 			eng.movieImage = nil
@@ -102,7 +124,7 @@ func (eng *UIEngine) updateMovie(elapsed float64) bool {
 		}
 		return false
 	}
-	eng.ensureMovie(active.movieFile)
+	eng.ensureMovie(active.movieFile, float64(active.movieVolume)/255)
 	if eng.movie == nil || eng.movie.finished {
 		return false
 	}
@@ -177,7 +199,7 @@ func parseMovieClip(data []byte) (*movieClip, error) {
 	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "AVI " {
 		return nil, fmt.Errorf("movie is not AVI")
 	}
-	info := movieHeaderInfo{videoStream: -1}
+	info := movieHeaderInfo{videoStream: -1, audioStream: -1}
 	var moviStart, moviEnd int
 	for offset := 12; offset < len(data); {
 		id, _, payload, end, next, ok := movieChunk(data, offset)
@@ -198,8 +220,8 @@ func parseMovieClip(data []byte) (*movieClip, error) {
 	if moviStart == 0 || moviEnd <= moviStart {
 		return nil, fmt.Errorf("movie has no movi list")
 	}
-	clip := &movieClip{data: data, videoStream: info.videoStream, width: info.width, height: info.height}
-	scanMovieFrames(data, moviStart, moviEnd, info.videoStream, clip)
+	clip := &movieClip{data: data, videoStream: info.videoStream, width: info.width, height: info.height, audioStream: info.audioStream, audioFormat: info.audioFormat, audioChannels: info.audioChannels, audioRate: info.audioRate}
+	scanMovieFrames(data, moviStart, moviEnd, info.videoStream, info.audioStream, clip)
 	if len(clip.frames) == 0 {
 		return nil, fmt.Errorf("movie has no video frames")
 	}
@@ -246,15 +268,21 @@ func scanMovieHeaders(data []byte, start, end int, info *movieHeaderInfo) {
 
 func scanMovieStream(data []byte, start, end, stream int, info *movieHeaderInfo) {
 	isVideo := false
+	isAudio := false
 	for offset := start; offset < end; {
 		id, _, payload, chunkEnd, next, ok := movieChunk(data, offset)
 		if !ok || chunkEnd > end {
 			return
 		}
 		if id == "strh" && payload+36 <= chunkEnd {
-			isVideo = string(data[payload:payload+4]) == "vids"
+			streamType := string(data[payload : payload+4])
+			isVideo = streamType == "vids"
+			isAudio = streamType == "auds"
 			if isVideo && info.videoStream < 0 {
 				info.videoStream = stream
+			}
+			if isAudio && info.audioStream < 0 {
+				info.audioStream = stream
 			}
 			if isVideo {
 				info.scale = binary.LittleEndian.Uint32(data[payload+20 : payload+24])
@@ -265,20 +293,27 @@ func scanMovieStream(data []byte, start, end, stream int, info *movieHeaderInfo)
 			info.width = int(int32(binary.LittleEndian.Uint32(data[payload+4 : payload+8])))
 			info.height = int(int32(binary.LittleEndian.Uint32(data[payload+8 : payload+12])))
 		}
+		if id == "strf" && isAudio && payload+16 <= chunkEnd {
+			info.audioFormat = binary.LittleEndian.Uint16(data[payload : payload+2])
+			info.audioChannels = int(binary.LittleEndian.Uint16(data[payload+2 : payload+4]))
+			info.audioRate = int(binary.LittleEndian.Uint32(data[payload+4 : payload+8]))
+		}
 		offset = next
 	}
 }
 
-func scanMovieFrames(data []byte, start, end, stream int, clip *movieClip) {
+func scanMovieFrames(data []byte, start, end, videoStream, audioStream int, clip *movieClip) {
 	for offset := start; offset < end; {
 		id, size, payload, chunkEnd, next, ok := movieChunk(data, offset)
 		if !ok || chunkEnd > end {
 			return
 		}
 		if id == "LIST" && payload+4 <= chunkEnd {
-			scanMovieFrames(data, payload+4, chunkEnd, stream, clip)
-		} else if isMovieVideoChunk(id, stream) && size > 0 {
+			scanMovieFrames(data, payload+4, chunkEnd, videoStream, audioStream, clip)
+		} else if isMovieVideoChunk(id, videoStream) && size > 0 {
 			clip.frames = append(clip.frames, movieSample{offset: payload, size: size})
+		} else if isMovieAudioChunk(id, audioStream) && size > 0 {
+			clip.audio = append(clip.audio, data[payload:chunkEnd]...)
 		}
 		offset = next
 	}
@@ -303,6 +338,16 @@ func movieChunk(data []byte, offset int) (string, int, int, int, int, bool) {
 
 func isMovieVideoChunk(id string, stream int) bool {
 	if len(id) != 4 || (id[2:] != "dc" && id[2:] != "db") {
+		return false
+	}
+	if stream < 0 {
+		return true
+	}
+	return id[0] == byte('0'+stream/10) && id[1] == byte('0'+stream%10)
+}
+
+func isMovieAudioChunk(id string, stream int) bool {
+	if len(id) != 4 || id[2:] != "wb" {
 		return false
 	}
 	if stream < 0 {
