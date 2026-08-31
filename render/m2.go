@@ -257,7 +257,7 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 type parsedM2 struct {
 	vertices      []m2Vertex
 	bones         []m2Bone
-	boneLookup    []uint16
+	boneCombos    []uint16
 	textures      []string
 	textureCombos []uint16
 	textureFlags  []uint32
@@ -302,7 +302,7 @@ func parseM2(data []byte) (parsedM2, error) {
 	if err != nil {
 		return parsedM2{}, err
 	}
-	boneLookup, err := readM2Array(data, 0x78, 2)
+	boneCombos, err := readM2Array(data, 0x78, 2)
 	if err != nil {
 		return parsedM2{}, err
 	}
@@ -310,13 +310,13 @@ func parseM2(data []byte) (parsedM2, error) {
 	if err != nil {
 		return parsedM2{}, err
 	}
-	result := parsedM2{vertices: make([]m2Vertex, vertices.count), bones: make([]m2Bone, bones.count), boneLookup: make([]uint16, boneLookup.count), textures: make([]string, textures.count), textureFlags: make([]uint32, textures.count), textureCombos: make([]uint16, combos.count), textureCoords: make([]uint16, textureCoords.count), renderFlags: make([]m2RenderFlag, renderFlags.count), particles: make([]m2ParticleEmitter, particles.count)}
+	result := parsedM2{vertices: make([]m2Vertex, vertices.count), bones: make([]m2Bone, bones.count), boneCombos: make([]uint16, boneCombos.count), textures: make([]string, textures.count), textureFlags: make([]uint32, textures.count), textureCombos: make([]uint16, combos.count), textureCoords: make([]uint16, textureCoords.count), renderFlags: make([]m2RenderFlag, renderFlags.count), particles: make([]m2ParticleEmitter, particles.count)}
 	for index := range result.vertices {
 		base := vertices.offset + index*m2VertexSize
 		result.vertices[index] = m2Vertex{position: [3]float32{readF32(data, base), readF32(data, base+4), readF32(data, base+8)}, weights: [4]uint8{data[base+12], data[base+13], data[base+14], data[base+15]}, bones: [4]uint8{data[base+16], data[base+17], data[base+18], data[base+19]}, normal: [3]float32{readF32(data, base+20), readF32(data, base+24), readF32(data, base+28)}, uv: [2]float32{readF32(data, base+32), readF32(data, base+36)}, uv2: [2]float32{readF32(data, base+40), readF32(data, base+44)}}
 	}
-	for index := range result.boneLookup {
-		result.boneLookup[index] = binary.LittleEndian.Uint16(data[boneLookup.offset+index*2:])
+	for index := range result.boneCombos {
+		result.boneCombos[index] = binary.LittleEndian.Uint16(data[boneCombos.offset+index*2:])
 	}
 	for index := range result.bones {
 		base := bones.offset + index*88
@@ -618,9 +618,6 @@ func decodeM2Quaternion(value uint16) float32 {
 func poseM2Vertex(model parsedM2, skin parsedSkin, local int, vertex m2Vertex, boneComboIndex int) posedM2Vertex {
 	weights := vertex.weights
 	bones := vertex.bones
-	if local >= 0 && local < len(skin.bones) {
-		bones = skin.bones[local]
-	}
 	var position, normal [3]float32
 	weightTotal := 0
 	for slot, weight := range weights {
@@ -628,11 +625,8 @@ func poseM2Vertex(model parsedM2, skin parsedSkin, local int, vertex m2Vertex, b
 			continue
 		}
 		boneIndex := int(bones[slot])
-		if boneComboIndex >= 0 && boneComboIndex+boneIndex < len(skin.boneCombos) {
-			boneIndex = int(skin.boneCombos[boneComboIndex+boneIndex])
-		}
-		if boneIndex >= 0 && boneIndex < len(model.boneLookup) {
-			boneIndex = int(model.boneLookup[boneIndex])
+		if boneComboIndex >= 0 && boneComboIndex+boneIndex < len(model.boneCombos) {
+			boneIndex = int(model.boneCombos[boneComboIndex+boneIndex])
 		}
 		if boneIndex >= len(model.bones) {
 			continue
