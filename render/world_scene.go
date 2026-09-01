@@ -24,6 +24,7 @@ const (
 	worldChunkSize       = worldTileSize / 16.0
 	worldUnitSize        = worldChunkSize / 8.0
 	worldHeightCount     = 145
+	worldStreamRadius    = 1
 	worldWMODoodadBudget = 512
 )
 
@@ -131,6 +132,7 @@ type worldSceneInfo struct {
 	mapName   string
 	tileX     int
 	tileY     int
+	tiles     int
 	chunks    int
 	vertices  int
 	triangles int
@@ -141,6 +143,25 @@ type worldSceneInfo struct {
 
 type worldSceneCollision struct {
 	chunks []worldADTChunk
+}
+
+type worldSceneAssetCache struct {
+	textures            map[string]*texture.Texture2D
+	placeholder         *texture.Texture2D
+	terrainPlaceholder  *texture.Texture2D
+	zeroAlpha           *texture.Texture2D
+	opaqueAlpha         *texture.Texture2D
+	wmoModels           map[string]worldWMORoot
+	m2Parts             map[string]map[string]*m2Part
+}
+
+func newWorldSceneAssetCache() *worldSceneAssetCache {
+	return &worldSceneAssetCache{
+		textures: make(map[string]*texture.Texture2D), placeholder: texture.NewTexture2DFromRGBA(worldPlaceholderTexture()),
+		terrainPlaceholder: texture.NewTexture2DFromRGBA(worldSolidTexture(color.RGBA{R: 255, G: 255, B: 255, A: 255})),
+		zeroAlpha: texture.NewTexture2DFromRGBA(worldAlphaTexture(nil, false)), opaqueAlpha: texture.NewTexture2DFromRGBA(worldAlphaTexture(nil, true)),
+		wmoModels: make(map[string]worldWMORoot), m2Parts: make(map[string]map[string]*m2Part),
+	}
 }
 
 func (collision worldSceneCollision) ground(x, y float32) (float32, bool) {
@@ -191,27 +212,64 @@ func loadWorldTerrainProgress(loader *ui.Loader, position world.WorldPosition, p
 	if tileX < 0 || tileX >= 64 || tileY < 0 || tileY >= 64 {
 		return nil, worldSceneInfo{}, fmt.Errorf("world position %.3f,%.3f maps outside tile grid at %d,%d", position.X, position.Y, tileX, tileY)
 	}
-	path := fmt.Sprintf(`World\Maps\%s\%s_%d_%d.adt`, mapName, mapName, tileX, tileY)
 	bigAlpha := worldMapBigAlpha(loader, mapName)
-	data, err := loader.ReadFile(path)
-	if err != nil {
-		return nil, worldSceneInfo{}, fmt.Errorf("read %s: %w", path, err)
+	root := core.NewNode()
+	info := worldSceneInfo{mapName: mapName, tileX: tileX, tileY: tileY}
+	cache := newWorldSceneAssetCache()
+	collisionChunks := make([]worldADTChunk, 0, 256*(worldStreamRadius*2+1)*(worldStreamRadius*2+1))
+	requestedTiles := (worldStreamRadius*2 + 1) * (worldStreamRadius*2 + 1)
+	for offsetY := -worldStreamRadius; offsetY <= worldStreamRadius; offsetY++ {
+		for offsetX := -worldStreamRadius; offsetX <= worldStreamRadius; offsetX++ {
+			neighborX, neighborY := tileX+offsetX, tileY+offsetY
+			if neighborX < 0 || neighborX >= 64 || neighborY < 0 || neighborY >= 64 {
+				continue
+			}
+			path := fmt.Sprintf(`World\Maps\%s\%s_%d_%d.adt`, mapName, mapName, neighborX, neighborY)
+			data, readErr := loader.ReadFile(path)
+			if readErr != nil {
+				if neighborX == tileX && neighborY == tileY {
+					return nil, worldSceneInfo{}, fmt.Errorf("read %s: %w", path, readErr)
+				}
+				continue
+			}
+			adt, parseErr := parseWorldADTWithAlpha(data, bigAlpha)
+			if parseErr != nil {
+				if neighborX == tileX && neighborY == tileY {
+					return nil, worldSceneInfo{}, fmt.Errorf("parse %s: %w", path, parseErr)
+				}
+				continue
+			}
+			if progress != nil {
+				progress(0.1 + 0.8*float64(info.tiles)/float64(requestedTiles))
+			}
+			tileRoot, tileInfo, buildErr := buildWorldTerrainProgressWithCache(loader, adt, position, cache, nil)
+			if buildErr != nil {
+				if neighborX == tileX && neighborY == tileY {
+					return nil, worldSceneInfo{}, fmt.Errorf("build %s: %w", path, buildErr)
+				}
+				continue
+			}
+			root.Add(tileRoot)
+			info.tiles++
+			info.chunks += tileInfo.chunks
+			info.vertices += tileInfo.vertices
+			info.triangles += tileInfo.triangles
+			info.textures += tileInfo.textures
+			info.wmoMeshes += tileInfo.wmoMeshes
+			info.m2Meshes += tileInfo.m2Meshes
+			collision, ok := tileRoot.UserData().(worldSceneCollision)
+			if ok {
+				collisionChunks = append(collisionChunks, collision.chunks...)
+			}
+		}
 	}
-	adt, err := parseWorldADTWithAlpha(data, bigAlpha)
-	if err != nil {
-		return nil, worldSceneInfo{}, fmt.Errorf("parse %s: %w", path, err)
-	}
-	if progress != nil {
-		progress(0.15)
-	}
-	root, info, err := buildWorldTerrainProgress(loader, adt, position, progress)
-	if err != nil {
-		return nil, worldSceneInfo{}, fmt.Errorf("build %s: %w", path, err)
+	if info.tiles == 0 || info.chunks == 0 {
+		return nil, worldSceneInfo{}, fmt.Errorf("world map %s has no readable tiles near %d,%d", mapName, tileX, tileY)
 	}
 	if progress != nil {
 		progress(1)
 	}
-	info.mapName, info.tileX, info.tileY = mapName, tileX, tileY
+	root.SetUserData(worldSceneCollision{chunks: collisionChunks})
 	return root, info, nil
 }
 
@@ -643,9 +701,8 @@ func worldFloat32s(data []byte, components int) []float32 {
 	return result
 }
 
-func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.WorldPosition, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) (*core.Node, int) {
+func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int) {
 	root := core.NewNode()
-	modelCache := make(map[string]map[string]*m2Part)
 	meshCount := 0
 	for _, placement := range adt.m2Placements {
 		origin := worldWMOPosition(placement.position)
@@ -653,16 +710,16 @@ func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.World
 		if dx*dx+dy*dy > (worldTileSize*2)*(worldTileSize*2) {
 			continue
 		}
-		parts, ok := modelCache[placement.path]
+		parts, ok := cache.m2Parts[placement.path]
 		if !ok {
 			var err error
 			parts, err = loadWorldM2Parts(loader, placement.path)
 			if err != nil {
 				continue
 			}
-			modelCache[placement.path] = parts
+			cache.m2Parts[placement.path] = parts
 		}
-		instance := buildWorldM2Instance(loader, parts, textures, placeholder)
+		instance := buildWorldM2Instance(loader, parts, cache.textures, cache.placeholder)
 		if instance == nil {
 			continue
 		}
@@ -857,14 +914,18 @@ func buildWorldPlayer(loader *ui.Loader, character world.Character, position wor
 	root.SetPosition(position.X, position.Y, position.Z)
 	root.SetRotation(0, 0, position.Orientation)
 	model.SetRotation(math.Pi/2, 0, 0)
+	if info, ok := model.UserData().(glueModelInfo); ok {
+		root.SetUserData(info)
+		if info.hasStand {
+			model.SetPosition(-info.standPosition.X, info.standPosition.Z, -info.standPosition.Y)
+		}
+	}
 	root.Add(model)
 	return root, nil
 }
 
-func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.WorldPosition, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) (*core.Node, int) {
+func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int) {
 	root := core.NewNode()
-	modelCache := make(map[string]worldWMORoot)
-	m2Cache := make(map[string]map[string]*m2Part)
 	meshCount := 0
 	doodadCount := 0
 	for _, placement := range adt.wmoPlacements {
@@ -873,7 +934,7 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 		if dx*dx+dy*dy > (worldTileSize*2)*(worldTileSize*2) {
 			continue
 		}
-		model, ok := modelCache[placement.path]
+		model, ok := cache.wmoModels[placement.path]
 		if !ok {
 			data, err := loader.ReadFile(placement.path)
 			if err != nil {
@@ -883,9 +944,9 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 			if err != nil {
 				continue
 			}
-			modelCache[placement.path] = model
+			cache.wmoModels[placement.path] = model
 		}
-		meshes := buildWorldWMOPlacement(loader, placement, model, textures, placeholder)
+		meshes := buildWorldWMOPlacement(loader, placement, model, cache.textures, cache.placeholder)
 		for _, mesh := range meshes {
 			root.Add(mesh)
 			meshCount++
@@ -898,16 +959,16 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 				if doodadCount >= worldWMODoodadBudget {
 					break
 				}
-				parts := m2Cache[doodad.path]
+				parts := cache.m2Parts[doodad.path]
 				if parts == nil {
 					var err error
 					parts, err = loadWorldM2Parts(loader, doodad.path)
 					if err != nil {
 						continue
 					}
-					m2Cache[doodad.path] = parts
+					cache.m2Parts[doodad.path] = parts
 				}
-				instance := buildWorldM2Instance(loader, parts, textures, placeholder)
+				instance := buildWorldM2Instance(loader, parts, cache.textures, cache.placeholder)
 				if instance == nil {
 					continue
 				}
@@ -1250,12 +1311,11 @@ func buildWorldSky() *core.Node {
 }
 
 func buildWorldTerrainProgress(loader *ui.Loader, adt worldADT, position world.WorldPosition, progress func(float64)) (*core.Node, worldSceneInfo, error) {
+	return buildWorldTerrainProgressWithCache(loader, adt, position, newWorldSceneAssetCache(), progress)
+}
+
+func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache, progress func(float64)) (*core.Node, worldSceneInfo, error) {
 	root := core.NewNode()
-	textures := make(map[string]*texture.Texture2D)
-	placeholder := texture.NewTexture2DFromRGBA(worldPlaceholderTexture())
-	terrainPlaceholder := texture.NewTexture2DFromRGBA(worldSolidTexture(color.RGBA{R: 255, G: 255, B: 255, A: 255}))
-	zeroAlpha := texture.NewTexture2DFromRGBA(worldAlphaTexture(nil, false))
-	opaqueAlpha := texture.NewTexture2DFromRGBA(worldAlphaTexture(nil, true))
 	info := worldSceneInfo{textures: len(adt.textures)}
 	for chunkIndex, chunk := range adt.chunks {
 		positions := math32.NewArrayF32(0, worldHeightCount*3)
@@ -1312,27 +1372,27 @@ func buildWorldTerrainProgress(loader *ui.Loader, adt worldADT, position world.W
 		mat.SetSide(material.SideDouble)
 		mat.SetUseLights(material.UseLightNone)
 		for _, textureIndex := range layerIndices {
-			tex := terrainPlaceholder
+			tex := cache.terrainPlaceholder
 			if textureIndex >= 0 && textureIndex < len(adt.textures) {
 				path := adt.textures[textureIndex]
-				if cached, ok := textures[path]; ok {
+				if cached, ok := cache.textures[path]; ok {
 					tex = cached
 				} else if loaded := loadModelTexture(loader, path); loaded != nil {
 					loaded.SetWrapS(gls.REPEAT)
 					loaded.SetWrapT(gls.REPEAT)
-					textures[path] = loaded
+					cache.textures[path] = loaded
 					tex = loaded
 				}
 			}
 			mat.AddTexture(tex)
 		}
 		for index := 0; index < 3; index++ {
-			alphaTexture := zeroAlpha
+			alphaTexture := cache.zeroAlpha
 			if index < len(chunk.alphaMaps) {
 				if len(chunk.alphaMaps[index]) == 0 {
-					alphaTexture = zeroAlpha
+					alphaTexture = cache.zeroAlpha
 				} else if isOpaqueWorldAlpha(chunk.alphaMaps[index]) {
-					alphaTexture = opaqueAlpha
+					alphaTexture = cache.opaqueAlpha
 				} else {
 					alphaTexture = texture.NewTexture2DFromRGBA(worldAlphaTexture(chunk.alphaMaps[index], false))
 				}
@@ -1352,11 +1412,11 @@ func buildWorldTerrainProgress(loader *ui.Loader, adt worldADT, position world.W
 	if info.chunks == 0 {
 		return nil, worldSceneInfo{}, fmt.Errorf("ADT produced no drawable chunks")
 	}
-	wmoRoot, wmoCount := buildWorldWMOInstances(loader, adt, position, textures, placeholder)
+	wmoRoot, wmoCount := buildWorldWMOInstances(loader, adt, position, cache)
 	if wmoRoot != nil {
 		root.Add(wmoRoot)
 	}
-	m2Root, m2Count := buildWorldM2Instances(loader, adt, position, textures, placeholder)
+	m2Root, m2Count := buildWorldM2Instances(loader, adt, position, cache)
 	if m2Root != nil {
 		root.Add(m2Root)
 	}

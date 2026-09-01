@@ -36,8 +36,8 @@ func TestLiveWorldSceneBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if root == nil || info.chunks != 256 || info.triangles == 0 || info.wmoMeshes == 0 || info.m2Meshes == 0 {
-		t.Fatalf("root=%v chunks=%d triangles=%d wmoMeshes=%d m2Meshes=%d", root != nil, info.chunks, info.triangles, info.wmoMeshes, info.m2Meshes)
+	if root == nil || info.tiles < 1 || info.chunks < 256 || info.triangles == 0 || info.wmoMeshes == 0 || info.m2Meshes == 0 {
+		t.Fatalf("root=%v tiles=%d chunks=%d triangles=%d wmoMeshes=%d m2Meshes=%d", root != nil, info.tiles, info.chunks, info.triangles, info.wmoMeshes, info.m2Meshes)
 	}
 	t.Logf("world scene: %+v", info)
 	loadingPath := worldLoadingScreenPath(loader, 0)
