@@ -23,12 +23,14 @@ type m2Animation struct {
 	skin             parsedSkin
 	meshes           []*m2AnimatedMesh
 	sequence         int
+	motionID         uint16
 	clock            float64
 	globalClock      float64
 	idle             []int
 	idleBase         int
 	variationTimer   float64
 	playingVariation bool
+	variationEnabled bool
 	random           uint32
 }
 
@@ -45,9 +47,48 @@ func buildM2Animation(model *parsedM2, skin parsedSkin, meshes []*m2AnimatedMesh
 	for index := range modelPath {
 		seed = seed*16777619 ^ uint32(modelPath[index])
 	}
-	animation := &m2Animation{model: model, skin: skin, meshes: meshes, sequence: sequence, idle: idle, idleBase: idle[0], random: seed}
+	animation := &m2Animation{model: model, skin: skin, meshes: meshes, sequence: sequence, motionID: model.sequences[sequence].id, idle: idle, idleBase: idle[0], variationEnabled: model.sequences[sequence].id == 0, random: seed}
 	animation.variationTimer = m2VariationTimer(animation, 3000, 11000)
 	return animation
+}
+
+func (animation *m2Animation) SetMotion(id uint16) {
+	if animation == nil || animation.model == nil {
+		return
+	}
+	if animation.motionID == id && animation.sequence >= 0 && animation.sequence < len(animation.model.sequences) {
+		return
+	}
+	sequence := -1
+	for index, candidate := range animation.model.sequences {
+		if candidate.id == id && candidate.duration > 0 {
+			sequence = index
+			break
+		}
+	}
+	if sequence < 0 {
+		id = 0
+		for index, candidate := range animation.model.sequences {
+			if candidate.id == id && candidate.duration > 0 {
+				sequence = index
+				break
+			}
+		}
+	}
+	if sequence < 0 || sequence == animation.sequence && animation.motionID == id {
+		return
+	}
+	animation.sequence = sequence
+	animation.motionID = id
+	animation.clock = 0
+	animation.playingVariation = false
+	animation.idle = idleM2Sequences(animation.model, id)
+	if len(animation.idle) == 0 {
+		animation.idle = []int{sequence}
+	}
+	animation.idleBase = sequence
+	animation.variationEnabled = id == 0
+	animation.variationTimer = m2VariationTimer(animation, 3000, 11000)
 }
 
 func defaultM2Sequence(model *parsedM2) int {
@@ -140,7 +181,7 @@ func (animation *m2Animation) Update(elapsed float64) []uint32 {
 	animation.globalClock += elapsed * 1000
 	animation.clock += elapsed * 1000
 	wrapped := false
-	if !animation.playingVariation {
+	if animation.variationEnabled && !animation.playingVariation {
 		animation.variationTimer -= elapsed * 1000
 	}
 	if animation.clock >= float64(sequence.duration) {
@@ -155,7 +196,7 @@ func (animation *m2Animation) Update(elapsed float64) []uint32 {
 			wrapped = true
 		}
 	}
-	if !animation.playingVariation && animation.variationTimer <= 0 && len(animation.idle) > 1 {
+	if animation.variationEnabled && !animation.playingVariation && animation.variationTimer <= 0 && len(animation.idle) > 1 {
 		choice := animation.idle[int(nextM2Random(animation)%uint32(len(animation.idle)))]
 		if choice != animation.sequence {
 			animation.playingVariation = true

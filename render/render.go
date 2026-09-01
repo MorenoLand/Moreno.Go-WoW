@@ -211,6 +211,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var worldPlayer *core.Node
 	var worldModel *core.Node
 	var worldSky *core.Node
+	worldEntities := make(map[uint64]*worldEntity)
+	worldCreatureCache := worldCreatureTables{}
 	var worldCharacter world.Character
 	var glueCharacters []world.Character
 	var setSceneModel func() bool
@@ -560,10 +562,39 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				if worldPlayer != nil {
 					if info, ok := worldPlayer.UserData().(glueModelInfo); ok {
 						if info.animation != nil {
+							motion := uint16(0)
+							if worldCamera.isAirborne() {
+								motion = 38
+							} else if worldCamera.isMoving() {
+								motion = 5
+							}
+							info.animation.SetMotion(motion)
 							for _, soundID := range info.animation.Update(elapsed) {
 								if debug {
 									log.Printf("world player sound event id=%d", soundID)
 								}
+								if host.audio != nil {
+									host.audio.PlaySoundID(soundID)
+								}
+							}
+						}
+						if info.particles != nil {
+							info.particles.Update(elapsed)
+						}
+					}
+				}
+				for _, entity := range worldEntities {
+					if entity.node == nil {
+						continue
+					}
+					if info, ok := entity.node.UserData().(glueModelInfo); ok {
+						if info.animation != nil {
+							motion := uint16(0)
+							if worldEntityMoving(entity) {
+								motion = 5
+							}
+							info.animation.SetMotion(motion)
+							for _, soundID := range info.animation.Update(elapsed) {
 								if host.audio != nil {
 									host.audio.PlaySoundID(soundID)
 								}
@@ -709,6 +740,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					worldPlayer.Dispose()
 					worldPlayer = nil
 				}
+				worldEntities = make(map[uint64]*worldEntity)
+				worldCreatureCache = worldCreatureTables{}
 				worldModel = loaded
 				scene.Add(worldModel)
 				worldSky = buildWorldSky()
@@ -771,7 +804,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					worldPackets = nil
 					break
 				}
-				if event.Packet.Opcode == world.MessageChat {
+				switch event.Packet.Opcode {
+				case world.MessageChat:
 					message, chatErr := world.ParseMessageChat(event.Packet.Body)
 					if chatErr != nil {
 						if debug {
@@ -796,6 +830,44 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						lua.LString(message.Channel), lua.LString(""), lua.LString(""), lua.LString(""),
 						lua.LNumber(0), lua.LString(message.Channel), lua.LNumber(0), lua.LNumber(0), lua.LString(guid))
 					refresh()
+				case world.UpdateObject, world.CompressedUpdateObject:
+					var blocks []world.UpdateBlock
+					var parseErr error
+					if event.Packet.Opcode == world.CompressedUpdateObject {
+						blocks, parseErr = world.ParseCompressedUpdateObject(event.Packet.Body)
+					} else {
+						blocks, parseErr = world.ParseUpdateObject(event.Packet.Body)
+					}
+					if parseErr != nil {
+						if debug {
+							log.Printf("world update: %v", parseErr)
+						}
+						break
+					}
+					models, modelErrors := applyWorldUpdateBlocks(scene, uiEngine.AssetLoader, &worldCreatureCache, worldEntities, blocks, worldCharacter.GUID)
+					if debug {
+						log.Printf("world update: blocks=%d entities=%d models=%d errors=%d", len(blocks), len(worldEntities), models, len(modelErrors))
+						for _, modelErr := range modelErrors {
+							log.Printf("world entity: %v", modelErr)
+						}
+					}
+					refresh()
+				case world.DestroyObject:
+					guid, destroyErr := world.ParseDestroyObject(event.Packet.Body)
+					if destroyErr != nil {
+						if debug {
+							log.Printf("world destroy: %v", destroyErr)
+						}
+						break
+					}
+					if entity := worldEntities[guid]; entity != nil {
+						if entity.node != nil {
+							scene.Remove(entity.node)
+							entity.node.Dispose()
+						}
+						delete(worldEntities, guid)
+						refresh()
+					}
 				}
 			default:
 			}

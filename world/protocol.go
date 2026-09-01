@@ -30,13 +30,17 @@ const (
 )
 
 const (
-	CharEnumResponse      uint16 = 0x003B
-	AuthChallengeResponse uint16 = 0x01EC
-	AuthResponsePacket    uint16 = 0x01EE
-	TimeSyncRequest       uint16 = 0x0390
-	CharacterLoginFailed  uint16 = 0x0041
-	LoginVerifyWorld      uint16 = 0x0236
-	MessageChat           uint16 = 0x0096
+	CharEnumResponse       uint16 = 0x003B
+	AuthChallengeResponse  uint16 = 0x01EC
+	AuthResponsePacket     uint16 = 0x01EE
+	TimeSyncRequest        uint16 = 0x0390
+	CharacterLoginFailed   uint16 = 0x0041
+	LoginVerifyWorld       uint16 = 0x0236
+	MessageChat            uint16 = 0x0096
+	UpdateObject           uint16 = 0x00A9
+	DestroyObject          uint16 = 0x00AA
+	CompressedUpdateObject uint16 = 0x01F6
+	LoginSetTimeSpeed      uint16 = 0x0042
 )
 
 type ServerHeader struct {
