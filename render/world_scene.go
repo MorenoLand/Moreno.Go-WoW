@@ -700,19 +700,7 @@ func loadWorldM2Parts(loader *ui.Loader, modelPath string) (map[string]*m2Part, 
 		return nil, err
 	}
 	parts := buildM2Parts(model, skin)
-	convertWorldM2Parts(parts)
 	return parts, nil
-}
-
-func convertWorldM2Parts(parts map[string]*m2Part) {
-	for _, part := range parts {
-		for index := 0; index+2 < len(part.positions); index += 3 {
-			x, y, z := part.positions[index], part.positions[index+1], part.positions[index+2]
-			part.positions.Set(index, -z, -x, y)
-			x, y, z = part.normals[index], part.normals[index+1], part.normals[index+2]
-			part.normals.Set(index, -z, -x, y)
-		}
-	}
 }
 
 func buildWorldM2Instance(loader *ui.Loader, parts map[string]*m2Part, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) *core.Node {

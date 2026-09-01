@@ -1322,5 +1322,9 @@ func modelTransform(vertices []m2Vertex) ([3]float32, float32) {
 
 func normalizeModelPath(path string) string {
 	path = strings.ReplaceAll(strings.TrimSpace(strings.TrimRight(path, "\x00")), "/", "\\")
-	return strings.TrimPrefix(path, "\\")
+	path = strings.TrimPrefix(path, "\\")
+	if strings.HasSuffix(strings.ToLower(path), ".mdx") {
+		path = path[:len(path)-4] + ".m2"
+	}
+	return path
 }
