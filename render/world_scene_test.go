@@ -8,6 +8,7 @@ import (
 
 	"github.com/MorenoLand/Moreno.WoW/ui"
 	"github.com/MorenoLand/Moreno.WoW/world"
+	"github.com/g3n/engine/math32"
 )
 
 func TestWorldTileAtUsesSwappedInvertedAxes(t *testing.T) {
@@ -267,6 +268,19 @@ func TestLiveAzerothM2AxisInventory(t *testing.T) {
 	for _, placement := range adt.m2Placements {
 		if strings.Contains(strings.ToUpper(placement.path), "FENCE") {
 			t.Logf("M2 placement fence path=%s position=%v rotation=%v scale=%f", placement.path, placement.position, placement.rotation, placement.scale)
+			parts, loadErr := loadWorldM2Parts(loader, placement.path)
+			if loadErr == nil {
+				min, max := math32.NewVector3(math.MaxFloat32, math.MaxFloat32, math.MaxFloat32), math32.NewVector3(-math.MaxFloat32, -math.MaxFloat32, -math.MaxFloat32)
+				rotation := worldM2Rotation(placement.rotation)
+				for _, part := range parts {
+					for index := 0; index+2 < len(part.positions); index += 3 {
+						point := math32.NewVector3(part.positions[index], part.positions[index+1], part.positions[index+2]).ApplyQuaternion(rotation)
+						min.Min(point)
+						max.Max(point)
+					}
+				}
+				t.Logf("M2 transformed fence bounds=%v..%v", min, max)
+			}
 			break
 		}
 	}
@@ -299,5 +313,13 @@ func TestLiveAzerothM2AxisInventory(t *testing.T) {
 	}
 	if count == 0 {
 		t.Fatal("tile has no readable tree/fence M2")
+	}
+}
+
+func TestWorldM2RotationPreservesVerticalAxis(t *testing.T) {
+	convertedUp := math32.NewVector3(0, 0, 1)
+	convertedUp.ApplyQuaternion(worldM2Rotation([3]float32{1, 121.5, 4}))
+	if math.Abs(float64(convertedUp.X)) > 0.1 || math.Abs(float64(convertedUp.Y)) > 0.1 || convertedUp.Z < 0.9 {
+		t.Fatalf("fence up axis transformed to %v", convertedUp)
 	}
 }
