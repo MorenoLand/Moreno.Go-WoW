@@ -462,6 +462,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				refresh()
 			}
 		})
+		win.Subscribe(window.OnScroll, func(_ string, event interface{}) {
+			scroll := event.(*window.ScrollEvent)
+			if worldMode && worldCamera != nil && worldCamera.handleScroll(scroll.Yoffset) {
+				return
+			}
+		})
 		win.Subscribe(window.OnChar, func(_ string, event interface{}) {
 			char := event.(*window.CharEvent)
 			if uiEngine.HandleChar(char.Char) {
@@ -724,6 +730,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				worldCamera = newWorldCameraController(entry.position)
 				if collision, ok := loaded.UserData().(worldSceneCollision); ok {
 					worldCamera.setGround(collision.ground)
+					worldCamera.setMovement(collision.move)
+					worldCamera.setCameraTest(collision.cameraPosition)
 					if debug {
 						if ground, found := collision.ground(entry.position.X, entry.position.Y); found {
 							log.Printf("world: ground at entry=%.3f delta=%.3f", ground, ground-entry.position.Z)

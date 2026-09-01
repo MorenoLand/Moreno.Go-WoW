@@ -25,6 +25,7 @@ const (
 	worldUnitSize        = worldChunkSize / 8.0
 	worldHeightCount     = 145
 	worldStreamRadius    = 1
+	worldCollisionCell   = 32.0
 	worldWMODoodadBudget = 512
 )
 
@@ -107,6 +108,11 @@ type worldWMOBatch struct {
 	material uint8
 }
 
+type worldWMOTriangle struct {
+	flags    uint8
+	material uint8
+}
+
 type worldWMOGroup struct {
 	vertices []float32
 	normals  []float32
@@ -114,6 +120,7 @@ type worldWMOGroup struct {
 	colors   []float32
 	indices  []uint16
 	batches  []worldWMOBatch
+	triangles []worldWMOTriangle
 }
 
 type worldWMOMeshKey struct {
@@ -143,6 +150,57 @@ type worldSceneInfo struct {
 
 type worldSceneCollision struct {
 	chunks []worldADTChunk
+	solids []worldCollisionMesh
+	cells  map[[2]int][]worldCollisionRef
+}
+
+type worldCollisionRef struct {
+	mesh     int
+	triangle int
+}
+
+type worldCollisionTriangle struct {
+	a, b, c  [3]float32
+	normal   [3]float32
+	min, max [3]float32
+	noCamera bool
+}
+
+type worldCollisionMesh struct {
+	triangles []worldCollisionTriangle
+}
+
+func worldCollisionTriangleFromPoints(a, b, c [3]float32, noCamera bool) (worldCollisionTriangle, bool) {
+	ab := [3]float32{b[0] - a[0], b[1] - a[1], b[2] - a[2]}
+	ac := [3]float32{c[0] - a[0], c[1] - a[1], c[2] - a[2]}
+	normal := [3]float32{ab[1]*ac[2] - ab[2]*ac[1], ab[2]*ac[0] - ab[0]*ac[2], ab[0]*ac[1] - ab[1]*ac[0]}
+	length := float32(math.Sqrt(float64(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2])))
+	if length < 0.000001 {
+		return worldCollisionTriangle{}, false
+	}
+	normal[0], normal[1], normal[2] = normal[0]/length, normal[1]/length, normal[2]/length
+	min := [3]float32{float32(math.Min(float64(a[0]), math.Min(float64(b[0]), float64(c[0])))), float32(math.Min(float64(a[1]), math.Min(float64(b[1]), float64(c[1])))), float32(math.Min(float64(a[2]), math.Min(float64(b[2]), float64(c[2]))))}
+	max := [3]float32{float32(math.Max(float64(a[0]), math.Max(float64(b[0]), float64(c[0])))), float32(math.Max(float64(a[1]), math.Max(float64(b[1]), float64(c[1])))), float32(math.Max(float64(a[2]), math.Max(float64(b[2]), float64(c[2]))))}
+	return worldCollisionTriangle{a: a, b: b, c: c, normal: normal, min: min, max: max, noCamera: noCamera}, true
+}
+
+func newWorldSceneCollision(chunks []worldADTChunk, solids []worldCollisionMesh) worldSceneCollision {
+	collision := worldSceneCollision{chunks: chunks, solids: solids, cells: make(map[[2]int][]worldCollisionRef)}
+	for meshIndex, mesh := range solids {
+		for triangleIndex, triangle := range mesh.triangles {
+			minX := int(math.Floor(float64(triangle.min[0] / worldCollisionCell)))
+			maxX := int(math.Floor(float64(triangle.max[0] / worldCollisionCell)))
+			minY := int(math.Floor(float64(triangle.min[1] / worldCollisionCell)))
+			maxY := int(math.Floor(float64(triangle.max[1] / worldCollisionCell)))
+			for x := minX; x <= maxX; x++ {
+				for y := minY; y <= maxY; y++ {
+					key := [2]int{x, y}
+					collision.cells[key] = append(collision.cells[key], worldCollisionRef{mesh: meshIndex, triangle: triangleIndex})
+				}
+			}
+		}
+	}
+	return collision
 }
 
 type worldSceneAssetCache struct {
@@ -165,6 +223,11 @@ func newWorldSceneAssetCache() *worldSceneAssetCache {
 }
 
 func (collision worldSceneCollision) ground(x, y float32) (float32, bool) {
+	height, _, ok := collision.terrain(x, y)
+	return height, ok
+}
+
+func (collision worldSceneCollision) terrain(x, y float32) (float32, [3]float32, bool) {
 	for _, chunk := range collision.chunks {
 		localX := (chunk.position[0] - x) / worldUnitSize
 		localY := (chunk.position[1] - y) / worldUnitSize
@@ -181,16 +244,197 @@ func (collision worldSceneCollision) ground(x, y float32) (float32, bool) {
 			localY = 8
 		}
 		if chunk.holes&(1<<uint((row/2)*4+column/2)) != 0 {
-			return 0, false
+			return 0, [3]float32{}, false
 		}
 		u, v := localX-float32(row), localY-float32(column)
 		outer := func(r, c int) float32 { return chunk.heights[r*17+c] }
 		h00, h01 := outer(row, column), outer(row, column+1)
 		h10, h11 := outer(row+1, column), outer(row+1, column+1)
 		height := h00*(1-u)*(1-v) + h10*u*(1-v) + h01*(1-u)*v + h11*u*v
-		return chunk.position[2] + height, true
+		dx := ((h10-h00)*(1-v) + (h11-h01)*v) / worldUnitSize
+		dy := ((h01-h00)*(1-u) + (h11-h10)*u) / worldUnitSize
+		normal := [3]float32{-(-dx), -(-dy), 1}
+		length := float32(math.Sqrt(float64(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2])))
+		if length > 0 {
+			normal[0], normal[1], normal[2] = normal[0]/length, normal[1]/length, normal[2]/length
+		}
+		return chunk.position[2] + height, normal, true
 	}
-	return 0, false
+	return 0, [3]float32{}, false
+}
+
+func (collision worldSceneCollision) move(from, to [3]float32) [3]float32 {
+	deltaX, deltaY := to[0]-from[0], to[1]-from[1]
+	if deltaX == 0 && deltaY == 0 {
+		return to
+	}
+	if _, normal, ok := collision.terrain(to[0], to[1]); ok && normal[2] < 0.5 {
+		uphillX, uphillY := -normal[0], -normal[1]
+		lengthSquared := uphillX*uphillX + uphillY*uphillY
+		if lengthSquared > 0 {
+			uphill := (deltaX*uphillX + deltaY*uphillY) / lengthSquared
+			if uphill > 0 {
+				deltaX -= uphillX * uphill
+				deltaY -= uphillY * uphill
+				if deltaX*deltaX+deltaY*deltaY < 0.000001 {
+					return from
+				}
+			}
+		}
+	}
+	to[0], to[1] = from[0]+deltaX, from[1]+deltaY
+	for pass := 0; pass < 2; pass++ {
+		correctionX, correctionY := float32(0), float32(0)
+		minX, maxX := to[0]-0.55, to[0]+0.55
+		minY, maxY := to[1]-0.55, to[1]+0.55
+		for cellX := int(math.Floor(float64(minX / worldCollisionCell))); cellX <= int(math.Floor(float64(maxX/worldCollisionCell))); cellX++ {
+			for cellY := int(math.Floor(float64(minY / worldCollisionCell))); cellY <= int(math.Floor(float64(maxY/worldCollisionCell))); cellY++ {
+				for _, ref := range collision.cells[[2]int{cellX, cellY}] {
+					triangle := collision.solids[ref.mesh].triangles[ref.triangle]
+					if math.Abs(float64(triangle.normal[2])) >= 0.5 || triangle.max[2] < from[2]+0.8 || triangle.min[2] > from[2]+2.0 {
+						continue
+					}
+					pushX, pushY, distance, ok := worldCollisionPush2D(to[0], to[1], triangle, 0.55)
+					if !ok {
+						continue
+					}
+					if pushX*pushX+pushY*pushY > correctionX*correctionX+correctionY*correctionY {
+						correctionX, correctionY = pushX, pushY
+					}
+					_ = distance
+				}
+			}
+		}
+		if correctionX == 0 && correctionY == 0 {
+			break
+		}
+		to[0] += correctionX
+		to[1] += correctionY
+	}
+	return to
+}
+
+func worldCollisionPush2D(x, y float32, triangle worldCollisionTriangle, radius float32) (float32, float32, float32, bool) {
+	p := [2]float32{x, y}
+	a, b, c := [2]float32{triangle.a[0], triangle.a[1]}, [2]float32{triangle.b[0], triangle.b[1]}, [2]float32{triangle.c[0], triangle.c[1]}
+	closest := p
+	inside := worldPointInTriangle2D(p, a, b, c)
+	if !inside {
+		best := float32(math.MaxFloat32)
+		for _, edge := range [][2][2]float32{{a, b}, {b, c}, {c, a}} {
+			point := worldClosestSegmentPoint2D(p, edge[0], edge[1])
+			dx, dy := p[0]-point[0], p[1]-point[1]
+			distance := float32(math.Sqrt(float64(dx*dx + dy*dy)))
+			if distance < best {
+				best, closest = distance, point
+			}
+		}
+	}
+	deltaX, deltaY := p[0]-closest[0], p[1]-closest[1]
+	distance := float32(math.Sqrt(float64(deltaX*deltaX + deltaY*deltaY)))
+	if !inside && distance >= radius {
+		return 0, 0, distance, false
+	}
+	if distance < 0.000001 {
+		deltaX, deltaY = triangle.normal[0], triangle.normal[1]
+		if (p[0]-triangle.a[0])*deltaX+(p[1]-triangle.a[1])*deltaY < 0 {
+			deltaX, deltaY = -deltaX, -deltaY
+		}
+		distance = 0
+	} else {
+		deltaX, deltaY = deltaX/distance, deltaY/distance
+	}
+	return deltaX * (radius - distance), deltaY * (radius - distance), distance, true
+}
+
+func worldPointInTriangle2D(p, a, b, c [2]float32) bool {
+	sign := func(p1, p2, p3 [2]float32) float32 { return (p1[0]-p3[0])*(p2[1]-p3[1]) - (p2[0]-p3[0])*(p1[1]-p3[1]) }
+	d1, d2, d3 := sign(p, a, b), sign(p, b, c), sign(p, c, a)
+	return !(d1 < 0 && (d2 >= 0 || d3 >= 0) || d1 >= 0 && (d2 < 0 || d3 < 0))
+}
+
+func worldClosestSegmentPoint2D(p, a, b [2]float32) [2]float32 {
+	dx, dy := b[0]-a[0], b[1]-a[1]
+	lengthSquared := dx*dx + dy*dy
+	if lengthSquared < 0.000001 {
+		return a
+	}
+	t := ((p[0]-a[0])*dx + (p[1]-a[1])*dy) / lengthSquared
+	t = float32(math.Max(0, math.Min(1, float64(t))))
+	return [2]float32{a[0] + dx*t, a[1] + dy*t}
+}
+
+func worldSegmentTriangleHit(from, to [3]float32, triangle worldCollisionTriangle) (float32, bool) {
+	direction := [3]float32{to[0] - from[0], to[1] - from[1], to[2] - from[2]}
+	edge1 := [3]float32{triangle.b[0] - triangle.a[0], triangle.b[1] - triangle.a[1], triangle.b[2] - triangle.a[2]}
+	edge2 := [3]float32{triangle.c[0] - triangle.a[0], triangle.c[1] - triangle.a[1], triangle.c[2] - triangle.a[2]}
+	pvec := [3]float32{direction[1]*edge2[2] - direction[2]*edge2[1], direction[2]*edge2[0] - direction[0]*edge2[2], direction[0]*edge2[1] - direction[1]*edge2[0]}
+	determinant := edge1[0]*pvec[0] + edge1[1]*pvec[1] + edge1[2]*pvec[2]
+	if math.Abs(float64(determinant)) < 0.000001 {
+		return 0, false
+	}
+	inverse := 1 / determinant
+	tvec := [3]float32{from[0] - triangle.a[0], from[1] - triangle.a[1], from[2] - triangle.a[2]}
+	u := (tvec[0]*pvec[0] + tvec[1]*pvec[1] + tvec[2]*pvec[2]) * inverse
+	if u < 0 || u > 1 {
+		return 0, false
+	}
+	qvec := [3]float32{tvec[1]*edge1[2] - tvec[2]*edge1[1], tvec[2]*edge1[0] - tvec[0]*edge1[2], tvec[0]*edge1[1] - tvec[1]*edge1[0]}
+	v := (direction[0]*qvec[0] + direction[1]*qvec[1] + direction[2]*qvec[2]) * inverse
+	if v < 0 || u+v > 1 {
+		return 0, false
+	}
+	t := (edge2[0]*qvec[0] + edge2[1]*qvec[1] + edge2[2]*qvec[2]) * inverse
+	return t, t >= 0 && t <= 1
+}
+
+func (collision worldSceneCollision) cameraPosition(focus, eye math32.Vector3) math32.Vector3 {
+	spanX, spanY, spanZ := eye.X-focus.X, eye.Y-focus.Y, eye.Z-focus.Z
+	clear := func(fraction float32) bool {
+		x, y, z := focus.X+spanX*fraction, focus.Y+spanY*fraction, focus.Z+spanZ*fraction
+		ground, _, ok := collision.terrain(x, y)
+		return !ok || z >= ground+0.35
+	}
+	allowed := float32(1)
+	for step := 1; step <= 12; step++ {
+		fraction := float32(step) / 12
+		if clear(fraction) {
+			continue
+		}
+		low, high := float32(step-1)/12, fraction
+		for index := 0; index < 6; index++ {
+			middle := (low + high) * 0.5
+			if clear(middle) {
+				low = middle
+			} else {
+				high = middle
+			}
+		}
+		allowed = low
+		break
+	}
+	spanMinX, spanMaxX := float32(math.Min(float64(focus.X), float64(eye.X))), float32(math.Max(float64(focus.X), float64(eye.X)))
+	spanMinY, spanMaxY := float32(math.Min(float64(focus.Y), float64(eye.Y))), float32(math.Max(float64(focus.Y), float64(eye.Y)))
+	nearest := float32(1)
+	spanX, spanY, spanZ = eye.X-focus.X, eye.Y-focus.Y, eye.Z-focus.Z
+	for cellX := int(math.Floor(float64(spanMinX / worldCollisionCell))); cellX <= int(math.Floor(float64(spanMaxX/worldCollisionCell))); cellX++ {
+		for cellY := int(math.Floor(float64(spanMinY / worldCollisionCell))); cellY <= int(math.Floor(float64(spanMaxY/worldCollisionCell))); cellY++ {
+			for _, ref := range collision.cells[[2]int{cellX, cellY}] {
+				triangle := collision.solids[ref.mesh].triangles[ref.triangle]
+				if triangle.noCamera || math.Abs(float64(triangle.normal[2])) >= 0.5 {
+					continue
+				}
+				if hit, ok := worldSegmentTriangleHit([3]float32{focus.X, focus.Y, focus.Z}, [3]float32{eye.X, eye.Y, eye.Z}, triangle); ok && hit < nearest {
+					nearest = hit
+				}
+			}
+		}
+	}
+	if nearest < 1 {
+		allowed := float32(math.Max(0, float64(nearest-0.035)))
+		return *math32.NewVector3(focus.X+spanX*allowed, focus.Y+spanY*allowed, focus.Z+spanZ*allowed)
+	}
+	return *math32.NewVector3(focus.X+spanX*allowed, focus.Y+spanY*allowed, focus.Z+spanZ*allowed)
 }
 
 func loadWorldTerrain(loader *ui.Loader, position world.WorldPosition) (*core.Node, worldSceneInfo, error) {
@@ -217,6 +461,7 @@ func loadWorldTerrainProgress(loader *ui.Loader, position world.WorldPosition, p
 	info := worldSceneInfo{mapName: mapName, tileX: tileX, tileY: tileY}
 	cache := newWorldSceneAssetCache()
 	collisionChunks := make([]worldADTChunk, 0, 256*(worldStreamRadius*2+1)*(worldStreamRadius*2+1))
+	collisionSolids := make([]worldCollisionMesh, 0)
 	requestedTiles := (worldStreamRadius*2 + 1) * (worldStreamRadius*2 + 1)
 	for offsetY := -worldStreamRadius; offsetY <= worldStreamRadius; offsetY++ {
 		for offsetX := -worldStreamRadius; offsetX <= worldStreamRadius; offsetX++ {
@@ -260,6 +505,7 @@ func loadWorldTerrainProgress(loader *ui.Loader, position world.WorldPosition, p
 			collision, ok := tileRoot.UserData().(worldSceneCollision)
 			if ok {
 				collisionChunks = append(collisionChunks, collision.chunks...)
+				collisionSolids = append(collisionSolids, collision.solids...)
 			}
 		}
 	}
@@ -269,7 +515,7 @@ func loadWorldTerrainProgress(loader *ui.Loader, position world.WorldPosition, p
 	if progress != nil {
 		progress(1)
 	}
-	root.SetUserData(worldSceneCollision{chunks: collisionChunks})
+	root.SetUserData(newWorldSceneCollision(collisionChunks, collisionSolids))
 	return root, info, nil
 }
 
@@ -675,6 +921,10 @@ func parseWorldWMOGroup(data []byte) (worldWMOGroup, error) {
 			for index := 0; index+2 <= len(payload); index += 2 {
 				group.indices = append(group.indices, binary.LittleEndian.Uint16(payload[index:index+2]))
 			}
+		case "MOPY":
+			for index := 0; index+1 < len(payload); index += 2 {
+				group.triangles = append(group.triangles, worldWMOTriangle{flags: payload[index], material: payload[index+1]})
+			}
 		case "MOBA":
 			for index := 0; index+24 <= len(payload); index += 24 {
 				group.batches = append(group.batches, worldWMOBatch{
@@ -924,10 +1174,11 @@ func buildWorldPlayer(loader *ui.Loader, character world.Character, position wor
 	return root, nil
 }
 
-func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int) {
+func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int, []worldCollisionMesh) {
 	root := core.NewNode()
 	meshCount := 0
 	doodadCount := 0
+	solids := make([]worldCollisionMesh, 0)
 	for _, placement := range adt.wmoPlacements {
 		origin := worldWMOPosition(placement.position)
 		dx, dy := origin[0]-position.X, origin[1]-position.Y
@@ -946,7 +1197,8 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 			}
 			cache.wmoModels[placement.path] = model
 		}
-		meshes := buildWorldWMOPlacement(loader, placement, model, cache.textures, cache.placeholder)
+		meshes, placementSolids := buildWorldWMOPlacement(loader, placement, model, cache.textures, cache.placeholder)
+		solids = append(solids, placementSolids...)
 		for _, mesh := range meshes {
 			root.Add(mesh)
 			meshCount++
@@ -982,14 +1234,15 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 			}
 		}
 	}
-	if meshCount == 0 {
-		return nil, 0
+	if meshCount == 0 && len(solids) == 0 {
+		return nil, 0, nil
 	}
-	return root, meshCount
+	return root, meshCount, solids
 }
 
-func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, model worldWMORoot, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) []*graphic.Mesh {
+func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, model worldWMORoot, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) ([]*graphic.Mesh, []worldCollisionMesh) {
 	builders := make(map[worldWMOMeshKey]*worldWMOMeshBuilder)
+	solids := make([]worldCollisionMesh, 0)
 	for groupIndex := 0; groupIndex < model.groupCount; groupIndex++ {
 		groupData, err := loader.ReadFile(worldWMOGroupPath(placement.path, groupIndex))
 		if err != nil {
@@ -998,6 +1251,29 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 		group, err := parseWorldWMOGroup(groupData)
 		if err != nil {
 			continue
+		}
+		collisionMesh := worldCollisionMesh{triangles: make([]worldCollisionTriangle, 0, len(group.indices)/3)}
+		for triangleIndex := 0; triangleIndex+2 < len(group.indices); triangleIndex += 3 {
+			point := func(index uint16) ([3]float32, bool) {
+				at := int(index) * 3
+				if at+2 >= len(group.vertices) {
+					return [3]float32{}, false
+				}
+				return transformWorldWMOPoint([3]float32{group.vertices[at], group.vertices[at+1], group.vertices[at+2]}, placement), true
+			}
+			a, aok := point(group.indices[triangleIndex])
+			b, bok := point(group.indices[triangleIndex+1])
+			c, cok := point(group.indices[triangleIndex+2])
+			if !aok || !bok || !cok {
+				continue
+			}
+			noCamera := triangleIndex/3 < len(group.triangles) && group.triangles[triangleIndex/3].flags&0x01 != 0
+			if triangle, valid := worldCollisionTriangleFromPoints(a, b, c, noCamera); valid {
+				collisionMesh.triangles = append(collisionMesh.triangles, triangle)
+			}
+		}
+		if len(collisionMesh.triangles) > 0 {
+			solids = append(solids, collisionMesh)
 		}
 		batches := group.batches
 		if len(batches) == 0 {
@@ -1098,7 +1374,7 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 		mesh.SetRenderOrder(-40 + int(key.material.blend))
 		meshes = append(meshes, mesh)
 	}
-	return meshes
+	return meshes, solids
 }
 
 func worldWMOGroupPath(path string, index int) string {
@@ -1412,7 +1688,7 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 	if info.chunks == 0 {
 		return nil, worldSceneInfo{}, fmt.Errorf("ADT produced no drawable chunks")
 	}
-	wmoRoot, wmoCount := buildWorldWMOInstances(loader, adt, position, cache)
+	wmoRoot, wmoCount, wmoSolids := buildWorldWMOInstances(loader, adt, position, cache)
 	if wmoRoot != nil {
 		root.Add(wmoRoot)
 	}
@@ -1428,7 +1704,7 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 	if progress != nil {
 		progress(0.98)
 	}
-	root.SetUserData(worldSceneCollision{chunks: adt.chunks})
+	root.SetUserData(newWorldSceneCollision(adt.chunks, wmoSolids))
 	return root, info, nil
 }
 

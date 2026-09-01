@@ -13,10 +13,13 @@ import (
 type worldCameraController struct {
 	position   [3]float32
 	velocity   [3]float32
+	distance   float32
 	yaw        float32
 	pitch      float32
 	keys       map[window.Key]bool
 	ground     func(float32, float32) (float32, bool)
+	move       func([3]float32, [3]float32) [3]float32
+	cameraTest func(math32.Vector3, math32.Vector3) math32.Vector3
 	jumpQueued bool
 	dragging   bool
 	lastMouseX float64
@@ -24,7 +27,7 @@ type worldCameraController struct {
 }
 
 func newWorldCameraController(position world.WorldPosition) *worldCameraController {
-	return &worldCameraController{position: [3]float32{position.X, position.Y, position.Z}, yaw: position.Orientation, pitch: -15 * float32(math.Pi) / 180, keys: make(map[window.Key]bool)}
+	return &worldCameraController{position: [3]float32{position.X, position.Y, position.Z}, distance: 10, yaw: position.Orientation, pitch: -15 * float32(math.Pi) / 180, keys: make(map[window.Key]bool)}
 }
 
 func (c *worldCameraController) handleKey(key window.Key, down bool) bool {
@@ -42,6 +45,22 @@ func (c *worldCameraController) handleKey(key window.Key, down bool) bool {
 
 func (c *worldCameraController) setGround(ground func(float32, float32) (float32, bool)) {
 	c.ground = ground
+}
+
+func (c *worldCameraController) setMovement(move func([3]float32, [3]float32) [3]float32) {
+	c.move = move
+}
+
+func (c *worldCameraController) setCameraTest(test func(math32.Vector3, math32.Vector3) math32.Vector3) {
+	c.cameraTest = test
+}
+
+func (c *worldCameraController) handleScroll(offset float32) bool {
+	if offset == 0 {
+		return false
+	}
+	c.distance = float32(math.Max(2.5, math.Min(30, float64(c.distance)*math.Pow(0.88, float64(offset)))))
+	return true
 }
 
 func (c *worldCameraController) handleMouse(x, y float64, button window.MouseButton, down bool) bool {
@@ -116,8 +135,14 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 		c.velocity[0] *= friction
 		c.velocity[1] *= friction
 	}
-	c.position[0] += c.velocity[0] * delta
-	c.position[1] += c.velocity[1] * delta
+	from := c.position
+	to := from
+	to[0] += c.velocity[0] * delta
+	to[1] += c.velocity[1] * delta
+	if c.move != nil {
+		to = c.move(from, to)
+	}
+	c.position[0], c.position[1] = to[0], to[1]
 	grounded := false
 	groundHeight := float32(0)
 	if c.ground != nil {
@@ -152,12 +177,16 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 		player.SetPosition(c.position[0], c.position[1], c.position[2])
 		player.SetRotation(0, 0, c.yaw)
 	}
-	distance := float32(10)
 	pivot := math32.NewVector3(c.position[0], c.position[1], c.position[2]+1.6)
 	cosPitch := float32(math.Cos(float64(c.pitch)))
 	sinPitch := float32(math.Sin(float64(c.pitch)))
 	forward3 := math32.NewVector3(forward[0]*cosPitch, forward[1]*cosPitch, sinPitch)
-	cam.SetPosition(c.position[0]-forward3.X*distance, c.position[1]-forward3.Y*distance, c.position[2]+1.6-forward3.Z*distance)
+	eye := math32.NewVector3(c.position[0]-forward3.X*c.distance, c.position[1]-forward3.Y*c.distance, c.position[2]+1.6-forward3.Z*c.distance)
+	if c.cameraTest != nil {
+		adjusted := c.cameraTest(*pivot, *eye)
+		eye = &adjusted
+	}
+	cam.SetPositionVec(eye)
 	target := pivot
 	cam.LookAt(target, math32.NewVector3(0, 0, 1))
 	return true
