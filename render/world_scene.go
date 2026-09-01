@@ -849,18 +849,15 @@ func worldCharacterModelPath(character world.Character) string {
 }
 
 func buildWorldPlayer(loader *ui.Loader, character world.Character, position world.WorldPosition) (*core.Node, error) {
-	parts, err := loadWorldM2Parts(loader, worldCharacterModelPath(character))
+	model, err := loadGlueCharacterModel(loader, character)
 	if err != nil {
 		return nil, err
 	}
-	textures := make(map[string]*texture.Texture2D)
-	placeholder := texture.NewTexture2DFromRGBA(worldPlaceholderTexture())
-	root := buildWorldM2Instance(loader, parts, textures, placeholder)
-	if root == nil {
-		return nil, fmt.Errorf("%s: no renderable character batches", worldCharacterModelPath(character))
-	}
+	root := core.NewNode()
 	root.SetPosition(position.X, position.Y, position.Z)
 	root.SetRotation(0, 0, position.Orientation)
+	model.SetRotation(math.Pi/2, 0, 0)
+	root.Add(model)
 	return root, nil
 }
 
