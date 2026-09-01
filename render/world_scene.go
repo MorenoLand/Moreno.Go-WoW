@@ -26,6 +26,7 @@ const (
 	worldHeightCount     = 145
 	worldStreamRadius    = 1
 	worldCollisionCell   = 32.0
+	worldObjectDistance  = worldTileSize * 1.5
 	worldWMODoodadBudget = 512
 )
 
@@ -976,7 +977,7 @@ func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.World
 	for _, placement := range adt.m2Placements {
 		origin := worldWMOPosition(placement.position)
 		dx, dy := origin[0]-position.X, origin[1]-position.Y
-		if dx*dx+dy*dy > (worldTileSize*2)*(worldTileSize*2) {
+		if dx*dx+dy*dy > worldObjectDistance*worldObjectDistance {
 			continue
 		}
 		parts, ok := cache.m2Parts[placement.path]
@@ -1190,7 +1191,7 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 	for _, placement := range adt.wmoPlacements {
 		origin := worldWMOPosition(placement.position)
 		dx, dy := origin[0]-position.X, origin[1]-position.Y
-		if dx*dx+dy*dy > (worldTileSize*2)*(worldTileSize*2) {
+		if dx*dx+dy*dy > worldObjectDistance*worldObjectDistance {
 			continue
 		}
 		model, ok := cache.wmoModels[placement.path]

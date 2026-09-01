@@ -213,6 +213,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var worldSky *core.Node
 	worldEntities := make(map[uint64]*worldEntity)
 	worldCreatureCache := worldCreatureTables{}
+	var worldFloor func(float32, float32, float32) (float32, bool)
 	var worldCharacter world.Character
 	var glueCharacters []world.Character
 	var setSceneModel func() bool
@@ -559,7 +560,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 			if worldMode && worldCamera != nil {
 				worldCamera.update(elapsed, cam, worldPlayer)
-				advanceWorldEntities(worldEntities, elapsed)
+				advanceWorldEntities(worldEntities, elapsed, worldFloor)
 				if worldPlayer != nil {
 					if info, ok := worldPlayer.UserData().(glueModelInfo); ok {
 						if info.animation != nil {
@@ -743,6 +744,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				}
 				worldEntities = make(map[uint64]*worldEntity)
 				worldCreatureCache = worldCreatureTables{}
+				worldFloor = nil
 				worldModel = loaded
 				scene.Add(worldModel)
 				worldSky = buildWorldSky()
@@ -767,6 +769,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					worldCamera.setFloor(collision.floor)
 					worldCamera.setMovement(collision.move)
 					worldCamera.setCameraTest(collision.cameraPosition)
+					worldFloor = collision.floor
 					if debug {
 						if ground, found := collision.ground(entry.position.X, entry.position.Y); found {
 							log.Printf("world: ground at entry=%.3f delta=%.3f", ground, ground-entry.position.Z)
@@ -846,7 +849,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						}
 						break
 					}
-					models, modelErrors := applyWorldUpdateBlocks(scene, uiEngine.AssetLoader, &worldCreatureCache, worldEntities, blocks, worldCharacter.GUID)
+					models, modelErrors := applyWorldUpdateBlocks(scene, uiEngine.AssetLoader, &worldCreatureCache, worldEntities, blocks, worldCharacter.GUID, worldFloor)
 					if debug {
 						log.Printf("world update: blocks=%d entities=%d models=%d errors=%d", len(blocks), len(worldEntities), models, len(modelErrors))
 						for _, modelErr := range modelErrors {
@@ -863,15 +866,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						break
 					}
 					applyWorldMonsterMove(worldEntities, move)
-					if debug {
-						log.Printf("world monster move: guid=%016X duration=%d points=%d", move.GUID, move.Duration, len(move.Path))
-					}
 					if entity := worldEntities[move.GUID]; entity != nil {
-						if syncErr := syncWorldEntity(scene, uiEngine.AssetLoader, &worldCreatureCache, entity, worldCharacter.GUID); syncErr != nil && debug {
+						if syncErr := syncWorldEntity(scene, uiEngine.AssetLoader, &worldCreatureCache, entity, worldCharacter.GUID, worldFloor); syncErr != nil && debug {
 							log.Printf("world monster entity: %v", syncErr)
 						}
 					}
-					refresh()
 				case world.DestroyObject:
 					guid, destroyErr := world.ParseDestroyObject(event.Packet.Body)
 					if destroyErr != nil {

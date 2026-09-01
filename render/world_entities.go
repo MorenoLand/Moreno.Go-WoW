@@ -187,6 +187,15 @@ func worldEntityMoving(entity *worldEntity) bool {
 	return len(entity.path) > 0 || flags&(world.MovementFlagForward|world.MovementFlagBackward|world.MovementFlagStrafeLeft|world.MovementFlagStrafeRight) != 0
 }
 
+func worldGroundedPosition(position world.WorldPosition, floor func(float32, float32, float32) (float32, bool)) world.WorldPosition {
+	if floor != nil {
+		if height, ok := floor(position.X, position.Y, position.Z); ok {
+			position.Z = height
+		}
+	}
+	return position
+}
+
 func applyWorldMonsterMove(entities map[uint64]*worldEntity, move world.MonsterMove) {
 	entity := entities[move.GUID]
 	if entity == nil {
@@ -235,7 +244,7 @@ func applyWorldMonsterMove(entities map[uint64]*worldEntity, move world.MonsterM
 	}
 }
 
-func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64) {
+func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64, floor func(float32, float32, float32) (float32, bool)) {
 	if elapsed <= 0 {
 		return
 	}
@@ -273,6 +282,7 @@ func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64) {
 			entity.pathDuration = 0
 			entity.movement.MovementFlags &^= world.MovementFlagForward | world.MovementFlagBackward | world.MovementFlagStrafeLeft | world.MovementFlagStrafeRight
 		}
+		entity.movement.Position = worldGroundedPosition(entity.movement.Position, floor)
 		if entity.node != nil {
 			entity.node.SetPosition(entity.movement.Position.X, entity.movement.Position.Y, entity.movement.Position.Z)
 			entity.node.SetRotation(0, 0, entity.movement.Position.Orientation)
@@ -280,7 +290,7 @@ func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64) {
 	}
 }
 
-func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureTables, entity *worldEntity, ownGUID uint64) error {
+func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureTables, entity *worldEntity, ownGUID uint64, floor func(float32, float32, float32) (float32, bool)) error {
 	if entity.guid == ownGUID || !entity.hasPosition || (entity.objectType != world.ObjectTypeUnit && entity.objectType != world.ObjectTypePlayer) {
 		return nil
 	}
@@ -303,6 +313,7 @@ func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureT
 		scene.Add(entity.node)
 	}
 	if entity.node != nil {
+		entity.movement.Position = worldGroundedPosition(entity.movement.Position, floor)
 		entity.node.SetPosition(entity.movement.Position.X, entity.movement.Position.Y, entity.movement.Position.Z)
 		entity.node.SetRotation(0, 0, entity.movement.Position.Orientation)
 		if info, ok := entity.node.UserData().(glueModelInfo); ok && info.animation != nil {
@@ -316,7 +327,7 @@ func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureT
 	return nil
 }
 
-func applyWorldUpdateBlocks(scene *core.Node, loader *ui.Loader, tables *worldCreatureTables, entities map[uint64]*worldEntity, blocks []world.UpdateBlock, ownGUID uint64) (int, []error) {
+func applyWorldUpdateBlocks(scene *core.Node, loader *ui.Loader, tables *worldCreatureTables, entities map[uint64]*worldEntity, blocks []world.UpdateBlock, ownGUID uint64, floor func(float32, float32, float32) (float32, bool)) (int, []error) {
 	created := 0
 	errors := make([]error, 0)
 	remove := func(guid uint64) {
@@ -344,7 +355,7 @@ func applyWorldUpdateBlocks(scene *core.Node, loader *ui.Loader, tables *worldCr
 				entity.movement = block.Movement
 				entity.hasPosition = true
 			}
-			if err := syncWorldEntity(scene, loader, tables, entity, ownGUID); err != nil {
+			if err := syncWorldEntity(scene, loader, tables, entity, ownGUID, floor); err != nil {
 				errors = append(errors, err)
 			} else if entity.node != nil {
 				created++
@@ -357,7 +368,7 @@ func applyWorldUpdateBlocks(scene *core.Node, loader *ui.Loader, tables *worldCr
 			for field, value := range block.Fields {
 				entity.fields[field] = value
 			}
-			if err := syncWorldEntity(scene, loader, tables, entity, ownGUID); err != nil {
+			if err := syncWorldEntity(scene, loader, tables, entity, ownGUID, floor); err != nil {
 				errors = append(errors, err)
 			}
 		case world.UpdateMovementBlock:
@@ -375,7 +386,7 @@ func applyWorldUpdateBlocks(scene *core.Node, loader *ui.Loader, tables *worldCr
 					entity.movement.Speeds = block.Movement.Speeds
 				}
 			}
-			if err := syncWorldEntity(scene, loader, tables, entity, ownGUID); err != nil {
+			if err := syncWorldEntity(scene, loader, tables, entity, ownGUID, floor); err != nil {
 				errors = append(errors, err)
 			}
 		case world.UpdateOutOfRange:
