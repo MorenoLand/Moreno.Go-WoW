@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/g3n/engine/window"
 	lua "github.com/yuin/gopher-lua"
@@ -47,6 +48,15 @@ type UIEngine struct {
 	movie           *moviePlayback
 	sceneBackground bool
 	debugPanel      debugPanelState
+	lastClick       *widget
+	lastClickAt     time.Time
+	loading         bool
+	loadingPath     string
+	loadingProgress float64
+	worldRoot       *widget
+	worldUIReady    bool
+	worldLoading    bool
+	worldActive     bool
 }
 
 func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, error) {
@@ -207,6 +217,11 @@ func (eng *UIEngine) Update(elapsed float64) bool {
 			update(child)
 		}
 	}
+	if eng.worldRoot != nil {
+		if chat := eng.Rt.widgets["ChatFrame1"]; chat != nil {
+			update(chat)
+		}
+	}
 	return statusChanged || eng.updateMovie(elapsed)
 }
 
@@ -255,6 +270,16 @@ func (eng *UIEngine) loadBLP(path string) image.Image {
 }
 
 func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
+	eng.worldActive = false
+	return eng.render(screenWidth, screenHeight, eng.Rt.widgets["GlueParent"], true)
+}
+
+func (eng *UIEngine) RenderWorld(screenWidth, screenHeight int) *image.RGBA {
+	eng.worldActive = true
+	return eng.render(screenWidth, screenHeight, eng.worldRoot, false)
+}
+
+func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBackground bool) *image.RGBA {
 	if screenWidth < 1 {
 		screenWidth = 1
 	}
@@ -262,6 +287,8 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 		screenHeight = 1
 	}
 	canvas := image.NewRGBA(image.Rect(0, 0, screenWidth, screenHeight))
+	eng.rects = make(map[*widget]Rect)
+	eng.layoutActive = make(map[*widget]bool)
 
 	uiScale := float64(screenHeight) / 768.0
 	eng.uiScale = uiScale
@@ -282,7 +309,7 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 			textFace.Close()
 		}
 	}()
-	if root := eng.Rt.widgets["GlueParent"]; root != nil {
+	if root != nil {
 		eng.prepareText(root, face, faceLg)
 	}
 
@@ -295,8 +322,14 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 		host.h = virtualHeight
 	}
 
+	if eng.loading {
+		eng.renderLoadingScreen(canvas)
+		return canvas
+	}
 	// ─── Step 1: Render background from BLP sky textures ───────────────
-	eng.renderBackground(canvas, screenWidth, screenHeight)
+	if drawBackground {
+		eng.renderBackground(canvas, screenWidth, screenHeight)
+	}
 
 	screen := eng.screen
 
@@ -309,7 +342,7 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 					paint(children, child, rect)
 				}
 			}
-			clip := ScreenRect(rect, float64(target.Bounds().Dy())).Intersect(target.Bounds())
+			clip := ScreenRect(screenScaledRect(rect, eng.uiScale), float64(target.Bounds().Dy())).Intersect(target.Bounds())
 			if !clip.Empty() {
 				draw.Draw(target, clip, children, clip.Min, draw.Over)
 			}
@@ -333,14 +366,7 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 
 		// ─── Backdrop ────────────────────────────────────────────────────
 		if w.backdrop != nil && (w.backdrop.bgFile != "" || w.backdrop.edgeFile != "") {
-			backdrop := w.backdrop
-			if w.kind == kindEditBox && strings.EqualFold(backdrop.edgeFile, `Interface\Glues\Common\Glue-Tooltip-Border`) {
-				copy := *backdrop
-				copy.bgFile = ""
-				copy.edgeFile = `Interface\Common\Common-Input-Border`
-				backdrop = &copy
-			}
-			eng.drawBackdrop(target, backdrop, scaledRect)
+			eng.drawBackdrop(target, w.backdrop, scaledRect)
 		}
 
 		switch w.kind {
@@ -405,6 +431,9 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 		} else {
 			paintChildren(target, w, rect)
 		}
+		if w.kind == kindScrollingMessageFrame {
+			eng.drawMessageLines(target, w, rect, face, faceLg, float64(screenHeight))
+		}
 
 		if w.kind == kindButton || w.kind == kindCheckButton {
 			if w.buttonLabel == nil {
@@ -419,22 +448,25 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 		}
 	}
 
-	glueParent := eng.Rt.widgets["GlueParent"]
-	if glueParent != nil {
-		for _, child := range orderedChildren(glueParent.children) {
+	if root != nil {
+		rootRect := screen
+		if root.name == "GlueParent" {
+			rootRect = eng.glueParentRect()
+		}
+		for _, child := range orderedChildren(root.children) {
 			if child.shown {
-				paint(canvas, child, screen)
+				paint(canvas, child, rootRect)
 			}
 		}
 	}
-	if eng.statusKey != "" {
+	if drawBackground && eng.statusKey != "" {
 		status := eng.resolveText(eng.statusKey)
 		drawTextAligned(canvas, face, status, screenScaledRect(Rect{X0: 80, Y0: 96, X1: virtualWidth - 80, Y1: 128}, uiScale), float64(screenHeight), color.RGBA{R: 255, G: 100, B: 80, A: 255}, "CENTER")
 	}
-	if eng.statusText != "" {
+	if drawBackground && eng.statusText != "" {
 		drawTextAligned(canvas, face, eng.statusText, screenScaledRect(Rect{X0: 80, Y0: 364, X1: virtualWidth - 80, Y1: 404}, uiScale), float64(screenHeight), color.RGBA{R: 255, G: 220, B: 80, A: 255}, "CENTER")
 	}
-	if eng.sceneBackground {
+	if drawBackground && eng.sceneBackground {
 		for index := 3; index < len(canvas.Pix); index += 4 {
 			if canvas.Pix[index] == 0 {
 				canvas.Pix[index] = 1
@@ -464,7 +496,12 @@ func (eng *UIEngine) prepareText(w *widget, face, faceLg font.Face) {
 				}
 			}
 			w.textWidth = float64(maxWidth) / eng.uiScale
-			w.width = float64(maxWidth) / eng.uiScale
+			if !w.explicitWidth {
+				if strings.EqualFold(eng.textJustify(w), "LEFT") || strings.EqualFold(eng.textJustify(w), "RIGHT") {
+					maxWidth += int(math.Ceil(8 * eng.uiScale))
+				}
+				w.width = float64(maxWidth) / eng.uiScale
+			}
 		} else {
 			maxWidth := 0
 			for _, line := range lines {
@@ -487,6 +524,13 @@ func (eng *UIEngine) prepareText(w *widget, face, faceLg font.Face) {
 }
 
 func (eng *UIEngine) layoutRect(w *widget, parent Rect) Rect {
+	if w != nil && w.name == "GlueParent" {
+		rect := eng.glueParentRect()
+		eng.rects[w] = rect
+		w.renderRect = rect
+		w.hasRenderRect = true
+		return rect
+	}
 	if rect, ok := eng.rects[w]; ok {
 		w.renderRect = rect
 		w.hasRenderRect = true
@@ -524,6 +568,15 @@ func (eng *UIEngine) layoutRect(w *widget, parent Rect) Rect {
 	w.renderRect = rect
 	w.hasRenderRect = true
 	return rect
+}
+
+func (eng *UIEngine) glueParentRect() Rect {
+	if eng.screen.H() <= 0 || eng.screen.W()/eng.screen.H() <= 16.0/9.0 {
+		return eng.screen
+	}
+	width := eng.screen.H() * 16.0 / 9.0
+	margin := (eng.screen.W() - width) / 2
+	return Rect{X0: margin, Y0: 0, X1: eng.screen.W() - margin, Y1: eng.screen.H()}
 }
 
 func (eng *UIEngine) paintButtonState(w *widget, rect Rect, paint func(*widget, Rect)) {
@@ -766,7 +819,48 @@ func (eng *UIEngine) CurrentModelPath() string {
 	return path
 }
 
+func (eng *UIEngine) CreatePreviewState() (CreatePreviewState, bool) {
+	if eng.Rt == nil {
+		return CreatePreviewState{}, false
+	}
+	frame := eng.Rt.widgets["CharacterCreate"]
+	if frame == nil || !frame.shown || len(createRaces) == 0 {
+		return CreatePreviewState{}, false
+	}
+	raceIndex := clampCreateIndex(eng.Rt.selectedRace, len(createRaces))
+	classIndex := eng.Rt.selectedClass
+	if !validCreateClass(raceIndex, classIndex) {
+		for candidate := range createClasses {
+			if validCreateClass(raceIndex, candidate+1) {
+				classIndex = candidate + 1
+				break
+			}
+		}
+	}
+	gender := uint8(0)
+	if eng.Rt.selectedSex == 3 {
+		gender = 1
+	}
+	return CreatePreviewState{RaceID: createRaces[raceIndex-1].id, ClassID: uint8(classIndex), Gender: gender, Facing: eng.Rt.createFacing}, true
+}
+
+func (eng *UIEngine) CharacterSelectVisible() bool {
+	return eng != nil && eng.Rt != nil && eng.Rt.widgets["CharacterSelect"] != nil && eng.Rt.widgets["CharacterSelect"].shown
+}
+
+func (eng *UIEngine) SceneCharacterFacing() float32 {
+	if state, ok := eng.CreatePreviewState(); ok {
+		return state.Facing
+	}
+	if eng.Rt == nil {
+		return 0
+	}
+	return eng.Rt.Glue.CharacterFacing
+}
+
 func (eng *UIEngine) SetInitialCredentials(account, password string, rememberMe bool) {
+	eng.SetWorldLoading(false)
+	eng.ClearLoadingScreen()
 	eng.rememberMe = rememberMe
 	eng.Rt.SetCVar("accountName", account)
 	eng.Rt.SetCVar("currentGlueScreen", "login")
@@ -786,6 +880,8 @@ func (eng *UIEngine) SetInitialCredentials(account, password string, rememberMe 
 }
 
 func (eng *UIEngine) SetGlueState(state GlueState) {
+	eng.SetWorldLoading(false)
+	eng.ClearLoadingScreen()
 	if len(state.AddOns) == 0 {
 		state.AddOns = eng.Rt.Glue.AddOns
 	}
@@ -802,6 +898,10 @@ func (eng *UIEngine) SetGlueState(state GlueState) {
 }
 
 func (eng *UIEngine) HandleCursor(x, y float64) bool {
+	if eng.Rt != nil {
+		eng.Rt.cursorX = x
+		eng.Rt.cursorY = y
+	}
 	if eng.selecting != nil {
 		eng.setEditCursorAt(eng.selecting, x, true)
 		return true
@@ -840,6 +940,10 @@ func (eng *UIEngine) HandleMouse(x, y float64, button window.MouseButton, down b
 	if button != window.MouseButtonLeft {
 		return false
 	}
+	if eng.Rt != nil {
+		eng.Rt.cursorX = x
+		eng.Rt.cursorY = y
+	}
 	if eng.debugPanel.handleMouse(x, y, down, eng) {
 		return true
 	}
@@ -847,7 +951,9 @@ func (eng *UIEngine) HandleMouse(x, y float64, button window.MouseButton, down b
 	if down {
 		eng.pressed = target
 		if target == nil {
-			eng.Rt.setFocus(nil)
+			if eng.Rt != nil {
+				eng.Rt.setFocus(nil)
+			}
 			return false
 		}
 		if target.kind == kindEditBox {
@@ -856,6 +962,9 @@ func (eng *UIEngine) HandleMouse(x, y float64, button window.MouseButton, down b
 			eng.selecting = target
 		} else if target.kind == kindButton || target.kind == kindCheckButton {
 			target.buttonState = "PUSHED"
+		}
+		if eng.Rt != nil {
+			eng.Rt.fire(target, "OnMouseDown", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString("LeftButton")})
 		}
 		return true
 	}
@@ -868,11 +977,25 @@ func (eng *UIEngine) HandleMouse(x, y float64, button window.MouseButton, down b
 	if pressed.kind == kindButton || pressed.kind == kindCheckButton {
 		pressed.buttonState = "NORMAL"
 	}
+	if eng.Rt != nil {
+		eng.Rt.fire(pressed, "OnMouseUp", []lua.LValue{pressed.luaValue(eng.Rt.L), lua.LString("LeftButton")})
+	}
 	if pressed == target && (target.kind == kindButton || target.kind == kindCheckButton) {
 		if target.kind == kindCheckButton {
 			target.checked = !target.checked
 		}
-		eng.Rt.fire(target, "OnClick", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString("LeftButton"), lua.LBool(false)})
+		if eng.Rt != nil {
+			eng.Rt.fire(target, "OnClick", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString("LeftButton"), lua.LBool(false)})
+		}
+		if eng.lastClick == target && time.Since(eng.lastClickAt) <= 500*time.Millisecond {
+			if eng.Rt != nil {
+				eng.Rt.fire(target, "OnDoubleClick", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString("LeftButton")})
+			}
+			eng.lastClick = nil
+		} else if target.kind == kindButton || target.kind == kindCheckButton {
+			eng.lastClick = target
+			eng.lastClickAt = time.Now()
+		}
 		return true
 	}
 	return pressed == target
@@ -975,6 +1098,9 @@ func deleteEditSelection(eng *UIEngine, w *widget) bool {
 func (eng *UIEngine) HandleKey(key window.Key) bool { return eng.handleKey(key, false) }
 
 func (eng *UIEngine) handleKey(key window.Key, extendSelection bool) bool {
+	if eng.worldLoading && key == window.KeyEnter {
+		return true
+	}
 	w := eng.Rt.focused
 	if key == window.KeyEscape {
 		target := eng.keyboardTarget()
@@ -1122,6 +1248,9 @@ func (eng *UIEngine) HandleKeyUp(key window.Key) bool {
 
 func (eng *UIEngine) keyboardTarget() *widget {
 	root := eng.Rt.widgets["GlueParent"]
+	if eng.worldActive && eng.worldRoot != nil {
+		root = eng.worldRoot
+	}
 	if root == nil {
 		return nil
 	}
@@ -1186,18 +1315,28 @@ func (eng *UIEngine) hitTest(x, y float64) *widget {
 		if point.x < hitRect.X0 || point.x > hitRect.X1 || point.y < hitRect.Y0 || point.y > hitRect.Y1 {
 			return nil
 		}
+		if (w.kind == kindButton || w.kind == kindCheckButton) && !w.enabled {
+			return nil
+		}
 		if w.kind == kindButton || w.kind == kindCheckButton || w.kind == kindEditBox || w.enableMouse {
 			return w
 		}
 		return nil
 	}
 	root := eng.Rt.widgets["GlueParent"]
+	if eng.worldActive && eng.worldRoot != nil {
+		root = eng.worldRoot
+	}
 	if root == nil {
 		return nil
 	}
+	rootRect := eng.screen
+	if root.name == "GlueParent" {
+		rootRect = eng.glueParentRect()
+	}
 	children := orderedChildren(root.children)
 	for i := len(children) - 1; i >= 0; i-- {
-		if target := visit(children[i], eng.screen); target != nil {
+		if target := visit(children[i], rootRect); target != nil {
 			return target
 		}
 	}
@@ -1344,11 +1483,7 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 		if !bd.edgeColor.isZero() {
 			edgeImg = eng.tintBackdropImage(bd.edgeFile, edgeImg, bd.edgeColor)
 		}
-		if strings.EqualFold(bd.edgeFile, `Interface\Common\Common-Input-Border`) {
-			xdraw.BiLinear.Scale(canvas, dst, edgeImg, edgeImg.Bounds(), draw.Over, nil)
-		} else {
-			drawBackdropEdge(canvas, dst, edgeImg, bd.edgeSize*eng.uiScale)
-		}
+		drawBackdropEdge(canvas, dst, edgeImg, bd.edgeSize*eng.uiScale)
 	} else if bd.edgeFile != "" {
 		drawBorder(canvas, dst, color.RGBA{R: 80, G: 120, B: 150, A: 200}, 1)
 	}
@@ -1465,7 +1600,7 @@ func drawBackdropEdge(canvas *image.RGBA, dst image.Rectangle, source image.Imag
 				}
 			}
 		}
-		xdraw.BiLinear.Scale(canvas, target, mapped, mapped.Bounds(), draw.Over, nil)
+		xdraw.NearestNeighbor.Scale(canvas, target, mapped, mapped.Bounds(), draw.Over, nil)
 	}
 	run := func(index int, target image.Rectangle, vertical bool, transpose bool) {
 		span := target.Dx()
@@ -1646,15 +1781,37 @@ func drawSubMode(canvas *image.RGBA, img image.Image, r Rect, screenHeight float
 
 func drawSubModeFilter(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64, additive bool) {
 	b := img.Bounds()
-	l := b.Min.X + int(float64(b.Dx())*tc[0])
-	rt := b.Min.X + int(float64(b.Dx())*tc[1])
-	tp := b.Min.Y + int(float64(b.Dy())*tc[2])
-	bm := b.Min.Y + int(float64(b.Dy())*tc[3])
+	flipX := tc[1] < tc[0]
+	flipY := tc[3] < tc[2]
+	leftCoord, rightCoord := tc[0], tc[1]
+	topCoord, bottomCoord := tc[2], tc[3]
+	if flipX {
+		leftCoord, rightCoord = rightCoord, leftCoord
+	}
+	if flipY {
+		topCoord, bottomCoord = bottomCoord, topCoord
+	}
+	l := b.Min.X + int(float64(b.Dx())*leftCoord)
+	rt := b.Min.X + int(float64(b.Dx())*rightCoord)
+	tp := b.Min.Y + int(float64(b.Dy())*topCoord)
+	bm := b.Min.Y + int(float64(b.Dy())*bottomCoord)
 	if rt <= l || bm <= tp {
 		l, rt, tp, bm = b.Min.X, b.Max.X, b.Min.Y, b.Max.Y
+		flipX, flipY = false, false
 	}
 	src := image.NewRGBA(image.Rect(0, 0, rt-l, bm-tp))
-	draw.Draw(src, src.Bounds(), img, image.Pt(l, tp), draw.Src)
+	for y := 0; y < src.Bounds().Dy(); y++ {
+		for x := 0; x < src.Bounds().Dx(); x++ {
+			sourceX, sourceY := l+x, tp+y
+			if flipX {
+				sourceX = rt - 1 - x
+			}
+			if flipY {
+				sourceY = bm - 1 - y
+			}
+			src.Set(x, y, img.At(sourceX, sourceY))
+		}
+	}
 	if additive {
 		for y := src.Bounds().Min.Y; y < src.Bounds().Max.Y; y++ {
 			for x := src.Bounds().Min.X; x < src.Bounds().Max.X; x++ {

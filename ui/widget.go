@@ -17,6 +17,7 @@ const (
 	kindEditBox
 	kindSlider
 	kindScrollFrame
+	kindScrollingMessageFrame
 	kindSimpleHTML
 	kindModel
 	kindModelFFX
@@ -47,6 +48,8 @@ func (k widgetKind) objectType() string {
 		return "Slider"
 	case kindScrollFrame:
 		return "ScrollFrame"
+	case kindScrollingMessageFrame:
+		return "ScrollingMessageFrame"
 	case kindSimpleHTML:
 		return "SimpleHTML"
 	case kindModel:
@@ -78,6 +81,14 @@ type backdrop struct {
 	tileSize, edgeSize             float64
 	insetL, insetR, insetT, insetB float64
 	bgColor, edgeColor             rgba
+}
+
+type messageLine struct {
+	text     string
+	color    rgba
+	lineID   int
+	accessID string
+	age      float64
 }
 
 // widget holds the state of one frame or region created from XML or the API.
@@ -151,7 +162,19 @@ type widget struct {
 	orientation        string
 
 	// ScrollFrame state.
-	verticalScroll float64
+	verticalScroll   float64
+	horizontalScroll float64
+	scrollChild      *widget
+
+	// ScrollingMessageFrame state.
+	messages        []messageLine
+	messageMaxLines int
+	messageDuration float64
+	messageFading   bool
+	messageFontSize float64
+	messageIndented bool
+	messageSpacing  float64
+	messageInsert   string
 
 	// Model state.
 	modelFile       string
@@ -461,7 +484,9 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.enableMouse = L.CheckBool(2)
 			return 0
 		},
+		"SetMovable":        func(L *lua.LState, w *widget) int { w.movable = L.CheckBool(2); return 0 },
 		"RegisterForClicks": func(L *lua.LState, w *widget) int { return 0 },
+		"RegisterForDrag":   func(L *lua.LState, w *widget) int { return 0 },
 		"SetScript": func(L *lua.LState, w *widget) int {
 			handler := L.CheckString(2)
 			fn := L.CheckFunction(3)
@@ -692,6 +717,14 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			L.Push(lua.LString(w.text))
 			return 1
 		},
+		"GetFontString": func(L *lua.LState, w *widget) int {
+			if w.buttonLabel == nil {
+				L.Push(lua.LNil)
+			} else {
+				L.Push(w.buttonLabel.luaValue(L))
+			}
+			return 1
+		},
 		"SetTextColor": func(L *lua.LState, w *widget) int {
 			w.textColor.r = float64(L.CheckNumber(2))
 			w.textColor.g = float64(L.CheckNumber(3))
@@ -784,6 +817,14 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			L.Push(lua.LNumber(w.verticalScroll))
 			return 1
 		},
+		"SetHorizontalScroll": func(L *lua.LState, w *widget) int {
+			w.horizontalScroll = float64(L.CheckNumber(2))
+			return 0
+		},
+		"GetHorizontalScroll": func(L *lua.LState, w *widget) int {
+			L.Push(lua.LNumber(w.horizontalScroll))
+			return 1
+		},
 		"GetTextColor": func(L *lua.LState, w *widget) int {
 			L.Push(lua.LNumber(w.textColor.r))
 			L.Push(lua.LNumber(w.textColor.g))
@@ -830,7 +871,136 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			L.Push(lua.LNumber(0))
 			return 1
 		},
-		"SetScrollChild": func(L *lua.LState, w *widget) int { return 0 },
+		"SetScrollChild": func(L *lua.LState, w *widget) int {
+			if ud, ok := L.Get(2).(*lua.LUserData); ok {
+				if child, ok := ud.Value.(*widget); ok {
+					w.scrollChild = child
+				}
+			}
+			return 0
+		},
+		"GetScrollChild": func(L *lua.LState, w *widget) int {
+			if w.scrollChild == nil {
+				L.Push(lua.LNil)
+			} else {
+				L.Push(w.scrollChild.luaValue(L))
+			}
+			return 1
+		},
+		"AddMessage": func(L *lua.LState, w *widget) int {
+			if w.kind != kindScrollingMessageFrame && w.kind != kindSimpleHTML && w.kind != kindFrame {
+				return 0
+			}
+			line := messageLine{text: L.CheckString(2), color: rgba{1, 1, 1, 1}}
+			if L.GetTop() >= 5 {
+				line.color = rgba{float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), float64(L.CheckNumber(5)), 1}
+			}
+			if L.GetTop() >= 6 && L.Get(6).Type() == lua.LTNumber {
+				line.lineID = L.CheckInt(6)
+			}
+			if L.GetTop() >= 8 && L.Get(8).Type() == lua.LTString {
+				line.accessID = L.CheckString(8)
+			}
+			if L.GetTop() >= 9 && L.Get(9).Type() == lua.LTNumber {
+				line.lineID = L.CheckInt(9)
+			}
+			w.messages = append(w.messages, line)
+			maxLines := w.messageMaxLines
+			if maxLines <= 0 {
+				maxLines = 128
+			}
+			if len(w.messages) > maxLines {
+				w.messages = w.messages[len(w.messages)-maxLines:]
+			}
+			return 0
+		},
+		"Clear": func(L *lua.LState, w *widget) int { w.messages = nil; return 0 },
+		"SetMaxLines": func(L *lua.LState, w *widget) int {
+			w.messageMaxLines = L.CheckInt(2)
+			if w.messageMaxLines > 0 && len(w.messages) > w.messageMaxLines {
+				w.messages = w.messages[len(w.messages)-w.messageMaxLines:]
+			}
+			return 0
+		},
+		"GetMaxLines":     func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(w.messageMaxLines)); return 1 },
+		"SetTimeVisible":  func(L *lua.LState, w *widget) int { w.messageDuration = float64(L.CheckNumber(2)); return 0 },
+		"GetTimeVisible":  func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(w.messageDuration)); return 1 },
+		"SetFading":       func(L *lua.LState, w *widget) int { w.messageFading = L.CheckBool(2); return 0 },
+		"IsFading":        func(L *lua.LState, w *widget) int { L.Push(lua.LBool(w.messageFading)); return 1 },
+		"AtBottom":        func(L *lua.LState, w *widget) int { L.Push(lua.LTrue); return 1 },
+		"ScrollDown":      func(L *lua.LState, w *widget) int { return 0 },
+		"ScrollUp":        func(L *lua.LState, w *widget) int { return 0 },
+		"ScrollToBottom":  func(L *lua.LState, w *widget) int { return 0 },
+		"ScrollToTop":     func(L *lua.LState, w *widget) int { return 0 },
+		"GetScrollOffset": func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(0)); return 1 },
+		"GetNumMessages":  func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(len(w.messages))); return 1 },
+		"GetMessageInfo": func(L *lua.LState, w *widget) int {
+			index := L.CheckInt(2)
+			if index < 1 || index > len(w.messages) {
+				L.Push(lua.LNil)
+				return 1
+			}
+			line := w.messages[index-1]
+			L.Push(lua.LString(line.text))
+			if line.accessID == "" {
+				L.Push(lua.LNil)
+			} else {
+				L.Push(lua.LString(line.accessID))
+			}
+			L.Push(lua.LNumber(line.lineID))
+			L.Push(lua.LNil)
+			return 4
+		},
+		"RemoveMessagesByAccessID": func(L *lua.LState, w *widget) int {
+			accessID := ""
+			if L.GetTop() >= 2 && L.Get(2).Type() == lua.LTString {
+				accessID = L.CheckString(2)
+			}
+			kept := w.messages[:0]
+			for _, line := range w.messages {
+				if line.accessID != accessID {
+					kept = append(kept, line)
+				}
+			}
+			w.messages = kept
+			return 0
+		},
+		"SetIndented":          func(L *lua.LState, w *widget) int { w.messageIndented = L.CheckBool(2); return 0 },
+		"SetInsertMode":        func(L *lua.LState, w *widget) int { w.messageInsert = L.CheckString(2); return 0 },
+		"SetNonSpaceWrap":      func(L *lua.LState, w *widget) int { return 0 },
+		"SetHyperlinksEnabled": func(L *lua.LState, w *widget) int { return 0 },
+		"GetFont": func(L *lua.LState, w *widget) int {
+			L.Push(lua.LString(`Fonts\FRIZQT__.TTF`))
+			fontSize := w.messageFontSize
+			if fontSize == 0 {
+				fontSize = 14
+			}
+			L.Push(lua.LNumber(fontSize))
+			L.Push(lua.LString(""))
+			return 3
+		},
+		"SetClampRectInsets": func(L *lua.LState, w *widget) int { return 0 },
+		"SetMinResize":       func(L *lua.LState, w *widget) int { return 0 },
+		"SetResizable":       func(L *lua.LState, w *widget) int { return 0 },
+		"StartMoving":        func(L *lua.LState, w *widget) int { return 0 },
+		"StopMovingOrSizing": func(L *lua.LState, w *widget) int { return 0 },
+		"SetUserPlaced":      func(L *lua.LState, w *widget) int { return 0 },
+		"IsUserPlaced":       func(L *lua.LState, w *widget) int { L.Push(lua.LFalse); return 1 },
+		"SetAttribute": func(L *lua.LState, w *widget) int {
+			attribute := L.CheckString(2)
+			value := L.Get(3)
+			w.ensureFields(L).RawSetString(attribute, value)
+			rt.fire(w, "OnAttributeChanged", []lua.LValue{w.luaValue(L), lua.LString(attribute), value})
+			return 0
+		},
+		"GetAttribute": func(L *lua.LState, w *widget) int {
+			if w.fields == nil {
+				L.Push(lua.LNil)
+			} else {
+				L.Push(w.fields.RawGet(L.Get(2)))
+			}
+			return 1
+		},
 		"SetNormalTexture": func(L *lua.LState, w *widget) int {
 			w.normalTexture = rt.textureArg(L, 1)
 			return 0
@@ -908,7 +1078,12 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.fontObject = fontObjectName(L, 2)
 			return 0
 		},
-		"SetFont": func(L *lua.LState, w *widget) int { return 0 },
+		"SetFont": func(L *lua.LState, w *widget) int {
+			if L.GetTop() >= 3 && L.Get(3).Type() == lua.LTNumber {
+				w.messageFontSize = float64(L.CheckNumber(3))
+			}
+			return 0
+		},
 		"SetJustifyH": func(L *lua.LState, w *widget) int {
 			w.justifyH = L.CheckString(2)
 			return 0
@@ -931,7 +1106,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.shadowOffsetSet = true
 			return 0
 		},
-		"SetSpacing":  func(L *lua.LState, w *widget) int { return 0 },
+		"SetSpacing":  func(L *lua.LState, w *widget) int { w.messageSpacing = float64(L.CheckNumber(2)); return 0 },
 		"SetWordWrap": func(L *lua.LState, w *widget) int { return 0 },
 		"GetStringWidth": func(L *lua.LState, w *widget) int {
 			L.Push(lua.LNumber(w.textWidth))

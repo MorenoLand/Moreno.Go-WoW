@@ -118,6 +118,13 @@ func (s *Session) EnterWorld(index int) (world.WorldPosition, error) {
 	return s.connection.EnterWorld(s.Characters[index].GUID)
 }
 
+func (s *Session) StartWorldPackets() <-chan world.PacketEvent {
+	if s == nil || s.connection == nil {
+		return nil
+	}
+	return s.connection.StartPackets()
+}
+
 func debugf(config Config, format string, args ...interface{}) {
 	if config.Debug {
 		log.Printf(format, args...)

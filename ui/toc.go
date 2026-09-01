@@ -77,7 +77,7 @@ func installTemplateFactory(l *Loader) {
 			case "Layers":
 				for _, layerEl := range group.children {
 					for _, region := range layerEl.children {
-						if region.name == "Texture" || region.name == "FontString" {
+						if strings.EqualFold(region.name, "Texture") || strings.EqualFold(region.name, "FontString") {
 							if child, err := l.buildRegion(region, w, "CreateFrame:"+template); err == nil {
 								child.layerLevel = layerOrder(layerEl.attrDefault("level", "ARTWORK"))
 							}
@@ -89,6 +89,7 @@ func installTemplateFactory(l *Loader) {
 					if isWidgetElement(frameEl.name) {
 						if child, err := l.buildWidget(frameEl, w, "CreateFrame:"+template); err == nil {
 							addWidgetChild(w, child)
+							l.bindParentKey(w, child, frameEl)
 						}
 					}
 				}
@@ -112,6 +113,7 @@ func installTemplateFactory(l *Loader) {
 				if texture.name != "" {
 					l.rt.register(texture)
 				}
+				l.bindParentKey(w, texture, group)
 			case "NormalFont":
 				w.normalFont = group.attrDefault("style", "")
 			case "HighlightFont":
@@ -429,7 +431,7 @@ func (l *Loader) instantiateTopLevel(node *xmlNode, interfacePath string) error 
 
 func isWidgetElement(name string) bool {
 	switch name {
-	case "Frame", "Button", "CheckButton", "EditBox", "Slider", "ScrollFrame",
+	case "Frame", "Button", "CheckButton", "EditBox", "Slider", "ScrollFrame", "ScrollingMessageFrame",
 		"SimpleHTML", "Model", "ModelFFX", "MovieFrame", "Texture", "FontString":
 		return true
 	}
@@ -459,6 +461,9 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 	w := newWidget(kind, name)
 	w.parent = parent
 	l.applyWidgetAttrs(w, merged)
+	if parent != nil && parent.kind == kindScrollFrame {
+		parent.scrollChild = w
+	}
 	if w.parent == nil && w.topLevel {
 		if root := l.rt.lookup("GlueParent"); root != nil {
 			w.parent = root
@@ -482,7 +487,7 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 		case "Layers":
 			for _, layerEl := range group.children {
 				for _, region := range layerEl.children {
-					if region.name == "Texture" || region.name == "FontString" {
+					if strings.EqualFold(region.name, "Texture") || strings.EqualFold(region.name, "FontString") {
 						child, err := l.buildRegion(region, w, interfacePath)
 						if err != nil {
 							return nil, err
@@ -499,6 +504,7 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 						return nil, err
 					}
 					addWidgetChild(w, child)
+					l.bindParentKey(w, child, frameEl)
 				}
 			}
 		case "ScrollChild":
@@ -509,6 +515,7 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 						return nil, err
 					}
 					addWidgetChild(w, child)
+					l.bindParentKey(w, child, frameEl)
 				}
 			}
 		case "Scripts":
@@ -548,6 +555,7 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 			if texture.name != "" {
 				l.rt.register(texture)
 			}
+			l.bindParentKey(w, texture, group)
 		case "NormalFont":
 			w.normalFont = group.attrDefault("style", "")
 		case "HighlightFont":
@@ -593,8 +601,18 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 		}
 	}
 	l.rt.register(w)
+	l.bindParentKey(parent, w, merged)
 	l.rt.fireHandler(w, "OnLoad")
 	return w, nil
+}
+
+func (l *Loader) bindParentKey(parent, child *widget, node *xmlNode) {
+	if parent == nil || child == nil || node == nil {
+		return
+	}
+	if key := node.attrDefault("parentKey", ""); key != "" {
+		parent.ensureFields(l.rt.L).RawSetString(key, child.luaValue(l.rt.L))
+	}
 }
 
 // buildButtonTexture creates an unnamed texture region from a button
@@ -648,7 +666,7 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 		}
 	}
 	kind := kindTexture
-	if merged.name == "FontString" {
+	if strings.EqualFold(merged.name, "FontString") {
 		kind = kindFontString
 	}
 	w := newWidget(kind, resolveParentName(merged.attrDefault("name", ""), parent.name))
@@ -721,6 +739,7 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 		w.shown = !parseBool(hidden, false)
 	}
 	addWidgetChild(parent, w)
+	l.bindParentKey(parent, w, merged)
 	l.rt.register(w)
 	return w, nil
 }
@@ -808,6 +827,9 @@ func (l *Loader) applyWidgetAttrs(w *widget, node *xmlNode) {
 			w.alpha = f
 		}
 	}
+	if v, ok := node.attr("setAllPoints"); ok && parseBool(v, false) {
+		w.points = []anchorPoint{{point: "TOPLEFT", relativePoint: "TOPLEFT"}, {point: "BOTTOMRIGHT", relativePoint: "BOTTOMRIGHT"}}
+	}
 	if v, ok := node.attr("setAllPoints"); (ok && parseBool(v, false)) || (w.width == 0 && w.height == 0 && len(w.points) == 0 && w.kind == kindTexture) {
 		w.points = []anchorPoint{
 			{point: "TOPLEFT", relativePoint: "TOPLEFT"},
@@ -862,6 +884,13 @@ func (l *Loader) applyWidgetAttrs(w *widget, node *xmlNode) {
 			if av := d.child("AbsValue"); av != nil {
 				w.value = attrFloat(av, "val", 0)
 			}
+		}
+	case kindScrollingMessageFrame:
+		if v, ok := node.attr("maxLines"); ok {
+			w.messageMaxLines, _ = strconv.Atoi(v)
+		}
+		if v, ok := node.attr("displayDuration"); ok {
+			w.messageDuration, _ = strconv.ParseFloat(v, 64)
 		}
 	}
 }

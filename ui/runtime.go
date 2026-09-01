@@ -31,6 +31,9 @@ type Runtime struct {
 	chunkSource       string
 	nested            int
 	focused           *widget
+	cursorX           float64
+	cursorY           float64
+	createFacing      float32
 	selectedRace      int
 	selectedSex       int
 	selectedClass     int

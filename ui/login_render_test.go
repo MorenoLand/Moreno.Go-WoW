@@ -192,4 +192,3 @@ func TestLoginRender(t *testing.T) {
 		t.Fatal("render produced only background pixels")
 	}
 }
-

@@ -15,19 +15,19 @@ type movieSample struct {
 }
 
 type movieClip struct {
-	data        []byte
-	prefix      []byte
-	frames      []movieSample
-	audio       []byte
-	keyframes   []int
-	fps         float64
-	width       int
-	height      int
-	videoStream int
-	audioStream int
-	audioFormat uint16
+	data          []byte
+	prefix        []byte
+	frames        []movieSample
+	audio         []byte
+	keyframes     []int
+	fps           float64
+	width         int
+	height        int
+	videoStream   int
+	audioStream   int
+	audioFormat   uint16
 	audioChannels int
-	audioRate int
+	audioRate     int
 }
 
 type moviePlayback struct {
@@ -40,16 +40,16 @@ type moviePlayback struct {
 }
 
 type movieHeaderInfo struct {
-	videoStream  int
-	audioStream  int
-	width        int
-	height       int
-	microseconds uint32
-	rate         uint32
-	scale        uint32
-	audioFormat  uint16
+	videoStream   int
+	audioStream   int
+	width         int
+	height        int
+	microseconds  uint32
+	rate          uint32
+	scale         uint32
+	audioFormat   uint16
 	audioChannels int
-	audioRate int
+	audioRate     int
 }
 
 func (eng *UIEngine) ensureMovie(file string, volume float64) {

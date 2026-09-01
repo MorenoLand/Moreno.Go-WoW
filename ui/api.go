@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	lua "github.com/yuin/gopher-lua"
 )
@@ -18,6 +19,7 @@ const (
 )
 
 type createRaceInfo struct {
+	id      uint8
 	key     string
 	file    string
 	scene   string
@@ -30,7 +32,7 @@ type createClassInfo struct {
 	tank, healer, damage bool
 }
 
-var createRaces = []createRaceInfo{{"RACE_HUMAN", "Human", "Human", "Alliance"}, {"RACE_DWARF", "Dwarf", "Dwarf", "Alliance"}, {"RACE_GNOME", "Gnome", "Dwarf", "Alliance"}, {"RACE_NIGHTELF", "NightElf", "NightElf", "Alliance"}, {"RACE_TAUREN", "Tauren", "Tauren", "Horde"}, {"RACE_SCOURGE", "Scourge", "Scourge", "Horde"}, {"RACE_TROLL", "Troll", "Orc", "Horde"}, {"RACE_ORC", "Orc", "Orc", "Horde"}, {"RACE_BLOODELF", "BloodElf", "BloodElf", "Horde"}, {"RACE_DRAENEI", "Draenei", "Draenei", "Alliance"}}
+var createRaces = []createRaceInfo{{1, "RACE_HUMAN", "Human", "Human", "Alliance"}, {3, "RACE_DWARF", "Dwarf", "Dwarf", "Alliance"}, {7, "RACE_GNOME", "Gnome", "Dwarf", "Alliance"}, {4, "RACE_NIGHTELF", "NightElf", "NightElf", "Alliance"}, {6, "RACE_TAUREN", "Tauren", "Tauren", "Horde"}, {5, "RACE_SCOURGE", "Scourge", "Scourge", "Horde"}, {8, "RACE_TROLL", "Troll", "Orc", "Horde"}, {2, "RACE_ORC", "Orc", "Orc", "Horde"}, {10, "RACE_BLOODELF", "BloodElf", "BloodElf", "Horde"}, {11, "RACE_DRAENEI", "Draenei", "Draenei", "Alliance"}}
 
 var createClasses = []createClassInfo{{"WARRIOR", "WARRIOR", true, false, true}, {"PALADIN", "PALADIN", true, true, true}, {"HUNTER", "HUNTER", false, false, true}, {"ROGUE", "ROGUE", false, false, true}, {"PRIEST", "PRIEST", false, true, true}, {"DEATHKNIGHT", "DEATHKNIGHT", true, false, true}, {"SHAMAN", "SHAMAN", false, true, true}, {"MAGE", "MAGE", false, false, true}, {"WARLOCK", "WARLOCK", false, false, true}, {"DRUID", "DRUID", true, true, true}}
 
@@ -42,6 +44,7 @@ type GlueState struct {
 	SelectedRealm     int
 	Realms            []RealmInfo
 	SelectedCharacter int
+	CharacterFacing   float32
 	Characters        []CharacterEntry
 	AddOns            []AddonInfo
 }
@@ -101,8 +104,68 @@ type CharacterEntry struct {
 	BackgroundModel   string
 }
 
+type CreatePreviewState struct {
+	RaceID, ClassID uint8
+	Gender          uint8
+	Facing          float32
+}
+
 func registerGlueAPI(rt *Runtime) {
 	L := rt.L
+	for name, values := range map[string][3]float64{"TOOLTIP_DEFAULT_COLOR": {0.6, 0.6, 0.6}, "TOOLTIP_DEFAULT_BACKGROUND_COLOR": {0.1, 0.1, 0.1}} {
+		table := L.NewTable()
+		table.RawSetString("r", lua.LNumber(values[0]))
+		table.RawSetString("g", lua.LNumber(values[1]))
+		table.RawSetString("b", lua.LNumber(values[2]))
+		L.SetGlobal(name, table)
+	}
+	L.SetGlobal("RegisterStaticConstants", L.NewFunction(func(L *lua.LState) int { return 0 }))
+	bit := L.NewTable()
+	bit.RawSetString("bor", L.NewFunction(func(L *lua.LState) int {
+		var value uint32
+		for index := 1; index <= L.GetTop(); index++ {
+			value |= uint32(int64(L.CheckNumber(index)))
+		}
+		L.Push(lua.LNumber(int64(int32(value))))
+		return 1
+	}))
+	bit.RawSetString("band", L.NewFunction(func(L *lua.LState) int {
+		value := ^uint32(0)
+		for index := 1; index <= L.GetTop(); index++ {
+			value &= uint32(int64(L.CheckNumber(index)))
+		}
+		L.Push(lua.LNumber(int64(int32(value))))
+		return 1
+	}))
+	bit.RawSetString("bxor", L.NewFunction(func(L *lua.LState) int {
+		var value uint32
+		for index := 1; index <= L.GetTop(); index++ {
+			value ^= uint32(int64(L.CheckNumber(index)))
+		}
+		L.Push(lua.LNumber(int64(int32(value))))
+		return 1
+	}))
+	bit.RawSetString("bnot", L.NewFunction(func(L *lua.LState) int {
+		value := ^uint32(int64(L.CheckNumber(1)))
+		L.Push(lua.LNumber(int64(int32(value))))
+		return 1
+	}))
+	bit.RawSetString("lshift", L.NewFunction(func(L *lua.LState) int {
+		value := uint32(int64(L.CheckNumber(1))) << uint(L.CheckInt(2))
+		L.Push(lua.LNumber(int64(int32(value))))
+		return 1
+	}))
+	bit.RawSetString("rshift", L.NewFunction(func(L *lua.LState) int {
+		value := uint32(int64(L.CheckNumber(1))) >> uint(L.CheckInt(2))
+		L.Push(lua.LNumber(int64(int32(value))))
+		return 1
+	}))
+	bit.RawSetString("arshift", L.NewFunction(func(L *lua.LState) int {
+		value := int32(L.CheckInt(1)) >> uint(L.CheckInt(2))
+		L.Push(lua.LNumber(value))
+		return 1
+	}))
+	L.SetGlobal("bit", bit)
 	reg := func(name string, fn func(L *lua.LState) int) {
 		L.SetGlobal(name, L.NewFunction(func(L *lua.LState) int {
 			defer func() {
@@ -145,6 +208,93 @@ func registerGlueAPI(rt *Runtime) {
 	reg("IsMacClient", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
 	reg("IsLinuxClient", func(L *lua.LState) int { L.Push(lua.LBool(runtime.GOOS == "linux")); return 1 })
 	reg("GetLocale", func(L *lua.LState) int { L.Push(lua.LString("enUS")); return 1 })
+	started := time.Now()
+	reg("GetTime", func(L *lua.LState) int { L.Push(lua.LNumber(time.Since(started).Seconds())); return 1 })
+	reg("GetDefaultLanguage", func(L *lua.LState) int { L.Push(lua.LString("Common")); return 1 })
+	reg("GetChatTypeIndex", func(L *lua.LState) int {
+		indices := map[string]int{"SYSTEM": 0, "SAY": 1, "PARTY": 2, "RAID": 3, "GUILD": 4, "OFFICER": 5, "YELL": 6, "WHISPER": 7, "WHISPER_INFORM": 9, "EMOTE": 10, "TEXT_EMOTE": 11, "MONSTER_SAY": 12, "MONSTER_PARTY": 13, "MONSTER_YELL": 14, "MONSTER_WHISPER": 15, "MONSTER_EMOTE": 16, "CHANNEL": 17, "AFK": 23, "DND": 24, "SKILL": 26, "LOOT": 27, "MONEY": 28, "OPENING": 29, "TRADESKILLS": 30, "PET_INFO": 31, "COMBAT_MISC_INFO": 32, "COMBAT_XP_GAIN": 33, "COMBAT_HONOR_GAIN": 34, "COMBAT_FACTION_CHANGE": 35, "BG_SYSTEM_NEUTRAL": 36, "BG_SYSTEM_ALLIANCE": 37, "BG_SYSTEM_HORDE": 38, "RAID_LEADER": 39, "RAID_WARNING": 40, "RAID_BOSS_EMOTE": 41, "RAID_BOSS_WHISPER": 42, "FILTERED": 43, "BATTLEGROUND": 44, "BATTLEGROUND_LEADER": 45, "RESTRICTED": 46, "ACHIEVEMENT": 48, "GUILD_ACHIEVEMENT": 49, "PARTY_LEADER": 51}
+		if value, ok := indices[strings.ToUpper(L.CheckString(1))]; ok {
+			L.Push(lua.LNumber(value))
+		} else {
+			L.Push(lua.LNumber(0))
+		}
+		return 1
+	})
+	reg("GetChatWindowInfo", func(L *lua.LState) int {
+		id := 1
+		if L.GetTop() >= 1 && L.Get(1).Type() == lua.LTNumber {
+			id = L.CheckInt(1)
+		}
+		shown := id == 1
+		docked := id == 1
+		L.Push(lua.LString("General"))
+		L.Push(lua.LNumber(14))
+		L.Push(lua.LNumber(0))
+		L.Push(lua.LNumber(0))
+		L.Push(lua.LNumber(0))
+		L.Push(lua.LNumber(0.25))
+		L.Push(lua.LBool(shown))
+		L.Push(lua.LTrue)
+		if docked {
+			L.Push(lua.LNumber(1))
+		} else {
+			L.Push(lua.LNumber(0))
+		}
+		L.Push(lua.LFalse)
+		return 10
+	})
+	reg("GetChatWindowMessages", func(L *lua.LState) int {
+		for _, name := range []string{"SAY", "YELL", "PARTY", "RAID", "GUILD", "OFFICER", "WHISPER", "EMOTE", "TEXT_EMOTE", "CHANNEL", "SYSTEM"} {
+			L.Push(lua.LString(name))
+		}
+		return 11
+	})
+	reg("GetChatWindowChannels", func(L *lua.LState) int { return 0 })
+	reg("GetPlayerInfoByGUID", func(L *lua.LState) int { return 5 })
+	reg("GetNumFriends", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 2 })
+	reg("BNGetNumFriends", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 2 })
+	reg("SetChatWindowDocked", func(L *lua.LState) int { return 0 })
+	reg("SetChatWindowLocked", func(L *lua.LState) int { return 0 })
+	reg("ChatHistory_GetAccessID", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("IsCombatLog", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("IsAddOnLoaded", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("sort", func(L *lua.LState) int {
+		table := L.GetGlobal("table")
+		if table.Type() != lua.LTTable {
+			return 0
+		}
+		sortFn := table.(*lua.LTable).RawGetString("sort")
+		L.Push(sortFn)
+		L.Push(L.Get(1))
+		if L.GetTop() >= 2 {
+			L.Push(L.Get(2))
+		}
+		args := 2
+		if L.GetTop() < 3 {
+			args = 1
+		}
+		if err := L.PCall(args, 0, nil); err != nil {
+			L.RaiseError("sort: %v", err)
+		}
+		return 0
+	})
+	reg("FillLocalizedClassList", func(L *lua.LState) int {
+		classes := L.CheckTable(1)
+		for _, name := range []string{"WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "DEATHKNIGHT", "SHAMAN", "MAGE", "WARLOCK", "DRUID"} {
+			classes.RawSetString(name, lua.LString(name))
+		}
+		return 0
+	})
+	reg("GetItemQualityColor", func(L *lua.LState) int {
+		quality := L.CheckInt(1)
+		colors := map[int][3]float64{-1: {0.62, 0.62, 0.62}, 0: {0.62, 0.62, 0.62}, 1: {1, 1, 1}, 2: {0.12, 1, 0}, 3: {0, 0.44, 0.87}, 4: {0.64, 0.21, 0.93}, 5: {1, 0.5, 0}, 6: {0.9, 0.8, 0.5}}
+		color := colors[quality]
+		L.Push(lua.LNumber(color[0]))
+		L.Push(lua.LNumber(color[1]))
+		L.Push(lua.LNumber(color[2]))
+		L.Push(lua.LString(""))
+		return 4
+	})
 	reg("GetClientExpansionLevel", func(L *lua.LState) int { L.Push(lua.LNumber(3)); return 1 })
 	reg("GetAccountExpansionLevel", func(L *lua.LState) int { L.Push(lua.LNumber(2)); return 1 })
 	reg("IsShiftKeyDown", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
@@ -175,8 +325,8 @@ func registerGlueAPI(rt *Runtime) {
 		return 1
 	})
 	reg("GetCursorPosition", func(L *lua.LState) int {
-		L.Push(lua.LNumber(0))
-		L.Push(lua.LNumber(0))
+		L.Push(lua.LNumber(rt.cursorX))
+		L.Push(lua.LNumber(rt.cursorY))
 		return 2
 	})
 	reg("ShowCursor", func(L *lua.LState) int { return 0 })
@@ -520,10 +670,10 @@ func registerGlueAPI(rt *Runtime) {
 		L.Push(lua.LString(model))
 		return 1
 	})
-	reg("GetCharacterSelectFacing", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("SetCharacterSelectFacing", func(L *lua.LState) int { return 0 })
-	reg("GetCharacterCreateFacing", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("SetCharacterCreateFacing", func(L *lua.LState) int { return 0 })
+	reg("GetCharacterSelectFacing", func(L *lua.LState) int { L.Push(lua.LNumber(rt.Glue.CharacterFacing)); return 1 })
+	reg("SetCharacterSelectFacing", func(L *lua.LState) int { rt.Glue.CharacterFacing = float32(L.CheckNumber(1)); return 0 })
+	reg("GetCharacterCreateFacing", func(L *lua.LState) int { L.Push(lua.LNumber(rt.createFacing)); return 1 })
+	reg("SetCharacterCreateFacing", func(L *lua.LState) int { rt.createFacing = float32(L.CheckNumber(1)); return 0 })
 	reg("RandomizeCharCustomization", func(L *lua.LState) int { return 0 })
 	reg("CycleCharCustomization", func(L *lua.LState) int { return 0 })
 	reg("UpdateCustomizationScene", func(L *lua.LState) int { return 0 })
@@ -876,6 +1026,8 @@ func kindFromObjectType(objectType string) widgetKind {
 		return kindSlider
 	case "ScrollFrame":
 		return kindScrollFrame
+	case "ScrollingMessageFrame":
+		return kindScrollingMessageFrame
 	case "SimpleHTML":
 		return kindSimpleHTML
 	case "Model":

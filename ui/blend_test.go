@@ -31,3 +31,16 @@ func TestAdditiveTextureKeysBlackBackground(t *testing.T) {
 		t.Fatalf("blue additive pixel did not brighten background: %+v", got)
 	}
 }
+
+func TestTextureCoordinatesPreserveHorizontalFlip(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	for y := 0; y < 2; y++ {
+		source.SetRGBA(0, y, color.RGBA{R: 255, A: 255})
+		source.SetRGBA(1, y, color.RGBA{B: 255, A: 255})
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	drawSubModeFilter(canvas, source, Rect{X0: 0, Y0: 0, X1: 2, Y1: 2}, 2, [4]float64{1, 0, 0, 1}, false)
+	if canvas.RGBAAt(0, 0).B < 240 || canvas.RGBAAt(1, 0).R < 240 {
+		t.Fatalf("horizontal flip was discarded: left=%+v right=%+v", canvas.RGBAAt(0, 0), canvas.RGBAAt(1, 0))
+	}
+}

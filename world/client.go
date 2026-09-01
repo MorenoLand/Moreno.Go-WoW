@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MorenoLand/Moreno.WoW/auth"
@@ -20,6 +21,9 @@ type Connection struct {
 	timeout   time.Duration
 	started   time.Time
 	expansion uint8
+	writeMu   sync.Mutex
+	streamMu  sync.Mutex
+	stream    chan PacketEvent
 }
 
 func Open(address, account string, realmID uint8, sessionKey [auth.SessionKeyLen]byte, timeout time.Duration) (*Connection, error) {
@@ -104,6 +108,37 @@ func (c *Connection) EnterWorld(guid uint64) (WorldPosition, error) {
 	return ParseLoginVerifyWorld(packet.Body)
 }
 
+type PacketEvent struct {
+	Packet Packet
+	Err    error
+}
+
+func (c *Connection) StartPackets() <-chan PacketEvent {
+	c.streamMu.Lock()
+	defer c.streamMu.Unlock()
+	if c.stream != nil {
+		return c.stream
+	}
+	stream := make(chan PacketEvent, 128)
+	c.stream = stream
+	go func() {
+		defer close(stream)
+		for {
+			packet, err := c.receive()
+			if err != nil {
+				stream <- PacketEvent{Err: err}
+				return
+			}
+			if err := c.housekeep(packet); err != nil {
+				stream <- PacketEvent{Err: err}
+				return
+			}
+			stream <- PacketEvent{Packet: packet}
+		}
+	}()
+	return stream
+}
+
 func (c *Connection) expect(opcode uint16) (Packet, error) {
 	for skipped := 0; skipped < 512; skipped++ {
 		packet, err := c.receive()
@@ -150,6 +185,8 @@ func (c *Connection) send(opcode ClientOpcode, body []byte) error {
 	if err != nil {
 		return err
 	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	if c.crypt != nil {
 		c.crypt.Encrypt(packet[:ClientHeaderLen])
 	}

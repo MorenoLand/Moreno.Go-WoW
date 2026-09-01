@@ -1,7 +1,9 @@
 package render
 
 import (
+	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -22,6 +24,7 @@ import (
 	"github.com/g3n/engine/texture"
 	"github.com/g3n/engine/window"
 	"github.com/go-gl/glfw/v3.3/glfw"
+	lua "github.com/yuin/gopher-lua"
 )
 
 type loginResult struct {
@@ -32,8 +35,9 @@ type loginResult struct {
 }
 
 type worldEntryResult struct {
-	position world.WorldPosition
-	err      error
+	position  world.WorldPosition
+	character world.Character
+	err       error
 }
 
 type clientHost struct {
@@ -43,6 +47,7 @@ type clientHost struct {
 	enterWorld   func(int)
 	quit         func()
 	audio        *audioManager
+	saveAudio    func(string, string)
 	loginRunning bool
 }
 
@@ -91,6 +96,9 @@ func (h *clientHost) SetAudioCVar(name, value string) {
 	if h.audio != nil {
 		h.audio.SetAudioCVar(name, value)
 	}
+	if h.saveAudio != nil {
+		h.saveAudio(name, value)
+	}
 }
 func (h *clientHost) LaunchURL(string) {}
 func (h *clientHost) Quit(bool) {
@@ -111,7 +119,7 @@ func (h *clientHost) EnterWorld(index int) {
 	}
 }
 
-func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, lastCharacter, configPath string, debug, rememberMe bool) {
+func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, lastCharacter, configPath string, savedOptions config.Options, debug, rememberMe bool) {
 	if err := window.Init(960, 640, "MorenoWoW"); err != nil {
 		log.Printf("window: %v", err)
 		return
@@ -143,6 +151,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	worldResults := make(chan worldEntryResult, 1)
 	var uiEngine *ui.UIEngine
 	var activeSession *network.Session
+	var worldPackets <-chan world.PacketEvent
 	worldLoading := false
 	host.enterWorld = func(index int) {
 		if activeSession == nil || worldLoading {
@@ -150,9 +159,20 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		}
 		worldLoading = true
 		session := activeSession
+		if uiEngine != nil {
+			uiEngine.SetWorldLoading(true)
+		}
+		character := world.Character{}
+		if index >= 0 && index < len(session.Characters) {
+			character = session.Characters[index]
+		}
+		if uiEngine != nil {
+			mapID := character.Map
+			uiEngine.SetLoadingScreen(worldLoadingScreenPath(uiEngine.AssetLoader, mapID), 0)
+		}
 		go func() {
 			position, err := session.EnterWorld(index)
-			worldResults <- worldEntryResult{position: position, err: err}
+			worldResults <- worldEntryResult{position: position, character: character, err: err}
 		}()
 	}
 	host.startLogin = func(account, password string) {
@@ -178,14 +198,21 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var err error
 	lastUIRefresh := time.Time{}
 	var sceneModel *core.Node
+	var sceneCharacterModel *core.Node
+	sceneCharacterFacing := float32(0)
 	sceneModelPath := ""
+	sceneCharacterKey := ""
 	sceneCameraDiagonalFOV := float32(0)
 	debugModelLoadMS := float64(0)
 	debugUIRenderMS := float64(0)
 	debugModelError := ""
 	worldMode := false
+	var worldCamera *worldCameraController
+	var worldPlayer *core.Node
 	var worldModel *core.Node
-	var setSceneModel func()
+	var worldCharacter world.Character
+	var glueCharacters []world.Character
+	var setSceneModel func() bool
 	if dataPath != "" {
 		eng, err = ui.LoadUIEngineFromMPQ(dataPath, clientConfig.Locale, backgroundPath)
 	} else if root := resolveInterfaceRoot(dataPath, interfacePath); root != "" {
@@ -205,31 +232,67 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			host.audio = audio
 			defer audio.Close()
 		}
+		host.saveAudio = func(name, value string) {
+			if !savedOptions.Audio.SetCVar(name, value) {
+				return
+			}
+			if configPath != "" {
+				if saveErr := config.Save(configPath, savedOptions); saveErr != nil && debug {
+					log.Printf("saving audio settings: %v", saveErr)
+				}
+			}
+		}
+		for name, value := range savedOptions.Audio.CVars() {
+			uiEngine.Rt.SetCVar(name, value)
+			if host.audio != nil {
+				host.audio.SetAudioCVar(name, value)
+			}
+		}
 		uiEngine.SetInitialCredentials(clientConfig.Account, clientConfig.Password, rememberMe)
 		if lastCharacter != "" {
 			uiEngine.Rt.SetCVar("lastCharacter", lastCharacter)
 		}
-		setSceneModel = func() {
+		setSceneModel = func() bool {
 			if worldMode {
-				return
+				return false
 			}
 			path := uiEngine.CurrentModelPath()
-			if path == sceneModelPath {
-				return
+			characterKey := ""
+			var selectedCharacter world.Character
+			selectedIndex := uiEngine.SelectedCharacterIndex()
+			if createState, ok := uiEngine.CreatePreviewState(); ok {
+				selectedCharacter = world.Character{Race: createState.RaceID, Class: createState.ClassID, Gender: createState.Gender}
+				characterKey = fmt.Sprintf("create:%d:%d:%d", createState.RaceID, createState.Gender, createState.ClassID)
+			} else if uiEngine.CharacterSelectVisible() && selectedIndex >= 0 && selectedIndex < len(glueCharacters) {
+				index := selectedIndex
+				selectedCharacter = glueCharacters[index]
+				characterKey = fmt.Sprintf("%d:%s", selectedCharacter.GUID, worldCharacterModelPath(selectedCharacter))
+			}
+			if path == sceneModelPath && characterKey == sceneCharacterKey {
+				return false
+			}
+			if debug {
+				log.Printf("scene request path=%s selected=%d key=%s previous=%s/%s", path, selectedIndex, characterKey, sceneModelPath, sceneCharacterKey)
 			}
 			if sceneModel != nil {
 				scene.Remove(sceneModel)
 				sceneModel.Dispose()
 				sceneModel = nil
 			}
+			if sceneCharacterModel != nil {
+				scene.Remove(sceneCharacterModel)
+				sceneCharacterModel.Dispose()
+				sceneCharacterModel = nil
+			}
 			resetSceneCamera(cam)
 			sceneCameraDiagonalFOV = 0
 			sceneModelPath = path
+			sceneCharacterKey = characterKey
 			debugModelError = ""
 			debugModelLoadMS = 0
 			uiEngine.SetSceneBackground(false)
 			if path == "" {
-				return
+				return true
 			}
 			if debug {
 				log.Printf("scene: loading %s", path)
@@ -242,7 +305,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				if debug {
 					log.Printf("model %s: %v", path, modelErr)
 				}
-				return
+				return true
 			}
 			debugModelError = ""
 			sceneModel = model
@@ -251,14 +314,33 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				sceneCameraDiagonalFOV = info.fov
 			}
 			configureSceneCamera(cam, sceneModel)
+			if characterKey != "" {
+				characterModel, characterErr := loadGlueCharacterModel(uiEngine.AssetLoader, selectedCharacter)
+				if characterErr != nil {
+					if debug {
+						log.Printf("character select model %s: %v", worldCharacterModelPath(selectedCharacter), characterErr)
+					}
+				} else {
+					if backgroundInfo, ok := sceneModel.UserData().(glueModelInfo); ok && backgroundInfo.hasStand {
+						characterModel.SetScale(backgroundInfo.modelScale, backgroundInfo.modelScale, backgroundInfo.modelScale)
+						characterModel.SetPosition(backgroundInfo.standPosition.X, backgroundInfo.standPosition.Y, backgroundInfo.standPosition.Z)
+					}
+					sceneCharacterFacing = uiEngine.SceneCharacterFacing()
+					characterModel.SetRotation(0, sceneCharacterFacing*math.Pi/180, 0)
+					sceneCharacterModel = characterModel
+					scene.Add(sceneCharacterModel)
+				}
+			}
 			uiEngine.SetSceneBackground(true)
 			if debug {
 				log.Printf("scene: loaded %s with %d parts", path, len(sceneModel.Children()))
 			}
+			return true
 		}
 		setSceneModel()
 		initialUI := eng.Render(960, 640)
 		uiImage = gui.NewImageFromRGBA(initialUI)
+		uiImage.SetColor4(&math32.Color4{R: 1, G: 1, B: 1, A: 0})
 		uiImage.SetPosition(0, 0)
 		scene.Add(uiImage)
 	}
@@ -320,7 +402,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			setSceneModel()
 		}
 		uiStarted := time.Now()
-		previous := uiImage.SetTexture(texture.NewTexture2DFromRGBA(uiEngine.Render(width, height)))
+		uiFrame := uiEngine.Render(width, height)
+		if worldMode {
+			uiFrame = uiEngine.RenderWorld(width, height)
+		}
+		previous := uiImage.SetTexture(texture.NewTexture2DFromRGBA(uiFrame))
 		if previous != nil {
 			previous.Dispose()
 		}
@@ -334,7 +420,13 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		gl.Viewport(0, 0, int32(width), int32(height))
 		if height > 0 {
 			cam.SetAspect(float32(width) / float32(height))
-			setSceneCameraFOV(cam, sceneCameraDiagonalFOV)
+			if worldMode {
+				cam.SetFov(70)
+				cam.SetNear(0.2)
+				cam.SetFar(6000)
+			} else {
+				setSceneCameraFOV(cam, sceneCameraDiagonalFOV)
+			}
 		}
 		refresh()
 	}
@@ -342,6 +434,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	if uiEngine != nil {
 		win.Subscribe(window.OnCursor, func(_ string, event interface{}) {
 			cursor := event.(*window.CursorEvent)
+			if worldMode && worldCamera != nil && worldCamera.handleCursor(float64(cursor.Xpos), float64(cursor.Ypos)) {
+				return
+			}
 			if uiEngine.HandleCursor(float64(cursor.Xpos), float64(cursor.Ypos)) {
 				if !uiEngine.DebugPanelDragging() {
 					refresh()
@@ -350,12 +445,18 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		})
 		win.Subscribe(window.OnMouseDown, func(_ string, event interface{}) {
 			mouse := event.(*window.MouseEvent)
+			if worldMode && worldCamera != nil && worldCamera.handleMouse(float64(mouse.Xpos), float64(mouse.Ypos), mouse.Button, true) {
+				return
+			}
 			if uiEngine.HandleMouse(float64(mouse.Xpos), float64(mouse.Ypos), mouse.Button, true) {
 				refresh()
 			}
 		})
 		win.Subscribe(window.OnMouseUp, func(_ string, event interface{}) {
 			mouse := event.(*window.MouseEvent)
+			if worldMode && worldCamera != nil && worldCamera.handleMouse(float64(mouse.Xpos), float64(mouse.Ypos), mouse.Button, false) {
+				return
+			}
 			if uiEngine.HandleMouse(float64(mouse.Xpos), float64(mouse.Ypos), mouse.Button, false) {
 				refresh()
 			}
@@ -368,6 +469,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		})
 		win.Subscribe(window.OnKeyDown, func(_ string, event interface{}) {
 			key := event.(*window.KeyEvent)
+			if worldMode && worldCamera != nil && worldCamera.handleKey(key.Key, true) {
+				return
+			}
 			if key.Key == window.KeyF2 {
 				uiEngine.HandleKeyWithMods(key.Key, key.Mods)
 				updateDebugPanel()
@@ -381,6 +485,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		})
 		win.Subscribe(window.OnKeyUp, func(_ string, event interface{}) {
 			key := event.(*window.KeyEvent)
+			if worldMode && worldCamera != nil && worldCamera.handleKey(key.Key, false) {
+				return
+			}
 			if uiEngine.HandleKeyUp(key.Key) {
 				refresh()
 			}
@@ -413,13 +520,48 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			now := time.Now()
 			elapsed := now.Sub(lastUpdate).Seconds()
 			if sceneModel != nil {
-				if info, ok := sceneModel.UserData().(glueModelInfo); ok && info.particles != nil {
-					info.particles.Update(elapsed)
+				if info, ok := sceneModel.UserData().(glueModelInfo); ok {
+					if info.animation != nil {
+						for _, soundID := range info.animation.Update(elapsed) {
+							if debug {
+								log.Printf("scene sound event id=%d", soundID)
+							}
+							if host.audio != nil {
+								host.audio.PlaySoundID(soundID)
+							}
+						}
+					}
+					if info.particles != nil {
+						info.particles.Update(elapsed)
+					}
 				}
 			}
+			if sceneCharacterModel != nil {
+				if info, ok := sceneCharacterModel.UserData().(glueModelInfo); ok && info.animation != nil {
+					for _, soundID := range info.animation.Update(elapsed) {
+						if debug {
+							log.Printf("character sound event id=%d", soundID)
+						}
+						if host.audio != nil {
+							host.audio.PlaySoundID(soundID)
+						}
+					}
+				}
+			}
+			if worldMode && worldCamera != nil {
+				worldCamera.update(elapsed, cam, worldPlayer)
+			}
 			movieChanged := uiEngine.Update(elapsed)
+			sceneChanged := false
+			if !worldMode && setSceneModel != nil {
+				sceneChanged = setSceneModel()
+			}
+			if !worldMode && sceneCharacterModel != nil && uiEngine.SceneCharacterFacing() != sceneCharacterFacing {
+				sceneCharacterFacing = uiEngine.SceneCharacterFacing()
+				sceneCharacterModel.SetRotation(0, sceneCharacterFacing*math.Pi/180, 0)
+			}
 			lastUpdate = now
-			if movieChanged {
+			if movieChanged || sceneChanged {
 				refresh()
 			}
 			if uiEngine.DebugPanelDragging() && (lastUIRefresh.IsZero() || frameAt.Sub(lastUIRefresh) >= time.Second/60) {
@@ -434,6 +576,18 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					}
 					uiEngine.SetStatusKey("AUTH_FAILED")
 				} else {
+					glueCharacters = append(glueCharacters[:0], result.session.Characters...)
+					if debug {
+						for index, character := range glueCharacters {
+							equipment := make([]string, 0, len(character.Equipment))
+							for slot, item := range character.Equipment {
+								if item.DisplayID != 0 {
+									equipment = append(equipment, fmt.Sprintf("%d:%d/%d", slot, item.DisplayID, item.InventoryType))
+								}
+							}
+							log.Printf("character %d %s race=%d class=%d gender=%d appearance=%d/%d/%d/%d/%d/%d equipment=%v", index, character.Name, character.Race, character.Class, character.Gender, character.Skin, character.Face, character.HairStyle, character.HairColor, character.FacialHair, character.Map, equipment)
+						}
+					}
 					if activeSession != nil {
 						_ = activeSession.Close()
 					}
@@ -449,8 +603,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				}
 				refresh()
 			case entry := <-worldResults:
-				worldLoading = false
 				if entry.err != nil {
+					worldLoading = false
+					uiEngine.SetWorldLoading(false)
 					if debug {
 						log.Printf("enter world: %v", entry.err)
 					}
@@ -458,8 +613,43 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					refresh()
 					break
 				}
-				loaded, info, loadErr := loadWorldTerrain(uiEngine.AssetLoader, entry.position)
+				worldCharacter = entry.character
+				loadingPath := worldLoadingScreenPath(uiEngine.AssetLoader, entry.position.Map)
+				uiEngine.SetLoadingScreen(loadingPath, 0)
+				if worldUIErr := uiEngine.LoadWorldUI(); worldUIErr != nil && debug {
+					log.Printf("world UI: %v", worldUIErr)
+				}
+				if activeSession != nil {
+					worldPackets = activeSession.StartWorldPackets()
+				}
+				lastLoadingFrame := time.Time{}
+				showLoadingProgress := func(progress float64) {
+					if progress < 1 && !lastLoadingFrame.IsZero() && time.Since(lastLoadingFrame) < time.Second/30 {
+						return
+					}
+					uiEngine.SetLoadingScreen(loadingPath, progress)
+					refresh()
+					gl.Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
+					if renderErr := r.Render(scene, cam); renderErr != nil && debug {
+						log.Printf("loading render: %v", renderErr)
+					}
+					win.SwapBuffers()
+					win.PollEvents()
+					lastLoadingFrame = time.Now()
+				}
+				showLoadingProgress(0.05)
+				refresh()
+				gl.Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
+				if renderErr := r.Render(scene, cam); renderErr != nil && debug {
+					log.Printf("loading render: %v", renderErr)
+				}
+				win.SwapBuffers()
+				win.PollEvents()
+				loaded, info, loadErr := loadWorldTerrainProgress(uiEngine.AssetLoader, entry.position, showLoadingProgress)
 				if loadErr != nil {
+					worldLoading = false
+					uiEngine.SetWorldLoading(false)
+					uiEngine.ClearLoadingScreen()
 					if debug {
 						log.Printf("world: %v", loadErr)
 					}
@@ -472,21 +662,100 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					sceneModel.Dispose()
 					sceneModel = nil
 				}
+				if sceneCharacterModel != nil {
+					scene.Remove(sceneCharacterModel)
+					sceneCharacterModel.Dispose()
+					sceneCharacterModel = nil
+				}
 				if worldModel != nil {
 					scene.Remove(worldModel)
 					worldModel.Dispose()
 				}
+				if worldPlayer != nil {
+					scene.Remove(worldPlayer)
+					worldPlayer.Dispose()
+					worldPlayer = nil
+				}
 				worldModel = loaded
 				scene.Add(worldModel)
-				worldMode = true
-				sceneModelPath = ""
-				if uiImage != nil {
-					uiImage.SetVisible(false)
+				if entry.character.GUID != 0 {
+					if player, playerErr := buildWorldPlayer(uiEngine.AssetLoader, entry.character, entry.position); playerErr != nil {
+						if debug {
+							log.Printf("world player: %v", playerErr)
+						}
+					} else {
+						worldPlayer = player
+						scene.Add(worldPlayer)
+						if debug {
+							log.Printf("world: player model children=%d position=%v scale=%v", len(worldPlayer.Children()), worldPlayer.Position(), worldPlayer.Scale())
+						}
+					}
+				}
+				worldCamera = newWorldCameraController(entry.position)
+				if collision, ok := loaded.UserData().(worldSceneCollision); ok {
+					worldCamera.setGround(collision.ground)
+					if debug {
+						if ground, found := collision.ground(entry.position.X, entry.position.Y); found {
+							log.Printf("world: ground at entry=%.3f delta=%.3f", ground, ground-entry.position.Z)
+						}
+					}
 				}
 				configureWorldCamera(cam, entry.position)
+				worldCamera.update(1.0/60.0, cam, worldPlayer)
+				if debug {
+					cameraPosition := cam.Position()
+					log.Printf("world: entry position=(%.3f,%.3f,%.3f) orientation=%.3f camera=(%.3f,%.3f,%.3f) near=%.3f far=%.3f", entry.position.X, entry.position.Y, entry.position.Z, entry.position.Orientation, cameraPosition.X, cameraPosition.Y, cameraPosition.Z, cam.Near(), cam.Far())
+				}
+				worldMode = true
+				worldLoading = false
+				uiEngine.SetWorldLoading(false)
+				sceneModelPath = ""
+				uiEngine.ClearLoadingScreen()
+				if uiImage != nil {
+					uiImage.SetVisible(true)
+				}
 				gl.ClearColor(.08, .12, .16, 1)
 				if debug {
 					log.Printf("world: loaded %s tile %d,%d chunks=%d vertices=%d triangles=%d textures=%d wmoMeshes=%d m2Meshes=%d", info.mapName, info.tileX, info.tileY, info.chunks, info.vertices, info.triangles, info.textures, info.wmoMeshes, info.m2Meshes)
+				}
+				refresh()
+			case event, ok := <-worldPackets:
+				if !ok {
+					worldPackets = nil
+					break
+				}
+				if event.Err != nil {
+					if debug {
+						log.Printf("world packets: %v", event.Err)
+					}
+					worldPackets = nil
+					break
+				}
+				if event.Packet.Opcode == world.MessageChat {
+					message, chatErr := world.ParseMessageChat(event.Packet.Body)
+					if chatErr != nil {
+						if debug {
+							log.Printf("world chat: %v", chatErr)
+						}
+						break
+					}
+					eventName := message.Type.EventName()
+					if eventName == "" {
+						break
+					}
+					sender := message.SenderName
+					if sender == "" && message.Sender == worldCharacter.GUID {
+						sender = worldCharacter.Name
+					}
+					guid := ""
+					if message.Sender != 0 {
+						guid = fmt.Sprintf("0x%016X", message.Sender)
+					}
+					uiEngine.FireWorldChat(eventName,
+						lua.LString(message.Text), lua.LString(sender), lua.LString(message.LanguageName()),
+						lua.LString(message.Channel), lua.LString(""), lua.LString(""), lua.LString(""),
+						lua.LNumber(0), lua.LString(message.Channel), lua.LNumber(0), lua.LNumber(0), lua.LString(guid))
+					refresh()
 				}
 			default:
 			}
@@ -506,6 +775,18 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	if worldModel != nil {
 		scene.Remove(worldModel)
 		worldModel.Dispose()
+	}
+	if worldPlayer != nil {
+		scene.Remove(worldPlayer)
+		worldPlayer.Dispose()
+	}
+	if sceneModel != nil {
+		scene.Remove(sceneModel)
+		sceneModel.Dispose()
+	}
+	if sceneCharacterModel != nil {
+		scene.Remove(sceneCharacterModel)
+		sceneCharacterModel.Dispose()
 	}
 	if activeSession != nil {
 		_ = activeSession.Close()
@@ -551,7 +832,7 @@ func glueState(session *network.Session, loader *ui.Loader) ui.GlueState {
 	state.Realms = []ui.RealmInfo{{Name: session.Realm.Name, Address: session.Realm.Address, Population: population, RealmType: realmType(session.Realm.Kind), ID: int(session.Realm.ID), Characters: int(session.Realm.Characters), Down: session.Realm.IsOffline(), Current: true, Locked: session.Realm.Locked, Load: float64(session.Realm.Population)}}
 	state.Characters = make([]ui.CharacterEntry, 0, len(session.Characters))
 	for _, character := range session.Characters {
-		state.Characters = append(state.Characters, ui.CharacterEntry{Name: character.Name, Race: raceName(character.Race), RaceID: int(character.Race), Class: className(character.Class), ClassID: int(character.Class), Gender: int(character.Gender), Level: int(character.Level), Zone: areaNames[character.Zone], ZoneID: character.Zone, MapID: character.Map, Flags: character.Flags, CustomizeFlags: character.CustomizeFlags, BackgroundModel: raceModelName(character.Race)})
+		state.Characters = append(state.Characters, ui.CharacterEntry{Name: character.Name, Race: raceName(character.Race), RaceID: int(character.Race), Class: className(character.Class), ClassID: int(character.Class), Gender: int(character.Gender), Level: int(character.Level), Zone: areaNames[character.Zone], ZoneID: character.Zone, MapID: character.Map, Flags: character.Flags, CustomizeFlags: character.CustomizeFlags, BackgroundModel: backgroundModelName(character)})
 	}
 	return state
 }
@@ -581,6 +862,13 @@ func className(id uint8) string {
 		return name
 	}
 	return strconv.Itoa(int(id))
+}
+
+func backgroundModelName(character world.Character) string {
+	if character.Class == 6 {
+		return "DeathKnight"
+	}
+	return raceModelName(character.Race)
 }
 
 func raceModelName(id uint8) string {

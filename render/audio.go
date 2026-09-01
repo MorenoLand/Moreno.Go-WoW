@@ -18,6 +18,7 @@ import (
 const audioSampleRate = 44100
 
 type soundEntry struct {
+	id        uint32
 	directory string
 	files     []string
 }
@@ -26,6 +27,7 @@ type audioManager struct {
 	loader          *ui.Loader
 	context         *oto.Context
 	catalog         map[string]soundEntry
+	ids             map[uint32]string
 	pcm             map[string][]byte
 	failed          map[string]struct{}
 	music           *oto.Player
@@ -44,9 +46,12 @@ type audioManager struct {
 }
 
 func newAudioManager(loader *ui.Loader, debug bool) (*audioManager, error) {
-	manager := &audioManager{loader: loader, catalog: make(map[string]soundEntry), pcm: make(map[string][]byte), failed: make(map[string]struct{}), allEnabled: true, musicEnabled: true, sfxEnabled: true, ambienceEnabled: true, musicVolume: 1, sfxVolume: 1, ambienceVolume: 1, debug: debug}
+	manager := &audioManager{loader: loader, catalog: make(map[string]soundEntry), ids: make(map[uint32]string), pcm: make(map[string][]byte), failed: make(map[string]struct{}), allEnabled: true, musicEnabled: true, sfxEnabled: true, ambienceEnabled: true, musicVolume: 1, sfxVolume: 1, ambienceVolume: 1, debug: debug}
 	if data, err := loader.ReadFile(`DBFilesClient\SoundEntries.dbc`); err == nil {
 		manager.catalog = parseSoundEntries(data)
+		for name, entry := range manager.catalog {
+			manager.ids[entry.id] = name
+		}
 	}
 	context, ready, err := oto.NewContext(&oto.NewContextOptions{SampleRate: audioSampleRate, ChannelCount: 2, Format: oto.FormatSignedInt16LE})
 	if err != nil {
@@ -115,8 +120,26 @@ func (m *audioManager) PlaySound(name string) {
 	if !m.allEnabled || !m.sfxEnabled || m.context == nil {
 		return
 	}
+	m.playSoundLocked(name)
+}
+
+func (m *audioManager) PlaySoundID(id uint32) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.allEnabled || !m.sfxEnabled || m.context == nil {
+		return
+	}
+	if name := m.ids[id]; name != "" {
+		m.playSoundLocked(name)
+	}
+}
+
+func (m *audioManager) playSoundLocked(name string) {
 	m.pruneSFXLocked()
-	data, key, err := m.pcmLocked(name)
+	data, _, err := m.pcmLocked(name)
 	if err != nil {
 		m.reportFailure(name, err)
 		return
@@ -125,7 +148,6 @@ func (m *audioManager) PlaySound(name string) {
 	player.SetVolume(m.sfxVolume)
 	player.Play()
 	m.sfx = append(m.sfx, player)
-	_ = key
 }
 
 func (m *audioManager) PlayMusic(name string) {
@@ -302,19 +324,26 @@ func (m *audioManager) pcmLocked(name string) ([]byte, string, error) {
 		}
 		raw, err := m.loader.ReadFile(candidate)
 		if err != nil {
-			lastErr = err
+			candidateErr := err
 			for _, extension := range []string{".wav", ".ogg", ".mp3"} {
+				if strings.HasSuffix(strings.ToLower(candidate), extension) {
+					continue
+				}
 				raw, err = m.loader.ReadFile(candidate + extension)
 				if err == nil {
 					break
 				}
+			}
+			if err != nil {
+				lastErr = candidateErr
+				continue
 			}
 		}
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		pcm, err := decodeWAVToPCM(raw)
+		pcm, err := decodeSoundToPCM(raw)
 		if err != nil {
 			lastErr = err
 			continue
@@ -377,7 +406,7 @@ func parseSoundEntries(data []byte) map[string]soundEntry {
 		if name == "" {
 			continue
 		}
-		entry := soundEntry{directory: readString(binary.LittleEndian.Uint32(data[base+23*4:]))}
+		entry := soundEntry{id: binary.LittleEndian.Uint32(data[base:]), directory: readString(binary.LittleEndian.Uint32(data[base+23*4:]))}
 		for field := 3; field <= 12; field++ {
 			if file := readString(binary.LittleEndian.Uint32(data[base+field*4:])); file != "" {
 				entry.files = append(entry.files, file)
@@ -447,6 +476,24 @@ func decodeWAVToPCM(data []byte) ([]byte, error) {
 			at := (frame*2 + channel) * 2
 			binary.LittleEndian.PutUint16(pcm[at:at+2], uint16(sample))
 		}
+	}
+	return pcm, nil
+}
+
+func decodeSoundToPCM(data []byte) ([]byte, error) {
+	if len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WAVE" {
+		return decodeWAVToPCM(data)
+	}
+	decoder, err := mp3.NewDecoder(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("unsupported audio format")
+	}
+	pcm, err := io.ReadAll(decoder)
+	if err != nil {
+		return nil, err
+	}
+	if len(pcm) == 0 {
+		return nil, fmt.Errorf("audio has no samples")
 	}
 	return pcm, nil
 }

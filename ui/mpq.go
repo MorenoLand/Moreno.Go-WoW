@@ -522,9 +522,16 @@ func (archive *mpqArchive) readBlock(name string, block mpqBlockEntry) ([]byte, 
 		}
 		return decodeMPQSector(data, int(block.fileSize), block.flags&mpqFlagCompress != 0 || block.flags&mpqFlagImplode != 0)
 	}
+	if block.compressedSize == block.fileSize && block.flags&(mpqFlagCompress|mpqFlagImplode|mpqFlagEncrypted|mpqFlagSectorCrc) == 0 {
+		return readAt(archive.file, archive.headerOffset+int64(block.position), int(block.fileSize))
+	}
 	sectorSize := 512 << archive.blockShift
 	sectorCount := (int(block.fileSize) + sectorSize - 1) / sectorSize
-	offsetData, err := readAt(archive.file, archive.headerOffset+int64(block.position), (sectorCount+1)*4)
+	offsetDataSize := (sectorCount + 1) * 4
+	if block.flags&mpqFlagSectorCrc != 0 {
+		offsetDataSize += sectorCount * 4
+	}
+	offsetData, err := readAt(archive.file, archive.headerOffset+int64(block.position), offsetDataSize)
 	if err != nil {
 		return nil, err
 	}

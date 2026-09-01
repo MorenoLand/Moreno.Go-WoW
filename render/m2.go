@@ -19,13 +19,14 @@ import (
 )
 
 const (
-	m2Version264     = 264
-	m2VertexSize     = 48
-	m2CameraSize     = 100
-	m2ParticleSize   = 476
-	m2RenderFlagSize = 4
-	skinSubmeshSize  = 48
-	skinBatchSize    = 24
+	m2Version264           = 264
+	m2VertexSize           = 48
+	m2CameraSize           = 100
+	m2ParticleSize         = 476
+	m2TextureTransformSize = 60
+	m2RenderFlagSize       = 4
+	skinSubmeshSize        = 48
+	skinBatchSize          = 24
 )
 
 type m2Array struct {
@@ -48,15 +49,65 @@ type m2RenderFlag struct {
 }
 
 type m2Bone struct {
-	flags       uint32
-	parent      int16
-	pivot       [3]float32
-	translation [3]float32
-	rotation    [4]float32
-	scale       [3]float32
+	flags            uint32
+	parent           int16
+	pivot            [3]float32
+	translation      [3]float32
+	rotation         [4]float32
+	scale            [3]float32
+	translationTrack m2TrackVec3
+	rotationTrack    m2TrackQuat
+	scaleTrack       m2TrackVec3
+}
+
+type m2Sequence struct {
+	id            uint16
+	variation     uint16
+	duration      uint32
+	flags         uint32
+	variationNext int16
+	aliasNext     uint16
+}
+
+type m2Vec3Keys struct {
+	times  []uint32
+	values [][3]float32
+}
+
+type m2QuatKeys struct {
+	times  []uint32
+	values [][4]float32
+}
+
+type m2TrackVec3 struct {
+	interpolation  uint16
+	globalSequence uint16
+	sequences      []m2Vec3Keys
+}
+
+type m2TrackQuat struct {
+	interpolation  uint16
+	globalSequence uint16
+	sequences      []m2QuatKeys
+}
+
+type m2TextureTransform struct {
+	translation m2TrackVec3
+	rotation    m2TrackQuat
+	scale       m2TrackVec3
+}
+
+type m2Event struct {
+	identifier [4]byte
+	data       uint32
+	bone       uint32
+	position   [3]float32
+	times      [][]uint32
 }
 
 type skinSubmesh struct {
+	submeshID      uint16
+	submeshLevel   uint16
 	vertexStart    uint32
 	indexStart     uint32
 	indexCount     uint32
@@ -66,29 +117,39 @@ type skinSubmesh struct {
 }
 
 type skinBatch struct {
-	priorityPlane     int8
-	submeshIndex      uint16
-	materialIndex     uint16
-	materialLayer     uint16
-	textureCount      uint16
-	textureComboIndex uint16
-	textureCoordIndex uint16
+	priorityPlane         int8
+	submeshIndex          uint16
+	materialIndex         uint16
+	materialLayer         uint16
+	textureCount          uint16
+	textureComboIndex     uint16
+	textureCoordIndex     uint16
+	textureTransformIndex uint16
 }
 
 type m2Part struct {
-	texturePaths  []string
-	textureFlags  []uint32
-	uvSets        []int
-	positions     math32.ArrayF32
-	normals       math32.ArrayF32
-	uvs           math32.ArrayF32
-	uvs2          math32.ArrayF32
-	indices       math32.ArrayU32
-	renderOrder   int
-	priorityPlane int8
-	materialLayer uint16
-	uvSet         int
-	material      m2RenderFlag
+	texturePaths            []string
+	textureFlags            []uint32
+	uvSets                  []int
+	positions               math32.ArrayF32
+	normals                 math32.ArrayF32
+	uvs                     math32.ArrayF32
+	uvs2                    math32.ArrayF32
+	indices                 math32.ArrayU32
+	renderOrder             int
+	priorityPlane           int8
+	materialLayer           uint16
+	submeshID               uint16
+	uvSet                   int
+	material                m2RenderFlag
+	vertexRefs              []m2VertexRef
+	textureTransformIndices []int
+}
+
+type m2VertexRef struct {
+	local          int
+	vertex         m2Vertex
+	boneComboIndex int
 }
 
 type posedM2Vertex struct {
@@ -104,14 +165,24 @@ type m2Camera struct {
 	target   [3]float32
 }
 
+type m2Attachment struct {
+	id       uint32
+	bone     uint16
+	position [3]float32
+}
+
 type glueModelInfo struct {
-	position  math32.Vector3
-	target    math32.Vector3
-	fov       float32
-	far       float32
-	near      float32
-	stats     glueModelStats
-	particles *m2ParticleSystem
+	position      math32.Vector3
+	target        math32.Vector3
+	standPosition math32.Vector3
+	modelScale    float32
+	fov           float32
+	far           float32
+	near          float32
+	hasStand      bool
+	stats         glueModelStats
+	particles     *m2ParticleSystem
+	animation     *m2Animation
 }
 
 type glueModelStats struct {
@@ -138,6 +209,7 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 	if err != nil {
 		return nil, err
 	}
+	loadM2AnimationTracks(loader, modelPath, &model)
 	skinPath := strings.TrimSuffix(modelPath, ".m2") + "00.skin"
 	skinData, err := loader.ReadFile(skinPath)
 	if err != nil {
@@ -147,7 +219,11 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	parts := buildM2Parts(model, skin)
+	return buildGlueModel(loader, modelPath, model, skin, nil, nil, nil)
+}
+
+func buildGlueModel(loader *ui.Loader, modelPath string, model parsedM2, skin parsedSkin, textureOverrides map[int]string, preloaded map[string]*texture.Texture2D, activeGeosets map[uint16]bool) (*core.Node, error) {
+	parts := buildM2PartsWithFilters(model, skin, textureOverrides, activeGeosets)
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("%s: no renderable skin batches", modelPath)
 	}
@@ -155,6 +231,7 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 	textures := make(map[string]*texture.Texture2D)
 	texturePaths := make(map[string]struct{})
 	stats := glueModelStats{}
+	animatedMeshes := make([]*m2AnimatedMesh, 0, len(parts))
 	for _, part := range parts {
 		if len(part.texturePaths) == 0 || len(part.indices) == 0 {
 			continue
@@ -172,11 +249,16 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 		}
 		geom := geometry.NewGeometry()
 		geom.SetIndices(part.indices)
-		geom.AddVBO(gls.NewVBO(part.positions).AddAttrib(gls.VertexPosition))
-		geom.AddVBO(gls.NewVBO(part.normals).AddAttrib(gls.VertexNormal))
-		geom.AddVBO(gls.NewVBO(part.uvs).AddAttrib(gls.VertexTexcoord))
+		positionVBO := gls.NewVBO(part.positions).AddAttrib(gls.VertexPosition)
+		normalVBO := gls.NewVBO(part.normals).AddAttrib(gls.VertexNormal)
+		geom.AddVBO(positionVBO)
+		geom.AddVBO(normalVBO)
+		uvVBO := gls.NewVBO(part.uvs).AddAttrib(gls.VertexTexcoord)
+		geom.AddVBO(uvVBO)
+		var uv2VBO *gls.VBO
 		if len(part.uvSets) > 1 {
-			geom.AddVBO(gls.NewVBO(part.uvs2).AddCustomAttrib("VertexTexcoord2", 2))
+			uv2VBO = gls.NewVBO(part.uvs2).AddCustomAttrib("VertexTexcoord2", 2)
+			geom.AddVBO(uv2VBO)
 		}
 		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
 		if part.material.blend == 1 {
@@ -211,10 +293,15 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 			mat.SetBlending(material.BlendNormal)
 		}
 		for textureIndex, texturePath := range part.texturePaths {
-			tex := textures[texturePath]
+			tex := preloaded[texturePath]
+			if tex == nil {
+				tex = textures[texturePath]
+			}
 			if tex == nil {
 				tex = loadModelTexture(loader, texturePath)
-				textures[texturePath] = tex
+				if tex != nil {
+					textures[texturePath] = tex
+				}
 			}
 			if tex != nil {
 				if textureIndex < len(part.textureFlags) {
@@ -231,6 +318,7 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 		mesh := graphic.NewMesh(geom, mat)
 		mesh.SetRenderOrder(m2RenderOrder(part))
 		root.Add(mesh)
+		animatedMeshes = append(animatedMeshes, &m2AnimatedMesh{part: part, positionVBO: positionVBO, normalVBO: normalVBO, uvVBO: uvVBO, uv2VBO: uv2VBO, baseUVs: append(math32.ArrayF32(nil), part.uvs...), baseUVs2: append(math32.ArrayF32(nil), part.uvs2...), textureTransformIndices: append([]int(nil), part.textureTransformIndices...)})
 	}
 	if len(root.Children()) == 0 {
 		return nil, fmt.Errorf("%s: model textures or geometry unavailable", modelPath)
@@ -239,12 +327,21 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 	root.SetPosition(-center[0]*scale, -center[1]*scale, -center[2]*scale)
 	root.SetScale(scale, scale, scale)
 	stats.textures = len(texturePaths)
-	particles := buildM2ParticleSystem(loader, model, root, scale, textures)
+	particles := buildM2ParticleSystem(loader, &model, root, scale, textures)
 	if particles != nil {
 		stats.particleEmitters = particles.emitterCount
 		stats.particlePoints = particles.pointCount
 	}
-	info := glueModelInfo{stats: stats, particles: particles}
+	animation := buildM2Animation(&model, skin, animatedMeshes, modelPath)
+	info := glueModelInfo{stats: stats, particles: particles, animation: animation, modelScale: scale}
+	for _, attachment := range model.attachments {
+		if attachment.id == 0 {
+			point := modelPoint(attachment.position, center, scale)
+			info.standPosition = *math32.NewVector3(point[0], point[1], point[2])
+			info.hasStand = true
+			break
+		}
+	}
 	if model.camera != nil {
 		position := modelPoint(model.camera.position, center, scale)
 		target := modelPoint(model.camera.target, center, scale)
@@ -259,16 +356,26 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 }
 
 type parsedM2 struct {
-	vertices      []m2Vertex
-	bones         []m2Bone
-	boneCombos    []uint16
-	textures      []string
-	textureCombos []uint16
-	textureFlags  []uint32
-	textureCoords []uint16
-	renderFlags   []m2RenderFlag
-	camera        *m2Camera
-	particles     []m2ParticleEmitter
+	data                   []byte
+	boneOffset             int
+	vertices               []m2Vertex
+	bones                  []m2Bone
+	sequences              []m2Sequence
+	globalLoops            []uint32
+	boneCombos             []uint16
+	textures               []string
+	textureTypes           []uint32
+	textureCombos          []uint16
+	textureFlags           []uint32
+	textureCoords          []uint16
+	textureTransformOffset int
+	textureTransforms      []m2TextureTransform
+	textureTransformCombos []uint16
+	renderFlags            []m2RenderFlag
+	attachments            []m2Attachment
+	camera                 *m2Camera
+	particles              []m2ParticleEmitter
+	events                 []m2Event
 }
 
 func parseM2(data []byte) (parsedM2, error) {
@@ -286,6 +393,18 @@ func parseM2(data []byte) (parsedM2, error) {
 	if err != nil {
 		return parsedM2{}, err
 	}
+	globalLoops, err := readM2Array(data, 0x14, 4)
+	if err != nil {
+		return parsedM2{}, err
+	}
+	sequences, err := readM2Array(data, 0x1c, 64)
+	if err != nil {
+		return parsedM2{}, err
+	}
+	events, err := readM2Array(data, 0x100, 36)
+	if err != nil {
+		return parsedM2{}, err
+	}
 	combos, err := readM2Array(data, 0x80, 2)
 	if err != nil {
 		return parsedM2{}, err
@@ -295,6 +414,14 @@ func parseM2(data []byte) (parsedM2, error) {
 		return parsedM2{}, err
 	}
 	renderFlags, err := readM2Array(data, 0x70, m2RenderFlagSize)
+	if err != nil {
+		return parsedM2{}, err
+	}
+	textureTransforms, err := readM2Array(data, 0x60, m2TextureTransformSize)
+	if err != nil {
+		return parsedM2{}, err
+	}
+	textureTransformCombos, err := readM2Array(data, 0x98, 2)
 	if err != nil {
 		return parsedM2{}, err
 	}
@@ -314,7 +441,26 @@ func parseM2(data []byte) (parsedM2, error) {
 	if err != nil {
 		return parsedM2{}, err
 	}
-	result := parsedM2{vertices: make([]m2Vertex, vertices.count), bones: make([]m2Bone, bones.count), boneCombos: make([]uint16, boneCombos.count), textures: make([]string, textures.count), textureFlags: make([]uint32, textures.count), textureCombos: make([]uint16, combos.count), textureCoords: make([]uint16, textureCoords.count), renderFlags: make([]m2RenderFlag, renderFlags.count), particles: make([]m2ParticleEmitter, particles.count)}
+	attachments, err := readM2Array(data, 0xf0, 40)
+	if err != nil {
+		return parsedM2{}, err
+	}
+	result := parsedM2{data: data, boneOffset: bones.offset, vertices: make([]m2Vertex, vertices.count), bones: make([]m2Bone, bones.count), sequences: make([]m2Sequence, sequences.count), globalLoops: make([]uint32, globalLoops.count), boneCombos: make([]uint16, boneCombos.count), textures: make([]string, textures.count), textureTypes: make([]uint32, textures.count), textureFlags: make([]uint32, textures.count), textureCombos: make([]uint16, combos.count), textureCoords: make([]uint16, textureCoords.count), textureTransformOffset: textureTransforms.offset, textureTransforms: make([]m2TextureTransform, textureTransforms.count), textureTransformCombos: make([]uint16, textureTransformCombos.count), renderFlags: make([]m2RenderFlag, renderFlags.count), attachments: make([]m2Attachment, attachments.count), particles: make([]m2ParticleEmitter, particles.count), events: make([]m2Event, events.count)}
+	for index := range result.globalLoops {
+		result.globalLoops[index] = binary.LittleEndian.Uint32(data[globalLoops.offset+index*4:])
+	}
+	for index := range result.sequences {
+		base := sequences.offset + index*64
+		result.sequences[index] = m2Sequence{id: binary.LittleEndian.Uint16(data[base : base+2]), variation: binary.LittleEndian.Uint16(data[base+2 : base+4]), duration: binary.LittleEndian.Uint32(data[base+4 : base+8]), flags: binary.LittleEndian.Uint32(data[base+12 : base+16]), variationNext: int16(binary.LittleEndian.Uint16(data[base+60 : base+62])), aliasNext: binary.LittleEndian.Uint16(data[base+62 : base+64])}
+	}
+	inline := make([]bool, len(result.sequences))
+	for index, sequence := range result.sequences {
+		inline[index] = sequence.flags&0x20 != 0
+	}
+	for index := range result.textureTransforms {
+		base := textureTransforms.offset + index*m2TextureTransformSize
+		result.textureTransforms[index] = m2TextureTransform{translation: readM2TrackVec3(data, base, len(result.sequences), nil, inline), rotation: readM2TrackQuat(data, base+20, len(result.sequences), nil, inline), scale: readM2TrackVec3(data, base+40, len(result.sequences), nil, inline)}
+	}
 	for index := range result.vertices {
 		base := vertices.offset + index*m2VertexSize
 		result.vertices[index] = m2Vertex{position: [3]float32{readF32(data, base), readF32(data, base+4), readF32(data, base+8)}, weights: [4]uint8{data[base+12], data[base+13], data[base+14], data[base+15]}, bones: [4]uint8{data[base+16], data[base+17], data[base+18], data[base+19]}, normal: [3]float32{readF32(data, base+20), readF32(data, base+24), readF32(data, base+28)}, uv: [2]float32{readF32(data, base+32), readF32(data, base+36)}, uv2: [2]float32{readF32(data, base+40), readF32(data, base+44)}}
@@ -324,10 +470,14 @@ func parseM2(data []byte) (parsedM2, error) {
 	}
 	for index := range result.bones {
 		base := bones.offset + index*88
-		result.bones[index] = m2Bone{flags: binary.LittleEndian.Uint32(data[base+4 : base+8]), parent: int16(binary.LittleEndian.Uint16(data[base+8 : base+10])), pivot: [3]float32{readF32(data, base+76), readF32(data, base+80), readF32(data, base+84)}, translation: readM2TrackVector(data, base+16, [3]float32{}), rotation: readM2TrackQuaternion(data, base+36), scale: readM2TrackVector(data, base+56, [3]float32{1, 1, 1})}
+		translationTrack := readM2TrackVec3(data, base+16, len(result.sequences), nil, inline)
+		rotationTrack := readM2TrackQuat(data, base+36, len(result.sequences), nil, inline)
+		scaleTrack := readM2TrackVec3(data, base+56, len(result.sequences), nil, inline)
+		result.bones[index] = m2Bone{flags: binary.LittleEndian.Uint32(data[base+4 : base+8]), parent: int16(binary.LittleEndian.Uint16(data[base+8 : base+10])), pivot: [3]float32{readF32(data, base+76), readF32(data, base+80), readF32(data, base+84)}, translation: translationTrack.value(0, 0, result.globalLoops, [3]float32{}), rotation: rotationTrack.value(0, 0, result.globalLoops, [4]float32{0, 0, 0, 1}), scale: scaleTrack.value(0, 0, result.globalLoops, [3]float32{1, 1, 1}), translationTrack: translationTrack, rotationTrack: rotationTrack, scaleTrack: scaleTrack}
 	}
 	for index := range result.textures {
 		base := textures.offset + index*16
+		result.textureTypes[index] = binary.LittleEndian.Uint32(data[base : base+4])
 		result.textureFlags[index] = binary.LittleEndian.Uint32(data[base+4 : base+8])
 		count := int(binary.LittleEndian.Uint32(data[base+8 : base+12]))
 		offset := int(binary.LittleEndian.Uint32(data[base+12 : base+16]))
@@ -341,13 +491,21 @@ func parseM2(data []byte) (parsedM2, error) {
 	for index := range result.textureCoords {
 		result.textureCoords[index] = binary.LittleEndian.Uint16(data[textureCoords.offset+index*2:])
 	}
+	for index := range result.textureTransformCombos {
+		result.textureTransformCombos[index] = binary.LittleEndian.Uint16(data[textureTransformCombos.offset+index*2:])
+	}
 	for index := range result.renderFlags {
 		base := renderFlags.offset + index*m2RenderFlagSize
 		result.renderFlags[index] = m2RenderFlag{flags: binary.LittleEndian.Uint16(data[base : base+2]), blend: binary.LittleEndian.Uint16(data[base+2 : base+4])}
 	}
+	for index := range result.attachments {
+		base := attachments.offset + index*40
+		result.attachments[index] = m2Attachment{id: binary.LittleEndian.Uint32(data[base : base+4]), bone: binary.LittleEndian.Uint16(data[base+4 : base+6]), position: [3]float32{readF32(data, base+8), readF32(data, base+12), readF32(data, base+16)}}
+	}
 	for index := range result.particles {
 		result.particles[index] = parseM2ParticleEmitter(data, particles.offset+index*m2ParticleSize)
 	}
+	result.events = readM2Events(data, events, len(result.sequences), nil, inline)
 	if cameras.count > 0 {
 		base := cameras.offset
 		result.camera = &m2Camera{fov: readF32(data, base+4), farClip: readF32(data, base+8), nearClip: readF32(data, base+12), position: [3]float32{readF32(data, base+36), readF32(data, base+40), readF32(data, base+44)}, target: [3]float32{readF32(data, base+68), readF32(data, base+72), readF32(data, base+76)}}
@@ -400,18 +558,27 @@ func parseSkin(data []byte) (parsedSkin, error) {
 	}
 	for index := range result.submeshes {
 		base := submeshes.offset + index*skinSubmeshSize
-		result.submeshes[index] = skinSubmesh{vertexStart: uint32(binary.LittleEndian.Uint16(data[base+4 : base+6])), indexStart: uint32(binary.LittleEndian.Uint16(data[base+8 : base+10])), indexCount: uint32(binary.LittleEndian.Uint16(data[base+10 : base+12])), boneCount: uint32(binary.LittleEndian.Uint16(data[base+12 : base+14])), boneComboIndex: uint32(binary.LittleEndian.Uint16(data[base+14 : base+16])), boneInfluences: uint32(binary.LittleEndian.Uint16(data[base+16 : base+18]))}
+		result.submeshes[index] = skinSubmesh{submeshID: binary.LittleEndian.Uint16(data[base : base+2]), submeshLevel: binary.LittleEndian.Uint16(data[base+2 : base+4]), vertexStart: uint32(binary.LittleEndian.Uint16(data[base+4 : base+6])), indexStart: uint32(binary.LittleEndian.Uint16(data[base+8 : base+10])), indexCount: uint32(binary.LittleEndian.Uint16(data[base+10 : base+12])), boneCount: uint32(binary.LittleEndian.Uint16(data[base+12 : base+14])), boneComboIndex: uint32(binary.LittleEndian.Uint16(data[base+14 : base+16])), boneInfluences: uint32(binary.LittleEndian.Uint16(data[base+16 : base+18]))}
 	}
 	for index := range result.batches {
 		base := batches.offset + index*skinBatchSize
 		result.batches[index] = skinBatch{priorityPlane: int8(data[base+1]), submeshIndex: binary.LittleEndian.Uint16(data[base+4 : base+6]), materialLayer: binary.LittleEndian.Uint16(data[base+12 : base+14]), textureCount: binary.LittleEndian.Uint16(data[base+14 : base+16]), textureComboIndex: binary.LittleEndian.Uint16(data[base+16 : base+18])}
 		result.batches[index].materialIndex = binary.LittleEndian.Uint16(data[base+10 : base+12])
 		result.batches[index].textureCoordIndex = binary.LittleEndian.Uint16(data[base+18 : base+20])
+		result.batches[index].textureTransformIndex = binary.LittleEndian.Uint16(data[base+22 : base+24])
 	}
 	return result, nil
 }
 
 func buildM2Parts(model parsedM2, skin parsedSkin) map[string]*m2Part {
+	return buildM2PartsWithFilters(model, skin, nil, nil)
+}
+
+func buildM2PartsWithOverrides(model parsedM2, skin parsedSkin, textureOverrides map[int]string) map[string]*m2Part {
+	return buildM2PartsWithFilters(model, skin, textureOverrides, nil)
+}
+
+func buildM2PartsWithFilters(model parsedM2, skin parsedSkin, textureOverrides map[int]string, activeGeosets map[uint16]bool) map[string]*m2Part {
 	parts := make(map[string]*m2Part)
 	type poseKey struct {
 		local          int
@@ -423,6 +590,9 @@ func buildM2Parts(model parsedM2, skin parsedSkin) map[string]*m2Part {
 			continue
 		}
 		submesh := skin.submeshes[batch.submeshIndex]
+		if activeGeosets != nil && !activeGeosets[submesh.submeshID] {
+			continue
+		}
 		start := int(submesh.indexStart)
 		end := start + int(submesh.indexCount)
 		if start < 0 || end > len(skin.indices) || start >= end || end-start < 3 {
@@ -430,6 +600,7 @@ func buildM2Parts(model parsedM2, skin parsedSkin) map[string]*m2Part {
 		}
 		texturePaths := make([]string, 0, batch.textureCount)
 		textureFlags := make([]uint32, 0, batch.textureCount)
+		textureTransformIndices := make([]int, 0, batch.textureCount)
 		uvSet := 0
 		if int(batch.textureCoordIndex) < len(model.textureCoords) {
 			uvSet = int(model.textureCoords[batch.textureCoordIndex])
@@ -443,11 +614,27 @@ func buildM2Parts(model parsedM2, skin parsedSkin) map[string]*m2Part {
 				break
 			}
 			modelTextureIndex := model.textureCombos[comboIndex]
-			if int(modelTextureIndex) >= len(model.textures) || model.textures[modelTextureIndex] == "" {
+			if int(modelTextureIndex) >= len(model.textures) {
 				continue
 			}
-			texturePaths = append(texturePaths, model.textures[modelTextureIndex])
+			texturePath := model.textures[modelTextureIndex]
+			if texturePath == "" && textureOverrides != nil {
+				texturePath = textureOverrides[int(modelTextureIndex)]
+			}
+			if texturePath == "" {
+				continue
+			}
+			texturePaths = append(texturePaths, texturePath)
 			textureFlags = append(textureFlags, model.textureFlags[modelTextureIndex])
+			transformIndex := -1
+			transformComboIndex := int(batch.textureTransformIndex) + textureIndex
+			if transformComboIndex < len(model.textureTransformCombos) {
+				value := model.textureTransformCombos[transformComboIndex]
+				if value != 0xffff && int(value) < len(model.textureTransforms) {
+					transformIndex = int(value)
+				}
+			}
+			textureTransformIndices = append(textureTransformIndices, transformIndex)
 		}
 		if len(texturePaths) == 0 {
 			continue
@@ -472,7 +659,7 @@ func buildM2Parts(model parsedM2, skin parsedSkin) map[string]*m2Part {
 		key := fmt.Sprintf("%d\x00%d\x00%d\x00%d\x00%s", batchIndex, uvSet, materialInfo.flags, materialInfo.blend, strings.Join(texturePaths, "\x00"))
 		part := parts[key]
 		if part == nil {
-			part = &m2Part{texturePaths: texturePaths, textureFlags: textureFlags, uvSets: uvSets, renderOrder: batchIndex, priorityPlane: batch.priorityPlane, materialLayer: batch.materialLayer, uvSet: uvSet, material: materialInfo}
+			part = &m2Part{texturePaths: texturePaths, textureFlags: textureFlags, uvSets: uvSets, renderOrder: batchIndex, priorityPlane: batch.priorityPlane, materialLayer: batch.materialLayer, submeshID: submesh.submeshID, uvSet: uvSet, material: materialInfo, textureTransformIndices: textureTransformIndices}
 			parts[key] = part
 		}
 		for index := start; index+2 < end; index += 3 {
@@ -496,6 +683,7 @@ func buildM2Parts(model parsedM2, skin parsedSkin) map[string]*m2Part {
 				normal := modelVector(transformed.normal)
 				part.positions.Append(position[0], position[1], position[2])
 				part.normals.Append(normal[0], normal[1], normal[2])
+				part.vertexRefs = append(part.vertexRefs, m2VertexRef{local: local, vertex: vertex, boneComboIndex: int(submesh.boneComboIndex)})
 				uv := vertex.uv
 				if part.uvSet == 1 {
 					uv = vertex.uv2
@@ -588,6 +776,388 @@ func readM2TrackKey(data []byte, offset, valueSize int) (int, bool) {
 	return keyOffset, true
 }
 
+func readM2TrackHeader(data []byte, offset int) (uint16, uint16, m2Array, m2Array, bool) {
+	if offset < 0 || offset+20 > len(data) {
+		return 0, 0, m2Array{}, m2Array{}, false
+	}
+	return binary.LittleEndian.Uint16(data[offset : offset+2]), binary.LittleEndian.Uint16(data[offset+2 : offset+4]), m2Array{count: int(binary.LittleEndian.Uint32(data[offset+4 : offset+8])), offset: int(binary.LittleEndian.Uint32(data[offset+8 : offset+12]))}, m2Array{count: int(binary.LittleEndian.Uint32(data[offset+12 : offset+16])), offset: int(binary.LittleEndian.Uint32(data[offset+16 : offset+20]))}, true
+}
+
+func readM2TrackArray(data []byte, offset int) (m2Array, bool) {
+	if offset < 0 || offset+8 > len(data) {
+		return m2Array{}, false
+	}
+	array := m2Array{count: int(binary.LittleEndian.Uint32(data[offset : offset+4])), offset: int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))}
+	if array.count < 0 || array.count > 1<<24 || array.offset < 0 {
+		return m2Array{}, false
+	}
+	return array, true
+}
+
+func readM2TrackVec3(data []byte, offset, sequenceCount int, external map[int][]byte, inline []bool) m2TrackVec3 {
+	interpolation, globalSequence, timesOuter, valuesOuter, ok := readM2TrackHeader(data, offset)
+	if !ok || sequenceCount < 0 {
+		return m2TrackVec3{}
+	}
+	track := m2TrackVec3{interpolation: interpolation, globalSequence: globalSequence, sequences: make([]m2Vec3Keys, sequenceCount)}
+	count := sequenceCount
+	if timesOuter.count < count {
+		count = timesOuter.count
+	}
+	if valuesOuter.count < count {
+		count = valuesOuter.count
+	}
+	for index := 0; index < count; index++ {
+		if !inline[index] {
+			if source, exists := external[index]; exists {
+				track.sequences[index] = readM2Vec3Keys(data, timesOuter, valuesOuter, index, source)
+			}
+			continue
+		}
+		track.sequences[index] = readM2Vec3Keys(data, timesOuter, valuesOuter, index, data)
+	}
+	return track
+}
+
+func readM2Vec3Keys(data []byte, timesOuter, valuesOuter m2Array, index int, source []byte) m2Vec3Keys {
+	times, timesOK := readM2TrackArray(data, timesOuter.offset+index*8)
+	values, valuesOK := readM2TrackArray(data, valuesOuter.offset+index*8)
+	if !timesOK || !valuesOK {
+		return m2Vec3Keys{}
+	}
+	count := times.count
+	if values.count < count {
+		count = values.count
+	}
+	if count <= 0 || times.offset < 0 || values.offset < 0 || times.offset > len(source) || values.offset > len(source) || count > (len(source)-times.offset)/4 || count > (len(source)-values.offset)/12 {
+		return m2Vec3Keys{}
+	}
+	keys := m2Vec3Keys{times: make([]uint32, count), values: make([][3]float32, count)}
+	for key := 0; key < count; key++ {
+		keys.times[key] = binary.LittleEndian.Uint32(source[times.offset+key*4:])
+		base := values.offset + key*12
+		keys.values[key] = [3]float32{readF32(source, base), readF32(source, base+4), readF32(source, base+8)}
+	}
+	return keys
+}
+
+func readM2TrackQuat(data []byte, offset, sequenceCount int, external map[int][]byte, inline []bool) m2TrackQuat {
+	interpolation, globalSequence, timesOuter, valuesOuter, ok := readM2TrackHeader(data, offset)
+	if !ok || sequenceCount < 0 {
+		return m2TrackQuat{}
+	}
+	track := m2TrackQuat{interpolation: interpolation, globalSequence: globalSequence, sequences: make([]m2QuatKeys, sequenceCount)}
+	count := sequenceCount
+	if timesOuter.count < count {
+		count = timesOuter.count
+	}
+	if valuesOuter.count < count {
+		count = valuesOuter.count
+	}
+	for index := 0; index < count; index++ {
+		if !inline[index] {
+			if source, exists := external[index]; exists {
+				track.sequences[index] = readM2QuatKeys(data, timesOuter, valuesOuter, index, source)
+			}
+			continue
+		}
+		track.sequences[index] = readM2QuatKeys(data, timesOuter, valuesOuter, index, data)
+	}
+	return track
+}
+
+func readM2Events(data []byte, array m2Array, sequenceCount int, external map[int][]byte, inline []bool) []m2Event {
+	if array.count <= 0 || sequenceCount < 0 {
+		return nil
+	}
+	events := make([]m2Event, array.count)
+	for index := range events {
+		base := array.offset + index*36
+		events[index] = m2Event{identifier: [4]byte{data[base], data[base+1], data[base+2], data[base+3]}, data: binary.LittleEndian.Uint32(data[base+4 : base+8]), bone: binary.LittleEndian.Uint32(data[base+8 : base+12]), position: [3]float32{readF32(data, base+12), readF32(data, base+16), readF32(data, base+20)}, times: make([][]uint32, sequenceCount)}
+		outer, ok := readM2TrackArray(data, base+28)
+		if !ok {
+			continue
+		}
+		count := sequenceCount
+		if outer.count < count {
+			count = outer.count
+		}
+		for sequence := 0; sequence < count; sequence++ {
+			if !inline[sequence] {
+				if _, exists := external[sequence]; !exists {
+					continue
+				}
+			}
+			inner, ok := readM2TrackArray(data, outer.offset+sequence*8)
+			if !ok || inner.count <= 0 || inner.offset < 0 {
+				continue
+			}
+			source := data
+			if externalData, exists := external[sequence]; exists {
+				source = externalData
+			}
+			if inner.count > (len(source)-inner.offset)/4 {
+				continue
+			}
+			events[index].times[sequence] = make([]uint32, inner.count)
+			for key := range events[index].times[sequence] {
+				events[index].times[sequence][key] = binary.LittleEndian.Uint32(source[inner.offset+key*4:])
+			}
+		}
+	}
+	return events
+}
+
+func readM2QuatKeys(data []byte, timesOuter, valuesOuter m2Array, index int, source []byte) m2QuatKeys {
+	times, timesOK := readM2TrackArray(data, timesOuter.offset+index*8)
+	values, valuesOK := readM2TrackArray(data, valuesOuter.offset+index*8)
+	if !timesOK || !valuesOK {
+		return m2QuatKeys{}
+	}
+	count := times.count
+	if values.count < count {
+		count = values.count
+	}
+	if count <= 0 || times.offset < 0 || values.offset < 0 || times.offset > len(source) || values.offset > len(source) || count > (len(source)-times.offset)/4 || count > (len(source)-values.offset)/8 {
+		return m2QuatKeys{}
+	}
+	keys := m2QuatKeys{times: make([]uint32, count), values: make([][4]float32, count)}
+	for key := 0; key < count; key++ {
+		keys.times[key] = binary.LittleEndian.Uint32(source[times.offset+key*4:])
+		base := values.offset + key*8
+		quaternion := [4]float32{decodeM2Quaternion(binary.LittleEndian.Uint16(source[base:])), decodeM2Quaternion(binary.LittleEndian.Uint16(source[base+2:])), decodeM2Quaternion(binary.LittleEndian.Uint16(source[base+4:])), decodeM2Quaternion(binary.LittleEndian.Uint16(source[base+6:]))}
+		keys.values[key] = normalizeM2Quaternion(quaternion)
+	}
+	return keys
+}
+
+func (track m2TrackVec3) value(sequence int, time uint32, globalLoops []uint32, fallback [3]float32) [3]float32 {
+	if track.globalSequence != 0xffff {
+		if index := int(track.globalSequence); index < len(globalLoops) {
+			duration := globalLoops[index]
+			if duration > 0 {
+				time %= duration
+			}
+		}
+		sequence = 0
+	}
+	if sequence < 0 || sequence >= len(track.sequences) {
+		return fallback
+	}
+	keys := track.sequences[sequence]
+	count := len(keys.times)
+	if len(keys.values) < count {
+		count = len(keys.values)
+	}
+	if count == 0 {
+		return fallback
+	}
+	if count == 1 {
+		return keys.values[0]
+	}
+	next := 0
+	for next < count && keys.times[next] <= time {
+		next++
+	}
+	if next == 0 {
+		return keys.values[0]
+	}
+	if next >= count {
+		return keys.values[count-1]
+	}
+	left := next - 1
+	start, end := keys.times[left], keys.times[next]
+	if track.interpolation == 0 || end <= start {
+		return keys.values[left]
+	}
+	fraction := float32(time-start) / float32(end-start)
+	return lerpM2Vector(keys.values[left], keys.values[next], fraction)
+}
+
+func (track m2TrackQuat) value(sequence int, time uint32, globalLoops []uint32, fallback [4]float32) [4]float32 {
+	if track.globalSequence != 0xffff {
+		if index := int(track.globalSequence); index < len(globalLoops) {
+			duration := globalLoops[index]
+			if duration > 0 {
+				time %= duration
+			}
+		}
+		sequence = 0
+	}
+	if sequence < 0 || sequence >= len(track.sequences) {
+		return fallback
+	}
+	keys := track.sequences[sequence]
+	count := len(keys.times)
+	if len(keys.values) < count {
+		count = len(keys.values)
+	}
+	if count == 0 {
+		return fallback
+	}
+	if count == 1 {
+		return keys.values[0]
+	}
+	next := 0
+	for next < count && keys.times[next] <= time {
+		next++
+	}
+	if next == 0 {
+		return keys.values[0]
+	}
+	if next >= count {
+		return keys.values[count-1]
+	}
+	left := next - 1
+	start, end := keys.times[left], keys.times[next]
+	if track.interpolation == 0 || end <= start {
+		return keys.values[left]
+	}
+	fraction := float32(time-start) / float32(end-start)
+	return slerpM2Quaternion(keys.values[left], keys.values[next], fraction)
+}
+
+func lerpM2Vector(left, right [3]float32, fraction float32) [3]float32 {
+	return [3]float32{left[0] + (right[0]-left[0])*fraction, left[1] + (right[1]-left[1])*fraction, left[2] + (right[2]-left[2])*fraction}
+}
+
+func normalizeM2Quaternion(value [4]float32) [4]float32 {
+	length := float32(math.Sqrt(float64(value[0]*value[0] + value[1]*value[1] + value[2]*value[2] + value[3]*value[3])))
+	if length < 0.0001 {
+		return [4]float32{0, 0, 0, 1}
+	}
+	return [4]float32{value[0] / length, value[1] / length, value[2] / length, value[3] / length}
+}
+
+func slerpM2Quaternion(left, right [4]float32, fraction float32) [4]float32 {
+	dot := left[0]*right[0] + left[1]*right[1] + left[2]*right[2] + left[3]*right[3]
+	if dot < 0 {
+		right = [4]float32{-right[0], -right[1], -right[2], -right[3]}
+		dot = -dot
+	}
+	if dot > 0.9995 {
+		return normalizeM2Quaternion([4]float32{left[0] + (right[0]-left[0])*fraction, left[1] + (right[1]-left[1])*fraction, left[2] + (right[2]-left[2])*fraction, left[3] + (right[3]-left[3])*fraction})
+	}
+	angle := float32(math.Acos(math.Max(-1, math.Min(1, float64(dot)))))
+	sine := float32(math.Sin(float64(angle)))
+	if math.Abs(float64(sine)) < 0.0001 {
+		return left
+	}
+	first := float32(math.Sin(float64((1-fraction)*angle))) / sine
+	second := float32(math.Sin(float64(fraction*angle))) / sine
+	return normalizeM2Quaternion([4]float32{left[0]*first + right[0]*second, left[1]*first + right[1]*second, left[2]*first + right[2]*second, left[3]*first + right[3]*second})
+}
+
+func loadM2AnimationTracks(loader *ui.Loader, modelPath string, model *parsedM2) {
+	if loader == nil || model == nil || len(model.sequences) == 0 {
+		return
+	}
+	external := make(map[int][]byte)
+	inline := make([]bool, len(model.sequences))
+	for index, sequence := range model.sequences {
+		inline[index] = sequence.flags&0x20 != 0
+		if inline[index] {
+			continue
+		}
+		if data, err := loader.ReadFile(m2ExternalAnimationPath(modelPath, sequence)); err == nil {
+			external[index] = data
+		}
+	}
+	for index := range model.bones {
+		base := model.boneOffset + index*88
+		model.bones[index].translationTrack = readM2TrackVec3(model.data, base+16, len(model.sequences), external, inline)
+		model.bones[index].rotationTrack = readM2TrackQuat(model.data, base+36, len(model.sequences), external, inline)
+		model.bones[index].scaleTrack = readM2TrackVec3(model.data, base+56, len(model.sequences), external, inline)
+	}
+	for index := range model.textureTransforms {
+		base := model.textureTransformOffset + index*m2TextureTransformSize
+		model.textureTransforms[index].translation = readM2TrackVec3(model.data, base, len(model.sequences), external, inline)
+		model.textureTransforms[index].rotation = readM2TrackQuat(model.data, base+20, len(model.sequences), external, inline)
+		model.textureTransforms[index].scale = readM2TrackVec3(model.data, base+40, len(model.sequences), external, inline)
+	}
+	events, _ := readM2Array(model.data, 0x100, 36)
+	model.events = readM2Events(model.data, events, len(model.sequences), external, inline)
+	resolveM2TrackAliases(model)
+	for index := range model.bones {
+		model.bones[index].translation = model.bones[index].translationTrack.value(0, 0, model.globalLoops, [3]float32{})
+		model.bones[index].rotation = model.bones[index].rotationTrack.value(0, 0, model.globalLoops, [4]float32{0, 0, 0, 1})
+		model.bones[index].scale = model.bones[index].scaleTrack.value(0, 0, model.globalLoops, [3]float32{1, 1, 1})
+	}
+}
+
+func m2ExternalAnimationPath(modelPath string, sequence m2Sequence) string {
+	stem := modelPath
+	if strings.HasSuffix(strings.ToLower(stem), ".m2") {
+		stem = stem[:len(stem)-3]
+	}
+	return fmt.Sprintf("%s%04d-%02d.anim", stem, sequence.id, sequence.variation)
+}
+
+func resolveM2TrackAliases(model *parsedM2) {
+	if model == nil {
+		return
+	}
+	target := func(start int) int {
+		index := start
+		for step := 0; step < len(model.sequences); step++ {
+			if index < 0 || index >= len(model.sequences) {
+				return -1
+			}
+			sequence := model.sequences[index]
+			if sequence.flags&0x40 == 0 {
+				return index
+			}
+			next := int(sequence.aliasNext)
+			if next == index {
+				return -1
+			}
+			index = next
+		}
+		return -1
+	}
+	for boneIndex := range model.bones {
+		for index, sequence := range model.sequences {
+			if sequence.flags&0x40 == 0 {
+				continue
+			}
+			to := target(index)
+			if to < 0 || to == index {
+				continue
+			}
+			if len(model.bones[boneIndex].translationTrack.sequences[index].values) == 0 {
+				model.bones[boneIndex].translationTrack.sequences[index] = model.bones[boneIndex].translationTrack.sequences[to]
+			}
+			if len(model.bones[boneIndex].rotationTrack.sequences[index].values) == 0 {
+				model.bones[boneIndex].rotationTrack.sequences[index] = model.bones[boneIndex].rotationTrack.sequences[to]
+			}
+			if len(model.bones[boneIndex].scaleTrack.sequences[index].values) == 0 {
+				model.bones[boneIndex].scaleTrack.sequences[index] = model.bones[boneIndex].scaleTrack.sequences[to]
+			}
+		}
+	}
+	for transformIndex := range model.textureTransforms {
+		for index, sequence := range model.sequences {
+			if sequence.flags&0x40 == 0 {
+				continue
+			}
+			to := target(index)
+			if to < 0 || to == index {
+				continue
+			}
+			transform := &model.textureTransforms[transformIndex]
+			if len(transform.translation.sequences[index].values) == 0 {
+				transform.translation.sequences[index] = transform.translation.sequences[to]
+			}
+			if len(transform.rotation.sequences[index].values) == 0 {
+				transform.rotation.sequences[index] = transform.rotation.sequences[to]
+			}
+			if len(transform.scale.sequences[index].values) == 0 {
+				transform.scale.sequences[index] = transform.scale.sequences[to]
+			}
+		}
+	}
+}
+
 func readM2TrackVector(data []byte, offset int, fallback [3]float32) [3]float32 {
 	key, ok := readM2TrackKey(data, offset, 12)
 	if !ok {
@@ -618,6 +1188,10 @@ func decodeM2Quaternion(value uint16) float32 {
 }
 
 func poseM2Vertex(model parsedM2, skin parsedSkin, local int, vertex m2Vertex, boneComboIndex int) posedM2Vertex {
+	return poseM2VertexWithBones(&model, skin, local, vertex, boneComboIndex, model.bones)
+}
+
+func poseM2VertexWithBones(model *parsedM2, skin parsedSkin, local int, vertex m2Vertex, boneComboIndex int, bonesModel []m2Bone) posedM2Vertex {
 	weights := vertex.weights
 	bones := vertex.bones
 	if local >= 0 && local < len(skin.bones) {
@@ -630,15 +1204,15 @@ func poseM2Vertex(model parsedM2, skin parsedSkin, local int, vertex m2Vertex, b
 			continue
 		}
 		boneIndex := int(bones[slot])
-		if boneComboIndex >= 0 && boneComboIndex+boneIndex < len(model.boneCombos) {
+		if model != nil && boneComboIndex >= 0 && boneComboIndex+boneIndex < len(model.boneCombos) {
 			boneIndex = int(model.boneCombos[boneComboIndex+boneIndex])
 		}
-		if boneIndex >= len(model.bones) {
+		if boneIndex >= len(bonesModel) {
 			continue
 		}
 		weightTotal += int(weight)
-		bonePosition := transformM2Point(boneIndex, vertex.position, model.bones, 0)
-		boneNormal := transformM2Normal(boneIndex, vertex.normal, model.bones, 0)
+		bonePosition := transformM2Point(boneIndex, vertex.position, bonesModel, 0)
+		boneNormal := transformM2Normal(boneIndex, vertex.normal, bonesModel, 0)
 		factor := float32(weight) / 255
 		for axis := 0; axis < 3; axis++ {
 			position[axis] += bonePosition[axis] * factor

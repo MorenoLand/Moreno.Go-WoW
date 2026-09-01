@@ -23,17 +23,39 @@ type m2ParticleEmitter struct {
 	emitterType     uint8
 	rows            uint16
 	cols            uint16
+	textureRotation int16
 	rate            float32
 	life            float32
 	speed           float32
+	speedVariation  float32
 	verticalRange   float32
 	horizontalRange float32
 	gravity         float32
 	areaLength      float32
 	areaWidth       float32
+	lifespanVary    float32
+	rateVary        float32
+	twinkleSpeed    float32
+	twinklePercent  float32
+	twinkleScale    [2]float32
+	baseSpin        float32
+	baseSpinVary    float32
+	spin            float32
+	spinVary        float32
+	drag            float32
 	color           [3]float32
 	alpha           float32
 	scale           [2]float32
+	colorTrack      m2ParticleTrack
+	alphaTrack      m2ParticleTrack
+	scaleTrack      m2ParticleTrack
+	headCellTrack   m2ParticleTrack
+}
+
+type m2ParticleTrack struct {
+	times      []float32
+	values     []float32
+	components int
 }
 
 type m2Particle struct {
@@ -43,19 +65,30 @@ type m2Particle struct {
 	age      float32
 	life     float32
 	seed     uint32
+	rotation float32
+	spin     float32
+	drag     float32
 }
 
 type m2ParticleGroup struct {
 	emitter     m2ParticleEmitter
-	model       parsedM2
+	model       *parsedM2
+	bone        int
 	base        [3]float32
 	right       [3]float32
 	up          [3]float32
 	particles   []m2Particle
 	positions   math32.ArrayF32
+	colors      math32.ArrayF32
+	params      math32.ArrayF32
+	rotations   math32.ArrayF32
 	positionVBO *gls.VBO
+	colorVBO    *gls.VBO
+	paramsVBO   *gls.VBO
+	rotationVBO *gls.VBO
 	points      *graphic.Points
 	particleTex *texture.Texture2D
+	rootScale   float32
 }
 
 type m2ParticleSystem struct {
@@ -73,17 +106,18 @@ type particleTextureKey struct {
 
 func parseM2ParticleEmitter(data []byte, base int) m2ParticleEmitter {
 	emitter := m2ParticleEmitter{
-		flags:       binaryU32(data, base+0x04),
-		position:    [3]float32{readF32(data, base+0x08), readF32(data, base+0x0c), readF32(data, base+0x10)},
-		bone:        binaryU16(data, base+0x14),
-		texture:     binaryU16(data, base+0x16),
-		blend:       data[base+0x28],
-		emitterType: data[base+0x29],
-		rows:        binaryU16(data, base+0x30),
-		cols:        binaryU16(data, base+0x32),
-		color:       [3]float32{1, 1, 1},
-		alpha:       1,
-		scale:       [2]float32{1, 1},
+		flags:           binaryU32(data, base+0x04),
+		position:        [3]float32{readF32(data, base+0x08), readF32(data, base+0x0c), readF32(data, base+0x10)},
+		bone:            binaryU16(data, base+0x14),
+		texture:         binaryU16(data, base+0x16),
+		blend:           data[base+0x28],
+		emitterType:     data[base+0x29],
+		textureRotation: int16(binaryU16(data, base+0x2e)),
+		rows:            binaryU16(data, base+0x30),
+		cols:            binaryU16(data, base+0x32),
+		color:           [3]float32{255, 255, 255},
+		alpha:           1,
+		scale:           [2]float32{1, 1},
 	}
 	if emitter.rows == 0 {
 		emitter.rows = 1
@@ -92,15 +126,28 @@ func parseM2ParticleEmitter(data []byte, base int) m2ParticleEmitter {
 		emitter.cols = 1
 	}
 	emitter.speed = readM2TrackFloat(data, base+0x34)
+	emitter.speedVariation = readM2TrackFloat(data, base+0x48)
 	emitter.verticalRange = readM2TrackFloat(data, base+0x5c)
 	emitter.horizontalRange = readM2TrackFloat(data, base+0x70)
 	emitter.gravity = readM2TrackFloat(data, base+0x84)
 	emitter.life = readM2TrackFloat(data, base+0x98)
+	emitter.lifespanVary = readF32(data, base+0xac)
 	emitter.rate = readM2TrackFloat(data, base+0xb0)
+	emitter.rateVary = readF32(data, base+0xc4)
 	emitter.areaLength = readM2TrackFloat(data, base+0xc8)
 	emitter.areaWidth = readM2TrackFloat(data, base+0xdc)
+	emitter.lifespanVary = finiteParticleValue(emitter.lifespanVary)
+	emitter.rateVary = finiteParticleValue(emitter.rateVary)
+	emitter.twinkleSpeed = finiteParticleValue(readF32(data, base+0x160))
+	emitter.twinklePercent = clampParticleValue(finiteParticleValue(readF32(data, base+0x164)), 0, 1)
+	emitter.twinkleScale = [2]float32{finiteParticleValue(readF32(data, base+0x168)), finiteParticleValue(readF32(data, base+0x16c))}
+	emitter.baseSpin = finiteParticleValue(readF32(data, base+0x178))
+	emitter.baseSpinVary = finiteParticleValue(readF32(data, base+0x17c))
+	emitter.spin = finiteParticleValue(readF32(data, base+0x180))
+	emitter.spinVary = finiteParticleValue(readF32(data, base+0x184))
+	emitter.drag = finiteParticleValue(readF32(data, base+0x174))
 	if key, ok := readM2FBlockKey(data, base+0x104, 12); ok {
-		emitter.color = [3]float32{readF32(data, key) / 255, readF32(data, key+4) / 255, readF32(data, key+8) / 255}
+		emitter.color = [3]float32{readF32(data, key), readF32(data, key+4), readF32(data, key+8)}
 	}
 	if key, ok := readM2FBlockKey(data, base+0x114, 2); ok {
 		emitter.alpha = float32(binaryU16(data, key)) / 32767
@@ -108,16 +155,21 @@ func parseM2ParticleEmitter(data []byte, base int) m2ParticleEmitter {
 	if key, ok := readM2FBlockKey(data, base+0x124, 8); ok {
 		emitter.scale = [2]float32{readF32(data, key), readF32(data, key+4)}
 	}
+	emitter.colorTrack = readM2ParticleTrack(data, base+260, 3, 4, false)
+	emitter.alphaTrack = readM2ParticleTrack(data, base+276, 1, 2, true)
+	emitter.scaleTrack = readM2ParticleTrack(data, base+292, 2, 4, false)
+	emitter.headCellTrack = readM2ParticleTrack(data, base+316, 1, 2, false)
 	emitter.rate = finiteParticleValue(emitter.rate)
 	emitter.life = finiteParticleValue(emitter.life)
 	emitter.speed = finiteParticleValue(emitter.speed)
+	emitter.speedVariation = finiteParticleValue(emitter.speedVariation)
 	emitter.verticalRange = finiteParticleValue(emitter.verticalRange)
 	emitter.horizontalRange = finiteParticleValue(emitter.horizontalRange)
 	emitter.gravity = finiteParticleValue(emitter.gravity)
 	emitter.areaLength = finiteParticleValue(emitter.areaLength)
 	emitter.areaWidth = finiteParticleValue(emitter.areaWidth)
 	for index := range emitter.color {
-		emitter.color[index] = clampParticleValue(emitter.color[index], 0, 1)
+		emitter.color[index] = clampParticleValue(emitter.color[index], 0, 255)
 	}
 	emitter.alpha = clampParticleValue(emitter.alpha, 0, 1)
 	for index := range emitter.scale {
@@ -127,6 +179,69 @@ func parseM2ParticleEmitter(data []byte, base int) m2ParticleEmitter {
 		}
 	}
 	return emitter
+}
+
+func readM2ParticleTrack(data []byte, base, components, componentSize int, fixed16 bool) m2ParticleTrack {
+	if base < 0 || base+16 > len(data) || components < 1 || componentSize < 1 {
+		return m2ParticleTrack{}
+	}
+	timeCount := int(binary.LittleEndian.Uint32(data[base : base+4]))
+	timeOffset := int(binary.LittleEndian.Uint32(data[base+4 : base+8]))
+	valueCount := int(binary.LittleEndian.Uint32(data[base+8 : base+12]))
+	valueOffset := int(binary.LittleEndian.Uint32(data[base+12 : base+16]))
+	count := timeCount
+	if valueCount < count {
+		count = valueCount
+	}
+	if count <= 0 || timeOffset < 0 || valueOffset < 0 || count > (len(data)-timeOffset)/2 || count > (len(data)-valueOffset)/(components*componentSize) {
+		return m2ParticleTrack{}
+	}
+	track := m2ParticleTrack{times: make([]float32, count), values: make([]float32, count*components), components: components}
+	for index := 0; index < count; index++ {
+		track.times[index] = float32(binary.LittleEndian.Uint16(data[timeOffset+index*2:])) / 32767
+		for component := 0; component < components; component++ {
+			at := valueOffset + (index*components+component)*componentSize
+			if componentSize == 2 {
+				value := float32(binary.LittleEndian.Uint16(data[at:]))
+				if fixed16 {
+					value /= 32767
+				}
+				track.values[index*components+component] = value
+			} else {
+				track.values[index*components+component] = readF32(data, at)
+			}
+		}
+	}
+	return track
+}
+
+func (track m2ParticleTrack) value(age float32, component int, fallback float32) float32 {
+	if component < 0 || component >= track.components || len(track.times) == 0 || len(track.values) < track.components {
+		return fallback
+	}
+	if len(track.times) == 1 || len(track.values) < len(track.times)*track.components {
+		return track.values[component]
+	}
+	next := 0
+	for next < len(track.times) && track.times[next] <= age {
+		next++
+	}
+	if next == 0 {
+		return track.values[component]
+	}
+	if next >= len(track.times) {
+		return track.values[(len(track.times)-1)*track.components+component]
+	}
+	left := next - 1
+	right := next
+	start, end := track.times[left], track.times[right]
+	if end <= start {
+		return track.values[left*track.components+component]
+	}
+	fraction := (age - start) / (end - start)
+	v0 := track.values[left*track.components+component]
+	v1 := track.values[right*track.components+component]
+	return v0 + (v1-v0)*fraction
 }
 
 func readM2TrackFloat(data []byte, offset int) float32 {
@@ -174,11 +289,11 @@ func clampParticleValue(value, low, high float32) float32 {
 	return value
 }
 
-func buildM2ParticleSystem(loader *ui.Loader, model parsedM2, root *core.Node, rootScale float32, textures map[string]*texture.Texture2D) *m2ParticleSystem {
-	if len(model.particles) == 0 {
+func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, rootScale float32, textures map[string]*texture.Texture2D) *m2ParticleSystem {
+	if model == nil || len(model.particles) == 0 {
 		return nil
 	}
-	right, up := particleBasis(model)
+	right, up := particleBasis(*model)
 	particleTextures := make(map[particleTextureKey]*texture.Texture2D)
 	system := &m2ParticleSystem{}
 	for index, emitter := range model.particles {
@@ -215,26 +330,30 @@ func buildM2ParticleSystem(loader *ui.Loader, model parsedM2, root *core.Node, r
 			count = 64
 		}
 		base := modelVector(transformM2Point(int(emitter.bone), emitter.position, model.bones, 0))
-		group := &m2ParticleGroup{emitter: emitter, model: model, base: base, right: right, up: up, particleTex: tex, particles: make([]m2Particle, count), positions: math32.NewArrayF32(0, count*3)}
+		group := &m2ParticleGroup{emitter: emitter, model: model, bone: int(emitter.bone), base: base, right: right, up: up, particleTex: tex, rootScale: rootScale, particles: make([]m2Particle, count), positions: math32.NewArrayF32(0, count*3), colors: math32.NewArrayF32(0, count*3), params: math32.NewArrayF32(0, count*4), rotations: math32.NewArrayF32(0, count)}
 		for particleIndex := range group.particles {
 			seed := uint32(index+1)*0x9e3779b9 + uint32(particleIndex+1)*0x85ebca6b
 			group.particles[particleIndex] = spawnM2Particle(group, seed, emitter.life*float32(particleIndex)/float32(count))
 			position := particlePosition(group.particles[particleIndex])
 			group.positions.Append(position[0], position[1], position[2])
+			color, size, alpha, cell := particleAppearance(group.emitter, group.particles[particleIndex])
+			group.colors.Append(color[0], color[1], color[2])
+			group.params.Append(size*rootScale, alpha, cell[0], cell[1])
+			group.rotations.Append(group.particles[particleIndex].rotation)
 		}
 		geom := geometry.NewGeometry()
 		geom.AddVBO(gls.NewVBO(group.positions).AddAttrib(gls.VertexPosition))
-		mat := material.NewPoint(&math32.Color{R: emitter.color[0], G: emitter.color[1], B: emitter.color[2]})
-		mat.SetEmissiveColor(&math32.Color{R: emitter.color[0], G: emitter.color[1], B: emitter.color[2]})
-		pointSize := emitter.scale[0] * rootScale * 100
-		if pointSize < 2 {
-			pointSize = 2
-		}
-		if pointSize > 16 {
-			pointSize = 16
-		}
-		mat.SetSize(pointSize)
-		mat.SetOpacity(emitter.alpha)
+		group.colorVBO = gls.NewVBO(group.colors).AddAttrib(gls.VertexColor)
+		group.paramsVBO = gls.NewVBO(group.params).AddCustomAttrib("VertexParticleParams", 4)
+		group.rotationVBO = gls.NewVBO(group.rotations).AddCustomAttrib("VertexParticleRotation", 1)
+		geom.AddVBO(group.colorVBO)
+		geom.AddVBO(group.paramsVBO)
+		geom.AddVBO(group.rotationVBO)
+		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
+		mat.SetShader("morenowow_particle")
+		mat.SetShaderUnique(true)
+		mat.SetEmissiveColor(&math32.Color{R: 1, G: 1, B: 1})
+		mat.SetOpacity(1)
 		mat.SetSide(material.SideDouble)
 		mat.SetUseLights(material.UseLightNone)
 		mat.SetDepthTest(true)
@@ -256,7 +375,7 @@ func buildM2ParticleSystem(loader *ui.Loader, model parsedM2, root *core.Node, r
 		}
 		mat.AddTexture(tex)
 		points := graphic.NewPoints(geom, mat)
-		points.SetRenderOrder(-10)
+		points.SetRenderOrder(10)
 		points.SetCullable(false)
 		group.positionVBO = geom.VBO(gls.VertexPosition)
 		group.points = points
@@ -296,20 +415,42 @@ func spawnM2Particle(group *m2ParticleGroup, seed uint32, age float32) m2Particl
 		return float32(seed>>8) / float32(1<<24)
 	}
 	randomSigned := func() float32 { return random()*2 - 1 }
-	offset := [3]float32{randomSigned() * emitter.areaWidth * 0.5, randomSigned() * emitter.areaLength * 0.5, 0}
-	offset = modelVector(transformM2Direction(int(emitter.bone), offset, group.model.bones, 0))
-	velocity := [3]float32{}
-	if math.Abs(float64(emitter.speed)) >= 0.01 {
-		direction := [3]float32{randomSigned() * emitter.horizontalRange, randomSigned() * emitter.horizontalRange, 1 + randomSigned()*emitter.verticalRange}
-		length := particleVectorLength(direction)
-		if length > 0.001 {
-			direction = scaleParticleVector(direction, 1/length)
-		}
-		velocity = scaleParticleVector(modelVector(transformM2Direction(int(emitter.bone), direction, group.model.bones, 0)), emitter.speed)
-	} else {
-		velocity = modelVector(transformM2Direction(int(emitter.bone), [3]float32{randomSigned(), randomSigned(), -random() * 0.5}, group.model.bones, 0))
+	polar := random() * emitter.verticalRange
+	azimuth := randomSigned() * emitter.horizontalRange * 0.5
+	sine := float32(math.Sin(float64(polar)))
+	direction := [3]float32{float32(math.Cos(float64(azimuth))) * sine, float32(math.Sin(float64(azimuth))) * sine, float32(math.Cos(float64(polar)))}
+	if emitter.emitterType == 2 {
+		radius := emitter.areaLength + (emitter.areaWidth-emitter.areaLength)*random()
+		offset := scaleParticleVector(direction, radius)
+		offset = modelVector(transformM2Direction(group.bone, offset, group.model.bones, 0))
+		return newM2Particle(group, seed, age, offset, direction, random)
 	}
-	return m2Particle{origin: addParticleVector(group.base, offset), velocity: velocity, gravity: [3]float32{0, -emitter.gravity, 0}, age: age, life: emitter.life, seed: seed}
+	offset := [3]float32{randomSigned() * emitter.areaLength * 0.5, randomSigned() * emitter.areaWidth * 0.5, 0}
+	offset = modelVector(transformM2Direction(group.bone, offset, group.model.bones, 0))
+	return newM2Particle(group, seed, age, offset, direction, random)
+}
+
+func newM2Particle(group *m2ParticleGroup, seed uint32, age float32, offset, direction [3]float32, random func() float32) m2Particle {
+	emitter := group.emitter
+	life := emitter.life + emitter.lifespanVary*(random()*2-1)
+	if life <= 0 {
+		life = emitter.life
+	}
+	speed := emitter.speed * (1 + emitter.speedVariation*(random()*2-1))
+	velocity := scaleParticleVector(modelVector(transformM2Direction(group.bone, direction, group.model.bones, 0)), speed)
+	gravity := modelVector(transformM2Direction(group.bone, [3]float32{0, 0, -emitter.gravity}, group.model.bones, 0))
+	drag := emitter.drag
+	if math.Abs(float64(speed)) < 0.01 {
+		drift := [3]float32{random()*2 - 1, random()*2 - 1, -random() * 0.5}
+		velocity = modelVector(transformM2Direction(group.bone, drift, group.model.bones, 0))
+		if particleVectorLength(gravity) < 0.001 {
+			gravity = modelVector(transformM2Direction(group.bone, [3]float32{0, 0, -1.5}, group.model.bones, 0))
+		}
+		drag = 0
+	}
+	rotation := float32(emitter.textureRotation)*math.Pi/180 + random()*2*math.Pi
+	spin := emitter.baseSpin + emitter.baseSpinVary*(random()*2-1) + emitter.spin + emitter.spinVary*(random()*2-1)
+	return m2Particle{origin: addParticleVector(group.base, offset), velocity: velocity, gravity: gravity, age: age, life: life, seed: seed, rotation: rotation, spin: spin, drag: drag}
 }
 
 func (system *m2ParticleSystem) Update(elapsed float64) {
@@ -322,25 +463,85 @@ func (system *m2ParticleSystem) Update(elapsed float64) {
 	}
 	system.time += delta
 	for _, group := range system.groups {
+		if group.model != nil {
+			group.base = modelVector(transformM2Point(group.bone, group.emitter.position, group.model.bones, 0))
+		}
 		for index := range group.particles {
 			particle := &group.particles[index]
 			particle.age += delta
+			particle.rotation += particle.spin * delta
+			if particle.drag > 0 {
+				particle.velocity = scaleParticleVector(particle.velocity, float32(math.Max(0, 1-float64(particle.drag*delta))))
+			}
 			if particle.age >= particle.life {
 				particle.seed += 0x9e3779b9
 				*particle = spawnM2Particle(group, particle.seed, 0)
 			}
 			position := particlePosition(*particle)
 			group.positions.Set(index*3, position[0], position[1], position[2])
+			color, size, alpha, cell := particleAppearance(group.emitter, *particle)
+			group.colors.Set(index*3, color[0], color[1], color[2])
+			group.params.Set(index*4, size*group.rootScale, alpha, cell[0], cell[1])
+			group.rotations.Set(index, particle.rotation)
 		}
-		group.positionVBO.SetBuffer(group.positions)
-		cells := int(group.emitter.rows) * int(group.emitter.cols)
-		if cells > 1 {
-			frame := int(math.Floor(float64(system.time*8))) % cells
-			row := frame / int(group.emitter.cols)
-			col := frame % int(group.emitter.cols)
-			group.particleTex.SetOffset(float32(col)/float32(group.emitter.cols), float32(row)/float32(group.emitter.rows))
+		if group.positionVBO != nil {
+			group.positionVBO.SetBuffer(group.positions)
+		}
+		if group.colorVBO != nil {
+			group.colorVBO.SetBuffer(group.colors)
+		}
+		if group.paramsVBO != nil {
+			group.paramsVBO.SetBuffer(group.params)
+		}
+		if group.rotationVBO != nil {
+			group.rotationVBO.SetBuffer(group.rotations)
 		}
 	}
+}
+
+func particleAppearance(emitter m2ParticleEmitter, particle m2Particle) ([3]float32, float32, float32, [2]float32) {
+	age := float32(0)
+	if particle.life > 0 {
+		age = particle.age / particle.life
+	}
+	if age < 0 {
+		age = 0
+	}
+	if age > 1 {
+		age = 1
+	}
+	color := [3]float32{emitter.color[0], emitter.color[1], emitter.color[2]}
+	for component := range color {
+		color[component] = emitter.colorTrack.value(age, component, color[component])
+		color[component] = clampParticleValue(color[component]/255, 0, 1)
+	}
+	alpha := clampParticleValue(emitter.alphaTrack.value(age, 0, emitter.alpha), 0, 1)
+	sizeX := finiteParticleValue(emitter.scaleTrack.value(age, 0, emitter.scale[0]))
+	sizeY := finiteParticleValue(emitter.scaleTrack.value(age, 1, emitter.scale[1]))
+	if sizeX <= 0 {
+		sizeX = emitter.scale[0]
+	}
+	if sizeY <= 0 {
+		sizeY = emitter.scale[1]
+	}
+	cell := int(math.Round(float64(emitter.headCellTrack.value(age, 0, 0))))
+	cells := int(emitter.rows) * int(emitter.cols)
+	if cells < 1 {
+		cells = 1
+	}
+	cell %= cells
+	if cell < 0 {
+		cell += cells
+	}
+	columns := int(emitter.cols)
+	if columns < 1 {
+		columns = 1
+	}
+	size := sizeX
+	if sizeY > size {
+		size = sizeY
+	}
+	return color, size, alpha, [2]float32{float32(cell % columns), float32(cell / columns)}
 }
 
 func particlePosition(p m2Particle) [3]float32 {

@@ -39,6 +39,48 @@ void main() {
     FragColor = result;
 }`
 
+const m2ParticleVertexShader = `#include <attributes>
+uniform mat4 MVP;
+uniform mat4 MV;
+in vec4 VertexParticleParams;
+in float VertexParticleRotation;
+out vec3 ParticleColor;
+out float ParticleAlpha;
+out vec2 ParticleCell;
+out float ParticleRotation;
+void main() {
+    vec4 position = MV * vec4(VertexPosition, 1.0);
+    gl_Position = MVP * vec4(VertexPosition, 1.0);
+    gl_PointSize = max(1.0, VertexParticleParams.x * 500.0 / -position.z);
+    ParticleColor = VertexColor;
+    ParticleAlpha = VertexParticleParams.y;
+    ParticleCell = VertexParticleParams.zw;
+    ParticleRotation = VertexParticleRotation;
+}`
+
+const m2ParticleFragmentShader = `precision highp float;
+#include <material>
+in vec3 ParticleColor;
+in float ParticleAlpha;
+in vec2 ParticleCell;
+in float ParticleRotation;
+out vec4 FragColor;
+void main() {
+    vec4 result = vec4(1.0);
+#if MAT_TEXTURES > 0
+    vec2 repeat = MatTexRepeat(0);
+    vec2 sprite = gl_PointCoord;
+    vec2 point = sprite - vec2(0.5);
+    float c = cos(ParticleRotation);
+    float s = sin(ParticleRotation);
+    point = vec2(point.x * c - point.y * s, point.x * s + point.y * c) + vec2(0.5);
+    vec2 coord = point * repeat + ParticleCell * repeat + MatTexOffset(0);
+    result = texture(MatTexture[0], coord);
+#endif
+    float edge = 1.0 - smoothstep(0.4, 0.5, length(sprite - vec2(0.5)));
+    FragColor = vec4(result.rgb * ParticleColor, result.a * ParticleAlpha * edge);
+}`
+
 const m2AlphaKeyFragmentShader = `precision highp float;
 #if MAT_TEXTURES > 0
 uniform sampler2D MatTexture[MAT_TEXTURES];
@@ -81,7 +123,18 @@ uniform sampler2D MatTexture[MAT_TEXTURES];
 in vec2 FragTexcoord;
 out vec4 FragColor;
 void main() {
-    FragColor = texture(MatTexture[0], FragTexcoord);
+    vec2 tiled = FragTexcoord * 8.0;
+    vec4 color = texture(MatTexture[0], tiled);
+#if MAT_TEXTURES > 4
+    color.rgb = mix(color.rgb, texture(MatTexture[1], tiled).rgb, texture(MatTexture[4], FragTexcoord).r);
+#endif
+#if MAT_TEXTURES > 5
+    color.rgb = mix(color.rgb, texture(MatTexture[2], tiled).rgb, texture(MatTexture[5], FragTexcoord).r);
+#endif
+#if MAT_TEXTURES > 6
+    color.rgb = mix(color.rgb, texture(MatTexture[3], tiled).rgb, texture(MatTexture[6], FragTexcoord).r);
+#endif
+    FragColor = vec4(color.rgb, 1.0);
 }`
 
 const worldTerrainAlphaKeyFragmentShader = `precision highp float;
@@ -96,15 +149,56 @@ void main() {
     FragColor = vec4(color.rgb, 1.0);
 }`
 
+const worldWMOVertexShader = `#include <attributes>
+uniform mat4 MVP;
+out vec2 FragTexcoord;
+out vec3 FragVertexColor;
+void main() {
+    FragTexcoord = VertexTexcoord;
+    FragVertexColor = VertexColor;
+    gl_Position = MVP * vec4(VertexPosition, 1.0);
+}`
+
+const worldWMOFragmentShader = `precision highp float;
+uniform sampler2D MatTexture[MAT_TEXTURES];
+in vec2 FragTexcoord;
+in vec3 FragVertexColor;
+out vec4 FragColor;
+void main() {
+    vec4 color = texture(MatTexture[0], FragTexcoord);
+    FragColor = vec4(color.rgb * FragVertexColor, color.a);
+}`
+
+const worldWMOAlphaKeyFragmentShader = `precision highp float;
+uniform sampler2D MatTexture[MAT_TEXTURES];
+in vec2 FragTexcoord;
+in vec3 FragVertexColor;
+out vec4 FragColor;
+void main() {
+    vec4 color = texture(MatTexture[0], FragTexcoord);
+    if (color.a < 0.5) {
+        discard;
+    }
+    FragColor = vec4(color.rgb * FragVertexColor, 1.0);
+}`
+
 func installM2Shaders(r *renderer.Renderer) {
 	r.Shaman.AddShader("morenowow_m2_vertex", m2VertexShader)
 	r.Shaman.AddShader("morenowow_m2_fragment", m2FragmentShader)
+	r.Shaman.AddShader("morenowow_particle_vertex", m2ParticleVertexShader)
+	r.Shaman.AddShader("morenowow_particle_fragment", m2ParticleFragmentShader)
 	r.Shaman.AddShader("morenowow_m2_alpha_key_fragment", m2AlphaKeyFragmentShader)
 	r.Shaman.AddShader("morenowow_world_terrain_vertex", worldTerrainVertexShader)
 	r.Shaman.AddShader("morenowow_world_terrain_fragment", worldTerrainFragmentShader)
 	r.Shaman.AddShader("morenowow_world_terrain_alpha_key_fragment", worldTerrainAlphaKeyFragmentShader)
+	r.Shaman.AddShader("morenowow_world_wmo_vertex", worldWMOVertexShader)
+	r.Shaman.AddShader("morenowow_world_wmo_fragment", worldWMOFragmentShader)
+	r.Shaman.AddShader("morenowow_world_wmo_alpha_key_fragment", worldWMOAlphaKeyFragmentShader)
 	r.Shaman.AddProgram("morenowow_m2", "morenowow_m2_vertex", "morenowow_m2_fragment")
+	r.Shaman.AddProgram("morenowow_particle", "morenowow_particle_vertex", "morenowow_particle_fragment")
 	r.Shaman.AddProgram("morenowow_m2_alpha_key", "morenowow_m2_vertex", "morenowow_m2_alpha_key_fragment")
 	r.Shaman.AddProgram("morenowow_world_terrain", "morenowow_world_terrain_vertex", "morenowow_world_terrain_fragment")
 	r.Shaman.AddProgram("morenowow_world_terrain_alpha_key", "morenowow_world_terrain_vertex", "morenowow_world_terrain_alpha_key_fragment")
+	r.Shaman.AddProgram("morenowow_world_wmo", "morenowow_world_wmo_vertex", "morenowow_world_wmo_fragment")
+	r.Shaman.AddProgram("morenowow_world_wmo_alpha_key", "morenowow_world_wmo_vertex", "morenowow_world_wmo_alpha_key_fragment")
 }

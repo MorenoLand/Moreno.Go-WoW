@@ -36,6 +36,7 @@ const (
 	TimeSyncRequest       uint16 = 0x0390
 	CharacterLoginFailed  uint16 = 0x0041
 	LoginVerifyWorld      uint16 = 0x0236
+	MessageChat           uint16 = 0x0096
 )
 
 type ServerHeader struct {
