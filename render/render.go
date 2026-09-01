@@ -551,6 +551,23 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 			if worldMode && worldCamera != nil {
 				worldCamera.update(elapsed, cam, worldPlayer)
+				if worldPlayer != nil {
+					if info, ok := worldPlayer.UserData().(glueModelInfo); ok {
+						if info.animation != nil {
+							for _, soundID := range info.animation.Update(elapsed) {
+								if debug {
+									log.Printf("world player sound event id=%d", soundID)
+								}
+								if host.audio != nil {
+									host.audio.PlaySoundID(soundID)
+								}
+							}
+						}
+						if info.particles != nil {
+							info.particles.Update(elapsed)
+						}
+					}
+				}
 				if worldSky != nil {
 					cameraPosition := cam.Position()
 					worldSky.SetPositionVec(&cameraPosition)
