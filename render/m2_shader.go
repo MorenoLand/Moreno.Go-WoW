@@ -182,6 +182,25 @@ void main() {
     FragColor = vec4(color.rgb * FragVertexColor, 1.0);
 }`
 
+const worldSkyVertexShader = `#include <attributes>
+uniform mat4 ModelMatrix;
+uniform mat4 MVP;
+out float FragSkyHeight;
+void main() {
+    FragSkyHeight = normalize(mat3(ModelMatrix) * VertexNormal).z;
+    gl_Position = MVP * vec4(VertexPosition, 1.0);
+}`
+
+const worldSkyFragmentShader = `precision highp float;
+in float FragSkyHeight;
+out vec4 FragColor;
+void main() {
+    float height = smoothstep(-0.08, 0.72, FragSkyHeight);
+    vec3 horizon = vec3(0.52, 0.62, 0.72);
+    vec3 zenith = vec3(0.20, 0.34, 0.60);
+    FragColor = vec4(mix(horizon, zenith, height), 1.0);
+}`
+
 func installM2Shaders(r *renderer.Renderer) {
 	r.Shaman.AddShader("morenowow_m2_vertex", m2VertexShader)
 	r.Shaman.AddShader("morenowow_m2_fragment", m2FragmentShader)
@@ -194,6 +213,8 @@ func installM2Shaders(r *renderer.Renderer) {
 	r.Shaman.AddShader("morenowow_world_wmo_vertex", worldWMOVertexShader)
 	r.Shaman.AddShader("morenowow_world_wmo_fragment", worldWMOFragmentShader)
 	r.Shaman.AddShader("morenowow_world_wmo_alpha_key_fragment", worldWMOAlphaKeyFragmentShader)
+	r.Shaman.AddShader("morenowow_world_sky_vertex", worldSkyVertexShader)
+	r.Shaman.AddShader("morenowow_world_sky_fragment", worldSkyFragmentShader)
 	r.Shaman.AddProgram("morenowow_m2", "morenowow_m2_vertex", "morenowow_m2_fragment")
 	r.Shaman.AddProgram("morenowow_particle", "morenowow_particle_vertex", "morenowow_particle_fragment")
 	r.Shaman.AddProgram("morenowow_m2_alpha_key", "morenowow_m2_vertex", "morenowow_m2_alpha_key_fragment")
@@ -201,4 +222,5 @@ func installM2Shaders(r *renderer.Renderer) {
 	r.Shaman.AddProgram("morenowow_world_terrain_alpha_key", "morenowow_world_terrain_vertex", "morenowow_world_terrain_alpha_key_fragment")
 	r.Shaman.AddProgram("morenowow_world_wmo", "morenowow_world_wmo_vertex", "morenowow_world_wmo_fragment")
 	r.Shaman.AddProgram("morenowow_world_wmo_alpha_key", "morenowow_world_wmo_vertex", "morenowow_world_wmo_alpha_key_fragment")
+	r.Shaman.AddProgram("morenowow_world_sky", "morenowow_world_sky_vertex", "morenowow_world_sky_fragment")
 }

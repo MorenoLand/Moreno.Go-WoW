@@ -210,6 +210,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var worldCamera *worldCameraController
 	var worldPlayer *core.Node
 	var worldModel *core.Node
+	var worldSky *core.Node
 	var worldCharacter world.Character
 	var glueCharacters []world.Character
 	var setSceneModel func() bool
@@ -550,6 +551,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 			if worldMode && worldCamera != nil {
 				worldCamera.update(elapsed, cam, worldPlayer)
+				if worldSky != nil {
+					cameraPosition := cam.Position()
+					worldSky.SetPositionVec(&cameraPosition)
+				}
 			}
 			movieChanged := uiEngine.Update(elapsed)
 			sceneChanged := false
@@ -671,6 +676,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					scene.Remove(worldModel)
 					worldModel.Dispose()
 				}
+				if worldSky != nil {
+					scene.Remove(worldSky)
+					worldSky.Dispose()
+					worldSky = nil
+				}
 				if worldPlayer != nil {
 					scene.Remove(worldPlayer)
 					worldPlayer.Dispose()
@@ -678,6 +688,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				}
 				worldModel = loaded
 				scene.Add(worldModel)
+				worldSky = buildWorldSky()
+				worldSky.SetPosition(entry.position.X, entry.position.Y, entry.position.Z)
+				scene.Add(worldSky)
 				if entry.character.GUID != 0 {
 					if player, playerErr := buildWorldPlayer(uiEngine.AssetLoader, entry.character, entry.position); playerErr != nil {
 						if debug {
@@ -702,6 +715,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				}
 				configureWorldCamera(cam, entry.position)
 				worldCamera.update(1.0/60.0, cam, worldPlayer)
+				cameraPosition := cam.Position()
+				worldSky.SetPositionVec(&cameraPosition)
 				if debug {
 					cameraPosition := cam.Position()
 					log.Printf("world: entry position=(%.3f,%.3f,%.3f) orientation=%.3f camera=(%.3f,%.3f,%.3f) near=%.3f far=%.3f", entry.position.X, entry.position.Y, entry.position.Z, entry.position.Orientation, cameraPosition.X, cameraPosition.Y, cameraPosition.Z, cam.Near(), cam.Far())
@@ -775,6 +790,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	if worldModel != nil {
 		scene.Remove(worldModel)
 		worldModel.Dispose()
+	}
+	if worldSky != nil {
+		scene.Remove(worldSky)
+		worldSky.Dispose()
 	}
 	if worldPlayer != nil {
 		scene.Remove(worldPlayer)

@@ -1230,6 +1230,25 @@ func buildWorldTerrain(loader *ui.Loader, adt worldADT, position world.WorldPosi
 	return buildWorldTerrainProgress(loader, adt, position, nil)
 }
 
+func buildWorldSky() *core.Node {
+	root := core.NewNode()
+	root.SetRotation(math.Pi/2, 0, 0)
+	geom := geometry.NewSphere(2400, 64, 32)
+	mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
+	mat.SetShader("morenowow_world_sky")
+	mat.SetShaderUnique(true)
+	mat.SetSide(material.SideDouble)
+	mat.SetUseLights(material.UseLightNone)
+	mat.SetDepthTest(false)
+	mat.SetDepthMask(false)
+	mat.SetTransparent(false)
+	mesh := graphic.NewMesh(geom, mat)
+	mesh.SetCullable(false)
+	mesh.SetRenderOrder(1000)
+	root.Add(mesh)
+	return root
+}
+
 func buildWorldTerrainProgress(loader *ui.Loader, adt worldADT, position world.WorldPosition, progress func(float64)) (*core.Node, worldSceneInfo, error) {
 	root := core.NewNode()
 	textures := make(map[string]*texture.Texture2D)
