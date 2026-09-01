@@ -114,12 +114,12 @@ type worldWMOTriangle struct {
 }
 
 type worldWMOGroup struct {
-	vertices []float32
-	normals  []float32
-	uvs      []float32
-	colors   []float32
-	indices  []uint16
-	batches  []worldWMOBatch
+	vertices  []float32
+	normals   []float32
+	uvs       []float32
+	colors    []float32
+	indices   []uint16
+	batches   []worldWMOBatch
 	triangles []worldWMOTriangle
 }
 
@@ -204,20 +204,20 @@ func newWorldSceneCollision(chunks []worldADTChunk, solids []worldCollisionMesh)
 }
 
 type worldSceneAssetCache struct {
-	textures            map[string]*texture.Texture2D
-	placeholder         *texture.Texture2D
-	terrainPlaceholder  *texture.Texture2D
-	zeroAlpha           *texture.Texture2D
-	opaqueAlpha         *texture.Texture2D
-	wmoModels           map[string]worldWMORoot
-	m2Parts             map[string]map[string]*m2Part
+	textures           map[string]*texture.Texture2D
+	placeholder        *texture.Texture2D
+	terrainPlaceholder *texture.Texture2D
+	zeroAlpha          *texture.Texture2D
+	opaqueAlpha        *texture.Texture2D
+	wmoModels          map[string]worldWMORoot
+	m2Parts            map[string]map[string]*m2Part
 }
 
 func newWorldSceneAssetCache() *worldSceneAssetCache {
 	return &worldSceneAssetCache{
 		textures: make(map[string]*texture.Texture2D), placeholder: texture.NewTexture2DFromRGBA(worldPlaceholderTexture()),
 		terrainPlaceholder: texture.NewTexture2DFromRGBA(worldSolidTexture(color.RGBA{R: 255, G: 255, B: 255, A: 255})),
-		zeroAlpha: texture.NewTexture2DFromRGBA(worldAlphaTexture(nil, false)), opaqueAlpha: texture.NewTexture2DFromRGBA(worldAlphaTexture(nil, true)),
+		zeroAlpha:          texture.NewTexture2DFromRGBA(worldAlphaTexture(nil, false)), opaqueAlpha: texture.NewTexture2DFromRGBA(worldAlphaTexture(nil, true)),
 		wmoModels: make(map[string]worldWMORoot), m2Parts: make(map[string]map[string]*m2Part),
 	}
 }

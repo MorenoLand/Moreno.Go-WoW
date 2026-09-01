@@ -63,6 +63,14 @@ func (c *worldCameraController) handleScroll(offset float32) bool {
 	return true
 }
 
+func (c *worldCameraController) isMoving() bool {
+	return c.velocity[0]*c.velocity[0]+c.velocity[1]*c.velocity[1] > 0.04
+}
+
+func (c *worldCameraController) isAirborne() bool {
+	return math.Abs(float64(c.velocity[2])) > 0.25
+}
+
 func (c *worldCameraController) handleMouse(x, y float64, button window.MouseButton, down bool) bool {
 	if button != window.MouseButtonRight {
 		return false
