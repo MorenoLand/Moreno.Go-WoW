@@ -75,6 +75,23 @@ type UpdateMovement struct {
 	Speeds        [9]float32
 }
 
+type MoveFacing struct {
+	Kind       uint8
+	Angle      float32
+	X, Y, Z    float32
+	TargetGUID uint64
+}
+
+type MonsterMove struct {
+	GUID     uint64
+	From     WorldPosition
+	Path     []WorldPosition
+	To       WorldPosition
+	Duration uint32
+	Stopped  bool
+	Facing   MoveFacing
+}
+
 type UpdateBlock struct {
 	Type       UpdateType
 	GUID       uint64
@@ -426,4 +443,138 @@ func ParseDestroyObject(body []byte) (uint64, error) {
 		return 0, err
 	}
 	return guid, nil
+}
+
+const (
+	monsterMoveNormal       uint8  = 0
+	monsterMoveStop         uint8  = 1
+	monsterMoveFacingSpot   uint8  = 2
+	monsterMoveFacingTarget uint8  = 3
+	monsterMoveFacingAngle  uint8  = 4
+	monsterSplineAnimation  uint32 = 0x00200000
+	monsterSplineParabolic  uint32 = 0x00000800
+	monsterSplineCatmullRom uint32 = 0x00040000
+	monsterSplineCyclic     uint32 = 0x00080000
+	monsterSplineFlying     uint32 = 0x00002000
+)
+
+func ParseMonsterMove(body []byte) (MonsterMove, error) {
+	r := NewReader(body, "SMSG_MONSTER_MOVE")
+	guid, err := ReadPackedGUID(r)
+	if err != nil {
+		return MonsterMove{}, err
+	}
+	if err = r.Skip(1); err != nil {
+		return MonsterMove{}, err
+	}
+	from := WorldPosition{}
+	if from.X, err = r.F32(); err != nil {
+		return MonsterMove{}, err
+	}
+	if from.Y, err = r.F32(); err != nil {
+		return MonsterMove{}, err
+	}
+	if from.Z, err = r.F32(); err != nil {
+		return MonsterMove{}, err
+	}
+	if err = r.Skip(4); err != nil {
+		return MonsterMove{}, err
+	}
+	move := MonsterMove{GUID: guid, From: from}
+	moveType, err := r.U8()
+	if err != nil {
+		return MonsterMove{}, err
+	}
+	move.Facing.Kind = moveType
+	switch moveType {
+	case monsterMoveStop:
+		move.Stopped = true
+		if err = r.Finish(); err != nil {
+			return MonsterMove{}, err
+		}
+		return move, nil
+	case monsterMoveNormal:
+	case monsterMoveFacingSpot:
+		if move.Facing.X, err = r.F32(); err != nil {
+			return MonsterMove{}, err
+		}
+		if move.Facing.Y, err = r.F32(); err != nil {
+			return MonsterMove{}, err
+		}
+		if move.Facing.Z, err = r.F32(); err != nil {
+			return MonsterMove{}, err
+		}
+	case monsterMoveFacingTarget:
+		if move.Facing.TargetGUID, err = r.U64(); err != nil {
+			return MonsterMove{}, err
+		}
+	case monsterMoveFacingAngle:
+		if move.Facing.Angle, err = r.F32(); err != nil {
+			return MonsterMove{}, err
+		}
+	default:
+		return MonsterMove{}, fmt.Errorf("SMSG_MONSTER_MOVE has unknown move type %d", moveType)
+	}
+	flags, err := r.U32()
+	if err != nil {
+		return MonsterMove{}, err
+	}
+	if flags&monsterSplineAnimation != 0 {
+		if err = r.Skip(5); err != nil {
+			return MonsterMove{}, err
+		}
+	}
+	if move.Duration, err = r.U32(); err != nil {
+		return MonsterMove{}, err
+	}
+	if flags&monsterSplineParabolic != 0 {
+		if err = r.Skip(8); err != nil {
+			return MonsterMove{}, err
+		}
+	}
+	count, err := r.U32()
+	if err != nil {
+		return MonsterMove{}, err
+	}
+	if count > 1<<20 {
+		return MonsterMove{}, fmt.Errorf("SMSG_MONSTER_MOVE has too many path points: %d", count)
+	}
+	if flags&(monsterSplineCatmullRom|monsterSplineFlying) != 0 {
+		move.Path = make([]WorldPosition, count)
+		for index := range move.Path {
+			if move.Path[index].X, err = r.F32(); err != nil {
+				return MonsterMove{}, err
+			}
+			if move.Path[index].Y, err = r.F32(); err != nil {
+				return MonsterMove{}, err
+			}
+			if move.Path[index].Z, err = r.F32(); err != nil {
+				return MonsterMove{}, err
+			}
+		}
+		if len(move.Path) > 0 {
+			move.To = move.Path[len(move.Path)-1]
+		}
+	} else {
+		if move.To.X, err = r.F32(); err != nil {
+			return MonsterMove{}, err
+		}
+		if move.To.Y, err = r.F32(); err != nil {
+			return MonsterMove{}, err
+		}
+		if move.To.Z, err = r.F32(); err != nil {
+			return MonsterMove{}, err
+		}
+		if count > 1 {
+			if err = r.Skip(int(count-1) * 4); err != nil {
+				return MonsterMove{}, err
+			}
+		}
+	}
+	if flags&monsterSplineCyclic == 0 {
+		if err = r.Finish(); err != nil {
+			return MonsterMove{}, err
+		}
+	}
+	return move, nil
 }

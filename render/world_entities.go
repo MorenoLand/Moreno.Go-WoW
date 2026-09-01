@@ -26,14 +26,19 @@ type worldCreatureTables struct {
 }
 
 type worldEntity struct {
-	guid        uint64
-	objectType  world.ObjectType
-	fields      map[uint16]uint32
-	movement    world.UpdateMovement
-	hasPosition bool
-	node        *core.Node
-	displayID   uint32
-	attemptedID uint32
+	guid         uint64
+	objectType   world.ObjectType
+	fields       map[uint16]uint32
+	movement     world.UpdateMovement
+	hasPosition  bool
+	path         []world.WorldPosition
+	pathLengths  []float64
+	pathTotal    float64
+	pathElapsed  float64
+	pathDuration float64
+	node         *core.Node
+	displayID    uint32
+	attemptedID  uint32
 }
 
 func (tables *worldCreatureTables) definition(loader *ui.Loader, displayID uint32) (worldCreatureDefinition, error) {
@@ -163,9 +168,14 @@ func wrapWorldModel(model *core.Node, position world.WorldPosition, scale float3
 	model.SetRotation(float32(1.5707963267948966), 0, 0)
 	if info, ok := model.UserData().(glueModelInfo); ok {
 		root.SetUserData(info)
+		offsetX, offsetY, offsetZ := float32(0), float32(0), float32(0)
 		if info.hasStand {
-			model.SetPosition(-info.standPosition.X, info.standPosition.Z, -info.standPosition.Y)
+			offsetX, offsetY, offsetZ = -info.standPosition.X, info.standPosition.Z, -info.standPosition.Y
 		}
+		if info.modelBottom < 0 && -info.modelBottom > offsetZ {
+			offsetZ = -info.modelBottom
+		}
+		model.SetPosition(offsetX, offsetY, offsetZ)
 	}
 	root.Add(model)
 	return root
@@ -173,7 +183,84 @@ func wrapWorldModel(model *core.Node, position world.WorldPosition, scale float3
 
 func worldEntityMoving(entity *worldEntity) bool {
 	flags := entity.movement.MovementFlags
-	return flags&(world.MovementFlagForward|world.MovementFlagBackward|world.MovementFlagStrafeLeft|world.MovementFlagStrafeRight) != 0
+	return len(entity.path) > 0 || flags&(world.MovementFlagForward|world.MovementFlagBackward|world.MovementFlagStrafeLeft|world.MovementFlagStrafeRight) != 0
+}
+
+func applyWorldMonsterMove(entities map[uint64]*worldEntity, move world.MonsterMove) {
+	entity := entities[move.GUID]
+	if entity == nil {
+		entity = &worldEntity{guid: move.GUID, objectType: world.ObjectTypeUnit, fields: make(map[uint16]uint32)}
+		entities[move.GUID] = entity
+	}
+	entity.movement.Position = move.From
+	entity.hasPosition = true
+	entity.pathElapsed = 0
+	entity.pathDuration = float64(move.Duration) / 1000
+	entity.path = nil
+	entity.pathLengths = nil
+	entity.pathTotal = 0
+	if move.Stopped || move.Duration == 0 {
+		entity.movement.MovementFlags &^= world.MovementFlagForward | world.MovementFlagBackward | world.MovementFlagStrafeLeft | world.MovementFlagStrafeRight
+		return
+	}
+	entity.path = make([]world.WorldPosition, 0, len(move.Path)+2)
+	entity.path = append(entity.path, move.From)
+	if len(move.Path) == 0 {
+		entity.path = append(entity.path, move.To)
+	} else {
+		entity.path = append(entity.path, move.Path...)
+	}
+	entity.pathLengths = make([]float64, len(entity.path)-1)
+	for index := range entity.pathLengths {
+		dx := float64(entity.path[index+1].X - entity.path[index].X)
+		dy := float64(entity.path[index+1].Y - entity.path[index].Y)
+		dz := float64(entity.path[index+1].Z - entity.path[index].Z)
+		entity.pathLengths[index] = math.Sqrt(dx*dx + dy*dy + dz*dz)
+		entity.pathTotal += entity.pathLengths[index]
+	}
+	entity.movement.MovementFlags |= world.MovementFlagForward
+	if move.Facing.Kind == 4 {
+		entity.movement.Position.Orientation = move.Facing.Angle
+	}
+}
+
+func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64) {
+	if elapsed <= 0 {
+		return
+	}
+	for _, entity := range entities {
+		if len(entity.path) < 2 || entity.pathDuration <= 0 || entity.pathTotal <= 0 {
+			continue
+		}
+		entity.pathElapsed += elapsed
+		points := entity.path
+		remaining := float32(math.Min(entity.pathElapsed/entity.pathDuration, 1))
+		distance := float64(remaining) * entity.pathTotal
+		segment := 0
+		for segment < len(entity.pathLengths)-1 && distance > entity.pathLengths[segment] {
+			distance -= entity.pathLengths[segment]
+			segment++
+		}
+		fraction := float32(0)
+		if entity.pathLengths[segment] > 0 {
+			fraction = float32(distance / entity.pathLengths[segment])
+		}
+		from, to := points[segment], points[segment+1]
+		entity.movement.Position = world.WorldPosition{X: from.X + (to.X-from.X)*fraction, Y: from.Y + (to.Y-from.Y)*fraction, Z: from.Z + (to.Z-from.Z)*fraction, Orientation: float32(math.Atan2(float64(to.Y-from.Y), float64(to.X-from.X)))}
+		if remaining >= 1 {
+			entity.movement.Position = points[len(points)-1]
+		}
+		if remaining >= 1 {
+			entity.path = nil
+			entity.pathElapsed = 0
+			entity.pathDuration = 0
+			entity.movement.MovementFlags &^= world.MovementFlagForward | world.MovementFlagBackward | world.MovementFlagStrafeLeft | world.MovementFlagStrafeRight
+		}
+		if entity.node != nil {
+			entity.node.SetPosition(entity.movement.Position.X, entity.movement.Position.Y, entity.movement.Position.Z)
+			entity.node.SetRotation(0, 0, entity.movement.Position.Orientation)
+		}
+	}
 }
 
 func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureTables, entity *worldEntity, ownGUID uint64) error {
@@ -262,8 +349,14 @@ func applyWorldUpdateBlocks(scene *core.Node, loader *ui.Loader, tables *worldCr
 				continue
 			}
 			if block.Movement.HasPosition {
-				entity.movement = block.Movement
-				entity.hasPosition = true
+				if len(entity.path) == 0 {
+					entity.movement = block.Movement
+					entity.hasPosition = true
+				} else {
+					entity.movement.Flags = block.Movement.Flags
+					entity.movement.MovementFlags = block.Movement.MovementFlags
+					entity.movement.Speeds = block.Movement.Speeds
+				}
 			}
 			if err := syncWorldEntity(scene, loader, tables, entity, ownGUID); err != nil {
 				errors = append(errors, err)

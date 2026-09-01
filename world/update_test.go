@@ -67,6 +67,33 @@ func TestParseDestroyObject(t *testing.T) {
 	}
 }
 
+func TestParseMonsterMove(t *testing.T) {
+	body := []byte{0x03, 0x34, 0x12, 0}
+	for _, value := range []float32{1, 2, 3} {
+		var raw [4]byte
+		binary.LittleEndian.PutUint32(raw[:], mathFloat32bits(value))
+		body = append(body, raw[:]...)
+	}
+	body = append(body, 0, 0, 0, 0, 0)
+	body = append(body, 0, 0, 0, 0)
+	var raw [4]byte
+	binary.LittleEndian.PutUint32(raw[:], 1000)
+	body = append(body, raw[:]...)
+	binary.LittleEndian.PutUint32(raw[:], 1)
+	body = append(body, raw[:]...)
+	for _, value := range []float32{5, 6, 7} {
+		binary.LittleEndian.PutUint32(raw[:], mathFloat32bits(value))
+		body = append(body, raw[:]...)
+	}
+	move, err := ParseMonsterMove(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if move.GUID != 0x1234 || move.Duration != 1000 || move.From.X != 1 || move.To != (WorldPosition{X: 5, Y: 6, Z: 7}) {
+		t.Fatalf("move=%+v", move)
+	}
+}
+
 func mathFloat32bits(value float32) uint32 {
 	return math.Float32bits(value)
 }

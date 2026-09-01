@@ -559,6 +559,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 			if worldMode && worldCamera != nil {
 				worldCamera.update(elapsed, cam, worldPlayer)
+				advanceWorldEntities(worldEntities, elapsed)
 				if worldPlayer != nil {
 					if info, ok := worldPlayer.UserData().(glueModelInfo); ok {
 						if info.animation != nil {
@@ -849,6 +850,21 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						log.Printf("world update: blocks=%d entities=%d models=%d errors=%d", len(blocks), len(worldEntities), models, len(modelErrors))
 						for _, modelErr := range modelErrors {
 							log.Printf("world entity: %v", modelErr)
+						}
+					}
+					refresh()
+				case world.MonsterMoveOpcode:
+					move, moveErr := world.ParseMonsterMove(event.Packet.Body)
+					if moveErr != nil {
+						if debug {
+							log.Printf("world monster move: %v", moveErr)
+						}
+						break
+					}
+					applyWorldMonsterMove(worldEntities, move)
+					if entity := worldEntities[move.GUID]; entity != nil {
+						if syncErr := syncWorldEntity(scene, uiEngine.AssetLoader, &worldCreatureCache, entity, worldCharacter.GUID); syncErr != nil && debug {
+							log.Printf("world monster entity: %v", syncErr)
 						}
 					}
 					refresh()

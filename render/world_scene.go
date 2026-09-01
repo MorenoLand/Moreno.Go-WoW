@@ -1160,18 +1160,7 @@ func buildWorldPlayer(loader *ui.Loader, character world.Character, position wor
 	if err != nil {
 		return nil, err
 	}
-	root := core.NewNode()
-	root.SetPosition(position.X, position.Y, position.Z)
-	root.SetRotation(0, 0, position.Orientation)
-	model.SetRotation(math.Pi/2, 0, 0)
-	if info, ok := model.UserData().(glueModelInfo); ok {
-		root.SetUserData(info)
-		if info.hasStand {
-			model.SetPosition(-info.standPosition.X, info.standPosition.Z, -info.standPosition.Y)
-		}
-	}
-	root.Add(model)
-	return root, nil
+	return wrapWorldModel(model, position, 1), nil
 }
 
 func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int, []worldCollisionMesh) {

@@ -180,6 +180,7 @@ type glueModelInfo struct {
 	far           float32
 	near          float32
 	hasStand      bool
+	modelBottom   float32
 	stats         glueModelStats
 	particles     *m2ParticleSystem
 	animation     *m2Animation
@@ -326,6 +327,13 @@ func buildGlueModel(loader *ui.Loader, modelPath string, model parsedM2, skin pa
 	center, scale := modelTransform(model.vertices)
 	root.SetPosition(-center[0]*scale, -center[1]*scale, -center[2]*scale)
 	root.SetScale(scale, scale, scale)
+	modelBottom := float32(math.MaxFloat32)
+	for _, vertex := range model.vertices {
+		point := modelVector(vertex.position)
+		if bottom := (point[1] - center[1]) * scale; bottom < modelBottom {
+			modelBottom = bottom
+		}
+	}
 	stats.textures = len(texturePaths)
 	particles := buildM2ParticleSystem(loader, &model, root, scale, textures)
 	if particles != nil {
@@ -333,7 +341,7 @@ func buildGlueModel(loader *ui.Loader, modelPath string, model parsedM2, skin pa
 		stats.particlePoints = particles.pointCount
 	}
 	animation := buildM2Animation(&model, skin, animatedMeshes, modelPath)
-	info := glueModelInfo{stats: stats, particles: particles, animation: animation, modelScale: scale}
+	info := glueModelInfo{stats: stats, particles: particles, animation: animation, modelScale: scale, modelBottom: modelBottom}
 	for _, attachment := range model.attachments {
 		if attachment.id == 0 {
 			point := modelPoint(attachment.position, center, scale)

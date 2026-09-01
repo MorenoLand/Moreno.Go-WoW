@@ -41,6 +41,7 @@ const (
 	DestroyObject          uint16 = 0x00AA
 	CompressedUpdateObject uint16 = 0x01F6
 	LoginSetTimeSpeed      uint16 = 0x0042
+	MonsterMoveOpcode      uint16 = 0x00DD
 )
 
 type ServerHeader struct {
