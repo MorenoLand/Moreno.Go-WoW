@@ -44,3 +44,38 @@ func TestLiveMovieClipDecodesMultipleFrames(t *testing.T) {
 		t.Fatalf("movie did not advance at %.3f fps", clip.fps)
 	}
 }
+
+func TestLiveMovieFrameRendersDecodedVideo(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set; skipped")
+	}
+	engine, err := LoadUIEngineFromMPQ(dataPath, "enUS", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if engine.Rt.widgets["MovieFrame"] == nil {
+		t.Fatal("MovieFrame missing from live Glue UI")
+	}
+	if !engine.Rt.Execute(`MovieFrame:Show(); MovieFrame:StartMovie("Interface\\Cinematics\\WOW_Intro_LK_1024", 0)`, "@movie-test.lua") {
+		t.Fatalf("start movie failed: %v", engine.Rt.ScriptErrors())
+	}
+	engine.Update(0.1)
+	if engine.movie == nil || engine.movieImage == nil {
+		t.Fatal("MovieFrame started without a decoded video frame")
+	}
+	frame := engine.Render(640, 480)
+	colored := 0
+	for y := 0; y < frame.Bounds().Dy(); y += 16 {
+		for x := 0; x < frame.Bounds().Dx(); x += 16 {
+			_, _, _, alpha := frame.At(x, y).RGBA()
+			if alpha != 0 {
+				colored++
+			}
+		}
+	}
+	if colored == 0 {
+		t.Fatal("decoded MovieFrame did not reach the rendered canvas")
+	}
+}

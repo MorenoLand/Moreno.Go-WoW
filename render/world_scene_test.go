@@ -241,3 +241,63 @@ func TestLiveAzerothNeighborWMOInventory(t *testing.T) {
 		t.Logf("neighbor WMO %s groups=%d materials=%d sets=%d doodads=%d blendModes=%v", placement.path, root.groupCount, len(root.materials), len(root.doodadSets), len(root.doodads), blendModes)
 	}
 }
+
+func TestLiveAzerothM2AxisInventory(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	rt := ui.NewRuntime(nil)
+	defer rt.Close()
+	loader, err := ui.NewMPQLoader(dataPath, "enUS", rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loader.Close()
+	data, err := loader.ReadFile(`World\Maps\Azeroth\Azeroth_31_49.adt`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adt, err := parseWorldADT(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]bool)
+	count := 0
+	for _, placement := range adt.m2Placements {
+		if strings.Contains(strings.ToUpper(placement.path), "FENCE") {
+			t.Logf("M2 placement fence path=%s position=%v rotation=%v scale=%f", placement.path, placement.position, placement.rotation, placement.scale)
+			break
+		}
+	}
+	for _, path := range adt.m2Names {
+		upper := strings.ToUpper(path)
+		if seen[path] || (!strings.Contains(upper, "TREE") && !strings.Contains(upper, "FENCE")) {
+			continue
+		}
+		seen[path] = true
+		modelData, readErr := loader.ReadFile(normalizeModelPath(path))
+		if readErr != nil {
+			continue
+		}
+		model, parseErr := parseM2(modelData)
+		if parseErr != nil || len(model.vertices) == 0 {
+			continue
+		}
+		min, max := model.vertices[0].position, model.vertices[0].position
+		for _, vertex := range model.vertices[1:] {
+			for axis := 0; axis < 3; axis++ {
+				min[axis] = float32(math.Min(float64(min[axis]), float64(vertex.position[axis])))
+				max[axis] = float32(math.Max(float64(max[axis]), float64(vertex.position[axis])))
+			}
+		}
+		t.Logf("M2 axis %s rawBounds=%v..%v", path, min, max)
+		count++
+		if count == 8 {
+			break
+		}
+	}
+	if count == 0 {
+		t.Fatal("tile has no readable tree/fence M2")
+	}
+}
