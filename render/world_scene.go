@@ -29,6 +29,7 @@ const (
 
 type worldADT struct {
 	version       uint32
+	bigAlpha      bool
 	textures      []string
 	m2Names       []string
 	m2Placements  []worldM2Placement
@@ -191,11 +192,12 @@ func loadWorldTerrainProgress(loader *ui.Loader, position world.WorldPosition, p
 		return nil, worldSceneInfo{}, fmt.Errorf("world position %.3f,%.3f maps outside tile grid at %d,%d", position.X, position.Y, tileX, tileY)
 	}
 	path := fmt.Sprintf(`World\Maps\%s\%s_%d_%d.adt`, mapName, mapName, tileX, tileY)
+	bigAlpha := worldMapBigAlpha(loader, mapName)
 	data, err := loader.ReadFile(path)
 	if err != nil {
 		return nil, worldSceneInfo{}, fmt.Errorf("read %s: %w", path, err)
 	}
-	adt, err := parseWorldADT(data)
+	adt, err := parseWorldADTWithAlpha(data, bigAlpha)
 	if err != nil {
 		return nil, worldSceneInfo{}, fmt.Errorf("parse %s: %w", path, err)
 	}
@@ -235,6 +237,27 @@ func mapFallbackName(id uint32) string {
 	default:
 		return ""
 	}
+}
+
+func worldMapBigAlpha(loader *ui.Loader, mapName string) bool {
+	if loader == nil || mapName == "" {
+		return false
+	}
+	data, err := loader.ReadFile(fmt.Sprintf(`World\Maps\%s\%s.wdt`, mapName, mapName))
+	if err != nil {
+		return false
+	}
+	for offset := 0; offset < len(data); {
+		id, _, payload, _, next, ok := worldChunk(data, offset)
+		if !ok {
+			break
+		}
+		if id == "MPHD" && len(payload) >= 4 {
+			return binary.LittleEndian.Uint32(payload[:4])&0x4 != 0
+		}
+		offset = next
+	}
+	return false
 }
 
 func parseMapNames(data []byte) map[uint32]string {
@@ -353,7 +376,11 @@ func worldTileAt(x, y float32) (int, int) {
 }
 
 func parseWorldADT(data []byte) (worldADT, error) {
-	result := worldADT{}
+	return parseWorldADTWithAlpha(data, false)
+}
+
+func parseWorldADTWithAlpha(data []byte, bigAlpha bool) (worldADT, error) {
+	result := worldADT{bigAlpha: bigAlpha}
 	var main []byte
 	var mmdx, mmid, mddf, mwmo, mwid, modf []byte
 	for offset := 0; offset < len(data); {
@@ -401,7 +428,7 @@ func parseWorldADT(data []byte) (worldADT, error) {
 		if chunkOffset == 0 {
 			continue
 		}
-		chunk, ok := parseWorldMCNK(data, chunkOffset, index%16, index/16, result.textures)
+		chunk, ok := parseWorldMCNK(data, chunkOffset, index%16, index/16, result.textures, result.bigAlpha)
 		if ok {
 			result.chunks = append(result.chunks, chunk)
 		}
@@ -1068,7 +1095,7 @@ func parseWorldTextureNames(data []byte) []string {
 	return result
 }
 
-func parseWorldMCNK(data []byte, offset, fallbackX, fallbackY int, textures []string) (worldADTChunk, bool) {
+func parseWorldMCNK(data []byte, offset, fallbackX, fallbackY int, textures []string, bigAlpha bool) (worldADTChunk, bool) {
 	id, size, payload, _, _, ok := worldChunk(data, offset)
 	if !ok || id != "MCNK" || len(payload) < 128 || size < 128 {
 		return worldADTChunk{}, false
@@ -1108,14 +1135,10 @@ func parseWorldMCNK(data []byte, offset, fallbackX, fallbackY int, textures []st
 			}
 		}
 		if len(chunk.layers) > 1 {
-			mcal, _ := worldSubChunk(data, offset, int(binary.LittleEndian.Uint32(payload[0x20:0x24])), "MCAL")
+			mcal, _ := worldSubChunk(data, offset, int(binary.LittleEndian.Uint32(payload[0x24:0x28])), "MCAL")
 			for index := 1; index < len(chunk.layers); index++ {
 				layer := chunk.layers[index]
-				if layer.flags&0x100 == 0 {
-					chunk.alphaMaps = append(chunk.alphaMaps, opaqueWorldAlphaMap())
-					continue
-				}
-				chunk.alphaMaps = append(chunk.alphaMaps, decodeWorldAlphaMap(mcal, int(layer.alphaOffset), layer.flags&0x200 != 0))
+				chunk.alphaMaps = append(chunk.alphaMaps, decodeWorldAlphaMap(mcal, int(layer.alphaOffset), layer.flags&0x200 != 0, bigAlpha, chunk.flags&0x8000 != 0))
 			}
 		}
 	}
@@ -1130,7 +1153,7 @@ func opaqueWorldAlphaMap() []byte {
 	return alpha
 }
 
-func decodeWorldAlphaMap(data []byte, offset int, compressed bool) []byte {
+func decodeWorldAlphaMap(data []byte, offset int, compressed, bigAlpha, doNotFix bool) []byte {
 	alpha := make([]byte, 64*64)
 	if offset < 0 || offset >= len(data) {
 		return alpha
@@ -1164,14 +1187,22 @@ func decodeWorldAlphaMap(data []byte, offset int, compressed bool) []byte {
 		}
 		return alpha
 	}
-	if offset+4096 <= len(data) {
+	if bigAlpha && offset+4096 <= len(data) {
 		copy(alpha, data[offset:offset+4096])
 		return alpha
 	}
-	if offset+2048 <= len(data) {
+	if !bigAlpha && offset+2048 <= len(data) {
 		for index, packed := range data[offset : offset+2048] {
 			alpha[index*2] = (packed & 0x0f) * 17
 			alpha[index*2+1] = (packed >> 4) * 17
+		}
+		if !doNotFix {
+			for row := 0; row < 64; row++ {
+				alpha[row*64+63] = alpha[row*64+62]
+			}
+			for column := 0; column < 64; column++ {
+				alpha[63*64+column] = alpha[62*64+column]
+			}
 		}
 	}
 	return alpha
