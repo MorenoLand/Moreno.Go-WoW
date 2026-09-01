@@ -227,6 +227,26 @@ func (collision worldSceneCollision) ground(x, y float32) (float32, bool) {
 	return height, ok
 }
 
+func (collision worldSceneCollision) floor(x, y, reference float32) (float32, bool) {
+	best, _, found := collision.terrain(x, y)
+	if !found || best < reference-5 || best > reference+0.8 {
+		found = false
+	}
+	cell := [2]int{int(math.Floor(float64(x / worldCollisionCell))), int(math.Floor(float64(y / worldCollisionCell)))}
+	for _, ref := range collision.cells[cell] {
+		triangle := collision.solids[ref.mesh].triangles[ref.triangle]
+		if math.Abs(float64(triangle.normal[2])) < 0.5 || !worldPointInTriangle2D([2]float32{x, y}, [2]float32{triangle.a[0], triangle.a[1]}, [2]float32{triangle.b[0], triangle.b[1]}, [2]float32{triangle.c[0], triangle.c[1]}) || triangle.normal[2] == 0 {
+			continue
+		}
+		height := triangle.a[2] - (triangle.normal[0]*(x-triangle.a[0])+triangle.normal[1]*(y-triangle.a[1]))/triangle.normal[2]
+		if height < reference-5 || height > reference+0.8 || (found && height <= best) {
+			continue
+		}
+		best, found = height, true
+	}
+	return best, found
+}
+
 func (collision worldSceneCollision) terrain(x, y float32) (float32, [3]float32, bool) {
 	for _, chunk := range collision.chunks {
 		localX := (chunk.position[0] - x) / worldUnitSize
@@ -430,9 +450,8 @@ func (collision worldSceneCollision) cameraPosition(focus, eye math32.Vector3) m
 			}
 		}
 	}
-	if nearest < 1 {
-		allowed := float32(math.Max(0, float64(nearest-0.035)))
-		return *math32.NewVector3(focus.X+spanX*allowed, focus.Y+spanY*allowed, focus.Z+spanZ*allowed)
+	if nearest < allowed {
+		allowed = float32(math.Max(0, float64(nearest-0.035)))
 	}
 	return *math32.NewVector3(focus.X+spanX*allowed, focus.Y+spanY*allowed, focus.Z+spanZ*allowed)
 }

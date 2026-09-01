@@ -328,10 +328,11 @@ func buildGlueModel(loader *ui.Loader, modelPath string, model parsedM2, skin pa
 	root.SetPosition(-center[0]*scale, -center[1]*scale, -center[2]*scale)
 	root.SetScale(scale, scale, scale)
 	modelBottom := float32(math.MaxFloat32)
-	for _, vertex := range model.vertices {
-		point := modelVector(vertex.position)
-		if bottom := (point[1] - center[1]) * scale; bottom < modelBottom {
-			modelBottom = bottom
+	for _, part := range parts {
+		for index := 1; index < len(part.positions); index += 3 {
+			if bottom := (part.positions[index] - center[1]) * scale; bottom < modelBottom {
+				modelBottom = bottom
+			}
 		}
 	}
 	stats.textures = len(texturePaths)

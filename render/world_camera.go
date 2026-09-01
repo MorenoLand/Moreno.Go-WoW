@@ -18,6 +18,7 @@ type worldCameraController struct {
 	pitch      float32
 	keys       map[window.Key]bool
 	ground     func(float32, float32) (float32, bool)
+	floor      func(float32, float32, float32) (float32, bool)
 	move       func([3]float32, [3]float32) [3]float32
 	cameraTest func(math32.Vector3, math32.Vector3) math32.Vector3
 	jumpQueued bool
@@ -45,6 +46,10 @@ func (c *worldCameraController) handleKey(key window.Key, down bool) bool {
 
 func (c *worldCameraController) setGround(ground func(float32, float32) (float32, bool)) {
 	c.ground = ground
+}
+
+func (c *worldCameraController) setFloor(floor func(float32, float32, float32) (float32, bool)) {
+	c.floor = floor
 }
 
 func (c *worldCameraController) setMovement(move func([3]float32, [3]float32) [3]float32) {
@@ -153,7 +158,9 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 	c.position[0], c.position[1] = to[0], to[1]
 	grounded := false
 	groundHeight := float32(0)
-	if c.ground != nil {
+	if c.floor != nil {
+		groundHeight, grounded = c.floor(c.position[0], c.position[1], c.position[2])
+	} else if c.ground != nil {
 		groundHeight, grounded = c.ground(c.position[0], c.position[1])
 		if grounded && c.position[2] <= groundHeight+0.05 && c.velocity[2] <= 0 {
 			c.position[2] = groundHeight
@@ -167,7 +174,12 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 	c.jumpQueued = false
 	c.velocity[2] -= 24 * delta
 	c.position[2] += c.velocity[2] * delta
-	if c.ground != nil {
+	if c.floor != nil {
+		if height, ok := c.floor(c.position[0], c.position[1], c.position[2]); ok && c.position[2] <= height {
+			c.position[2] = height
+			c.velocity[2] = 0
+		}
+	} else if c.ground != nil {
 		if height, ok := c.ground(c.position[0], c.position[1]); ok && c.position[2] <= height {
 			c.position[2] = height
 			c.velocity[2] = 0

@@ -26,19 +26,20 @@ type worldCreatureTables struct {
 }
 
 type worldEntity struct {
-	guid         uint64
-	objectType   world.ObjectType
-	fields       map[uint16]uint32
-	movement     world.UpdateMovement
-	hasPosition  bool
-	path         []world.WorldPosition
-	pathLengths  []float64
-	pathTotal    float64
-	pathElapsed  float64
-	pathDuration float64
-	node         *core.Node
-	displayID    uint32
-	attemptedID  uint32
+	guid          uint64
+	objectType    world.ObjectType
+	fields        map[uint16]uint32
+	movement      world.UpdateMovement
+	hasPosition   bool
+	path          []world.WorldPosition
+	pathLengths   []float64
+	pathTotal     float64
+	pathElapsed   float64
+	pathDuration  float64
+	arrivalFacing world.MoveFacing
+	node          *core.Node
+	displayID     uint32
+	attemptedID   uint32
 }
 
 func (tables *worldCreatureTables) definition(loader *ui.Loader, displayID uint32) (worldCreatureDefinition, error) {
@@ -192,19 +193,29 @@ func applyWorldMonsterMove(entities map[uint64]*worldEntity, move world.MonsterM
 		entity = &worldEntity{guid: move.GUID, objectType: world.ObjectTypeUnit, fields: make(map[uint16]uint32)}
 		entities[move.GUID] = entity
 	}
-	entity.movement.Position = move.From
+	start := move.From
+	if entity.hasPosition && len(entity.path) > 0 {
+		dx := float64(entity.movement.Position.X - move.From.X)
+		dy := float64(entity.movement.Position.Y - move.From.Y)
+		dz := float64(entity.movement.Position.Z - move.From.Z)
+		if math.Sqrt(dx*dx+dy*dy+dz*dz) < 5 {
+			start = entity.movement.Position
+		}
+	}
+	entity.movement.Position = start
 	entity.hasPosition = true
 	entity.pathElapsed = 0
 	entity.pathDuration = float64(move.Duration) / 1000
 	entity.path = nil
 	entity.pathLengths = nil
 	entity.pathTotal = 0
+	entity.arrivalFacing = move.Facing
 	if move.Stopped || move.Duration == 0 {
 		entity.movement.MovementFlags &^= world.MovementFlagForward | world.MovementFlagBackward | world.MovementFlagStrafeLeft | world.MovementFlagStrafeRight
 		return
 	}
 	entity.path = make([]world.WorldPosition, 0, len(move.Path)+2)
-	entity.path = append(entity.path, move.From)
+	entity.path = append(entity.path, start)
 	if len(move.Path) == 0 {
 		entity.path = append(entity.path, move.To)
 	} else {
@@ -249,6 +260,12 @@ func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64) {
 		entity.movement.Position = world.WorldPosition{X: from.X + (to.X-from.X)*fraction, Y: from.Y + (to.Y-from.Y)*fraction, Z: from.Z + (to.Z-from.Z)*fraction, Orientation: float32(math.Atan2(float64(to.Y-from.Y), float64(to.X-from.X)))}
 		if remaining >= 1 {
 			entity.movement.Position = points[len(points)-1]
+			switch entity.arrivalFacing.Kind {
+			case 2:
+				entity.movement.Position.Orientation = float32(math.Atan2(float64(entity.arrivalFacing.Y-entity.movement.Position.Y), float64(entity.arrivalFacing.X-entity.movement.Position.X)))
+			case 4:
+				entity.movement.Position.Orientation = entity.arrivalFacing.Angle
+			}
 		}
 		if remaining >= 1 {
 			entity.path = nil

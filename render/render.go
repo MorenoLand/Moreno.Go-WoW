@@ -764,6 +764,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				worldCamera = newWorldCameraController(entry.position)
 				if collision, ok := loaded.UserData().(worldSceneCollision); ok {
 					worldCamera.setGround(collision.ground)
+					worldCamera.setFloor(collision.floor)
 					worldCamera.setMovement(collision.move)
 					worldCamera.setCameraTest(collision.cameraPosition)
 					if debug {
@@ -862,6 +863,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						break
 					}
 					applyWorldMonsterMove(worldEntities, move)
+					if debug {
+						log.Printf("world monster move: guid=%016X duration=%d points=%d", move.GUID, move.Duration, len(move.Path))
+					}
 					if entity := worldEntities[move.GUID]; entity != nil {
 						if syncErr := syncWorldEntity(scene, uiEngine.AssetLoader, &worldCreatureCache, entity, worldCharacter.GUID); syncErr != nil && debug {
 							log.Printf("world monster entity: %v", syncErr)

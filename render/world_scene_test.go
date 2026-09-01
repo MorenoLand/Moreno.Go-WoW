@@ -73,6 +73,9 @@ func TestLiveWorldPlayerBuild(t *testing.T) {
 		t.Fatal("world player has no drawable children")
 	}
 	t.Logf("world player children=%d position=%v", len(player.Children()), player.Position())
+	if info, ok := player.UserData().(glueModelInfo); ok {
+		t.Logf("world player stand=(%v,%v,%v) bottom=%v", info.standPosition.X, info.standPosition.Y, info.standPosition.Z, info.modelBottom)
+	}
 	parts, err := loadWorldM2Parts(loader, `Character\NightElf\Female\NightElfFemale.m2`)
 	if err != nil {
 		t.Fatal(err)
