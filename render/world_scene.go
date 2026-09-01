@@ -700,7 +700,19 @@ func loadWorldM2Parts(loader *ui.Loader, modelPath string) (map[string]*m2Part, 
 		return nil, err
 	}
 	parts := buildM2Parts(model, skin)
+	convertWorldM2Parts(parts)
 	return parts, nil
+}
+
+func convertWorldM2Parts(parts map[string]*m2Part) {
+	for _, part := range parts {
+		for index := 0; index+2 < len(part.positions); index += 3 {
+			x, y, z := part.positions[index], part.positions[index+1], part.positions[index+2]
+			part.positions.Set(index, -z, -x, y)
+			x, y, z = part.normals[index], part.normals[index+1], part.normals[index+2]
+			part.normals.Set(index, -z, -x, y)
+		}
+	}
 }
 
 func buildWorldM2Instance(loader *ui.Loader, parts map[string]*m2Part, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) *core.Node {
@@ -792,7 +804,11 @@ func worldM2Rotation(rotation [3]float32) *math32.Quaternion {
 	qz := math32.NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(math32.NewVector3(0, 0, 1), float32(float64(rotation[1]+180)*math.Pi/180))
 	qy := math32.NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(math32.NewVector3(0, 1, 0), float32(float64(rotation[0])*math.Pi/180))
 	qx := math32.NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(math32.NewVector3(1, 0, 0), float32(float64(rotation[2])*math.Pi/180))
-	return qz.Multiply(qy).Multiply(qx).Normalize()
+	return qz.Multiply(qy).Multiply(qx).Multiply(worldM2BasisInverse()).Normalize()
+}
+
+func worldM2BasisInverse() *math32.Quaternion {
+	return math32.NewQuaternion(-0.5, 0.5, 0.5, 0.5)
 }
 
 func worldWMORotation(rotation [3]float32) *math32.Quaternion {
@@ -804,7 +820,7 @@ func worldWMORotation(rotation [3]float32) *math32.Quaternion {
 
 func worldWMODoodadRotation(rotation [4]float32, parent [3]float32) *math32.Quaternion {
 	local := math32.NewQuaternion(rotation[0], rotation[1], rotation[2], rotation[3]).Normalize()
-	return worldWMORotation(parent).Multiply(local).Normalize()
+	return worldWMORotation(parent).Multiply(local).Multiply(worldM2BasisInverse()).Normalize()
 }
 
 func worldCharacterModelPath(character world.Character) string {

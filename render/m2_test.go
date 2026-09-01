@@ -59,6 +59,29 @@ func TestNormalizeModelPathResolvesLegacyMDX(t *testing.T) {
 	}
 }
 
+func TestWorldM2BasisConversionKeepsStandingAxis(t *testing.T) {
+	part := &m2Part{positions: []float32{1, 2, 3}, normals: []float32{4, 5, 6}}
+	convertWorldM2Parts(map[string]*m2Part{"test": part})
+	if got, want := []float32(part.positions), []float32{-3, -1, 2}; !equalFloatSlice(got, want) {
+		t.Fatalf("positions=%v want %v", got, want)
+	}
+	if got, want := []float32(part.normals), []float32{-6, -4, 5}; !equalFloatSlice(got, want) {
+		t.Fatalf("normals=%v want %v", got, want)
+	}
+}
+
+func equalFloatSlice(left, right []float32) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestLiveCharacterModelBounds(t *testing.T) {
 	dataPath := os.Getenv("WOW_TEST_DATA")
 	if dataPath == "" {
