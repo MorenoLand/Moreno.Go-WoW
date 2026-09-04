@@ -160,11 +160,13 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 	groundHeight := float32(0)
 	if c.floor != nil {
 		groundHeight, grounded = c.floor(c.position[0], c.position[1], c.position[2])
+		if grounded && c.velocity[2] == 0 && math.Abs(float64(c.position[2]-groundHeight)) <= worldMaxGroundSnap {
+			c.position[2] = groundHeight
+		}
 	} else if c.ground != nil {
 		groundHeight, grounded = c.ground(c.position[0], c.position[1])
-		if grounded && c.position[2] <= groundHeight+0.05 && c.velocity[2] <= 0 {
+		if grounded && c.velocity[2] == 0 && math.Abs(float64(c.position[2]-groundHeight)) <= worldMaxGroundSnap {
 			c.position[2] = groundHeight
-			c.velocity[2] = 0
 		}
 	}
 	if c.jumpQueued && grounded {

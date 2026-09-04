@@ -26,6 +26,11 @@ const (
 	worldHeightCount     = 145
 	worldStreamRadius    = 1
 	worldCollisionCell   = 32.0
+	worldFloorNormalZ    = 0.5
+	worldBodyRadius      = 0.55
+	worldBodyHeight      = 2.0
+	worldStepHeight      = 0.8
+	worldMaxGroundSnap   = 5.0
 	worldObjectDistance  = worldTileSize * 1.5
 	worldWMODoodadBudget = 512
 )
@@ -230,17 +235,17 @@ func (collision worldSceneCollision) ground(x, y float32) (float32, bool) {
 
 func (collision worldSceneCollision) floor(x, y, reference float32) (float32, bool) {
 	best, _, found := collision.terrain(x, y)
-	if !found || best < reference-5 || best > reference+0.8 {
+	if !found || best < reference-worldMaxGroundSnap || best > reference+worldStepHeight {
 		found = false
 	}
 	cell := [2]int{int(math.Floor(float64(x / worldCollisionCell))), int(math.Floor(float64(y / worldCollisionCell)))}
 	for _, ref := range collision.cells[cell] {
 		triangle := collision.solids[ref.mesh].triangles[ref.triangle]
-		if math.Abs(float64(triangle.normal[2])) < 0.5 || !worldPointInTriangle2D([2]float32{x, y}, [2]float32{triangle.a[0], triangle.a[1]}, [2]float32{triangle.b[0], triangle.b[1]}, [2]float32{triangle.c[0], triangle.c[1]}) || triangle.normal[2] == 0 {
+		if math.Abs(float64(triangle.normal[2])) < worldFloorNormalZ || !worldPointInTriangle2D([2]float32{x, y}, [2]float32{triangle.a[0], triangle.a[1]}, [2]float32{triangle.b[0], triangle.b[1]}, [2]float32{triangle.c[0], triangle.c[1]}) || triangle.normal[2] == 0 {
 			continue
 		}
 		height := triangle.a[2] - (triangle.normal[0]*(x-triangle.a[0])+triangle.normal[1]*(y-triangle.a[1]))/triangle.normal[2]
-		if height < reference-5 || height > reference+0.8 || (found && height <= best) {
+		if height < reference-worldMaxGroundSnap || height > reference+worldStepHeight || (found && height <= best) {
 			continue
 		}
 		best, found = height, true
@@ -289,7 +294,7 @@ func (collision worldSceneCollision) move(from, to [3]float32) [3]float32 {
 	if deltaX == 0 && deltaY == 0 {
 		return to
 	}
-	if _, normal, ok := collision.terrain(to[0], to[1]); ok && normal[2] < 0.5 {
+	if _, normal, ok := collision.terrain(to[0], to[1]); ok && normal[2] < worldFloorNormalZ {
 		uphillX, uphillY := -normal[0], -normal[1]
 		lengthSquared := uphillX*uphillX + uphillY*uphillY
 		if lengthSquared > 0 {
@@ -306,16 +311,16 @@ func (collision worldSceneCollision) move(from, to [3]float32) [3]float32 {
 	to[0], to[1] = from[0]+deltaX, from[1]+deltaY
 	for pass := 0; pass < 2; pass++ {
 		correctionX, correctionY := float32(0), float32(0)
-		minX, maxX := to[0]-0.55, to[0]+0.55
-		minY, maxY := to[1]-0.55, to[1]+0.55
+		minX, maxX := to[0]-worldBodyRadius, to[0]+worldBodyRadius
+		minY, maxY := to[1]-worldBodyRadius, to[1]+worldBodyRadius
 		for cellX := int(math.Floor(float64(minX / worldCollisionCell))); cellX <= int(math.Floor(float64(maxX/worldCollisionCell))); cellX++ {
 			for cellY := int(math.Floor(float64(minY / worldCollisionCell))); cellY <= int(math.Floor(float64(maxY/worldCollisionCell))); cellY++ {
 				for _, ref := range collision.cells[[2]int{cellX, cellY}] {
 					triangle := collision.solids[ref.mesh].triangles[ref.triangle]
-					if math.Abs(float64(triangle.normal[2])) >= 0.5 || triangle.max[2] < from[2]+0.8 || triangle.min[2] > from[2]+2.0 {
+					if math.Abs(float64(triangle.normal[2])) >= worldFloorNormalZ || triangle.max[2] < from[2]+worldStepHeight || triangle.min[2] > from[2]+worldBodyHeight {
 						continue
 					}
-					pushX, pushY, distance, ok := worldCollisionPush2D(to[0], to[1], triangle, 0.55)
+					pushX, pushY, distance, ok := worldCollisionPush2D(to[0], to[1], triangle, worldBodyRadius)
 					if !ok {
 						continue
 					}
@@ -442,7 +447,7 @@ func (collision worldSceneCollision) cameraPosition(focus, eye math32.Vector3) m
 		for cellY := int(math.Floor(float64(spanMinY / worldCollisionCell))); cellY <= int(math.Floor(float64(spanMaxY/worldCollisionCell))); cellY++ {
 			for _, ref := range collision.cells[[2]int{cellX, cellY}] {
 				triangle := collision.solids[ref.mesh].triangles[ref.triangle]
-				if triangle.noCamera || math.Abs(float64(triangle.normal[2])) >= 0.5 {
+				if triangle.noCamera || math.Abs(float64(triangle.normal[2])) >= worldFloorNormalZ {
 					continue
 				}
 				if hit, ok := worldSegmentTriangleHit([3]float32{focus.X, focus.Y, focus.Z}, [3]float32{eye.X, eye.Y, eye.Z}, triangle); ok && hit < nearest {

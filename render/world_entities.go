@@ -187,6 +187,38 @@ func worldEntityMoving(entity *worldEntity) bool {
 	return len(entity.path) > 0 || flags&(world.MovementFlagForward|world.MovementFlagBackward|world.MovementFlagStrafeLeft|world.MovementFlagStrafeRight) != 0
 }
 
+func worldEntityMotion(entity *worldEntity) uint16 {
+	flags := entity.movement.MovementFlags
+	if flags&world.MovementFlagSwimming != 0 {
+		switch {
+		case flags&world.MovementFlagBackward != 0:
+			return 45
+		case flags&world.MovementFlagStrafeLeft != 0:
+			return 43
+		case flags&world.MovementFlagStrafeRight != 0:
+			return 44
+		default:
+			return 42
+		}
+	}
+	if flags&world.MovementFlagFlying != 0 {
+		return 135
+	}
+	if flags&world.MovementFlagBackward != 0 {
+		return 13
+	}
+	if flags&world.MovementFlagStrafeLeft != 0 {
+		return 11
+	}
+	if flags&world.MovementFlagStrafeRight != 0 {
+		return 12
+	}
+	if flags&world.MovementFlagWalking != 0 {
+		return 4
+	}
+	return 5
+}
+
 func worldGroundedPosition(position world.WorldPosition, floor func(float32, float32, float32) (float32, bool)) world.WorldPosition {
 	if floor != nil {
 		if height, ok := floor(position.X, position.Y, position.Z); ok {
@@ -203,11 +235,9 @@ func applyWorldMonsterMove(entities map[uint64]*worldEntity, move world.MonsterM
 		entities[move.GUID] = entity
 	}
 	start := move.From
-	if entity.hasPosition && len(entity.path) > 0 {
-		dx := float64(entity.movement.Position.X - move.From.X)
-		dy := float64(entity.movement.Position.Y - move.From.Y)
-		dz := float64(entity.movement.Position.Z - move.From.Z)
-		if math.Sqrt(dx*dx+dy*dy+dz*dz) < 5 {
+	if entity.hasPosition {
+		start.Orientation = entity.movement.Position.Orientation
+		if len(entity.path) > 0 {
 			start = entity.movement.Position
 		}
 	}
@@ -219,8 +249,11 @@ func applyWorldMonsterMove(entities map[uint64]*worldEntity, move world.MonsterM
 	entity.pathLengths = nil
 	entity.pathTotal = 0
 	entity.arrivalFacing = move.Facing
+	entity.movement.MovementFlags &^= world.MovementFlagForward | world.MovementFlagBackward | world.MovementFlagStrafeLeft | world.MovementFlagStrafeRight
 	if move.Stopped || move.Duration == 0 {
-		entity.movement.MovementFlags &^= world.MovementFlagForward | world.MovementFlagBackward | world.MovementFlagStrafeLeft | world.MovementFlagStrafeRight
+		if facing, ok := worldEntityArrivalFacing(entities, entity, move.Facing); ok {
+			entity.movement.Position.Orientation = facing
+		}
 		return
 	}
 	entity.path = make([]world.WorldPosition, 0, len(move.Path)+2)
@@ -238,10 +271,29 @@ func applyWorldMonsterMove(entities map[uint64]*worldEntity, move world.MonsterM
 		entity.pathLengths[index] = math.Sqrt(dx*dx + dy*dy + dz*dz)
 		entity.pathTotal += entity.pathLengths[index]
 	}
-	entity.movement.MovementFlags |= world.MovementFlagForward
-	if move.Facing.Kind == 4 {
-		entity.movement.Position.Orientation = move.Facing.Angle
+	if entity.pathTotal <= 0 {
+		entity.movement.Position = entity.path[len(entity.path)-1]
+		if facing, ok := worldEntityArrivalFacing(entities, entity, move.Facing); ok {
+			entity.movement.Position.Orientation = facing
+		}
+		entity.path = nil
+		return
 	}
+	entity.movement.MovementFlags |= world.MovementFlagForward
+}
+
+func worldEntityArrivalFacing(entities map[uint64]*worldEntity, entity *worldEntity, facing world.MoveFacing) (float32, bool) {
+	switch facing.Kind {
+	case 2:
+		return float32(math.Atan2(float64(facing.Y-entity.movement.Position.Y), float64(facing.X-entity.movement.Position.X))), true
+	case 3:
+		if target := entities[facing.TargetGUID]; target != nil && target.hasPosition {
+			return float32(math.Atan2(float64(target.movement.Position.Y-entity.movement.Position.Y), float64(target.movement.Position.X-entity.movement.Position.X))), true
+		}
+	case 4:
+		return facing.Angle, true
+	}
+	return 0, false
 }
 
 func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64, floor func(float32, float32, float32) (float32, bool)) {
@@ -319,7 +371,7 @@ func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureT
 		if info, ok := entity.node.UserData().(glueModelInfo); ok && info.animation != nil {
 			motion := uint16(0)
 			if worldEntityMoving(entity) {
-				motion = 5
+				motion = worldEntityMotion(entity)
 			}
 			info.animation.SetMotion(motion)
 		}

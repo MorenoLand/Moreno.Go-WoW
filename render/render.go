@@ -593,7 +593,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						if info.animation != nil {
 							motion := uint16(0)
 							if worldEntityMoving(entity) {
-								motion = 5
+								motion = worldEntityMotion(entity)
 							}
 							info.animation.SetMotion(motion)
 							for _, soundID := range info.animation.Update(elapsed) {
