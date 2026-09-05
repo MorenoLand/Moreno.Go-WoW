@@ -100,6 +100,12 @@ func TestLiveWorldChatGeometryMatchesFrameXML(t *testing.T) {
 			t.Fatalf("missing chat asset %s", path)
 		}
 	}
+	if top := engine.Rt.widgets["ChatFrame1TopTexture"]; top == nil || !top.horizTile {
+		t.Fatalf("ChatFrame1 top border tiling=%v", top)
+	}
+	if left := engine.Rt.widgets["ChatFrame1LeftTexture"]; left == nil || !left.vertTile {
+		t.Fatalf("ChatFrame1 side border tiling=%v", left)
+	}
 	buttonFrame := engine.Rt.widgets["ChatFrame1ButtonFrame"]
 	if buttonFrame == nil {
 		t.Fatal("ChatFrame1 button frame missing")

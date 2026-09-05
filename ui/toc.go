@@ -54,6 +54,16 @@ func installTemplateFactory(l *Loader) {
 		}
 		merged := mergeTemplate(l, tpl, &xmlNode{name: w.objectType(), attrs: map[string]string{}})
 		l.applyWidgetAttrs(w, merged)
+		if w.kind == kindTexture {
+			w.textureFile = merged.attrDefault("file", w.textureFile)
+			w.alphaMode = merged.attrDefault("alphaMode", w.alphaMode)
+			w.horizTile = parseBool(merged.attrDefault("horizTile", "false"), w.horizTile)
+			w.vertTile = parseBool(merged.attrDefault("vertTile", "false"), w.vertTile)
+		} else if w.kind == kindFontString {
+			w.fontObject = merged.attrDefault("inherits", w.fontObject)
+			w.justifyH = merged.attrDefault("justifyH", w.justifyH)
+			w.justifyV = merged.attrDefault("justifyV", w.justifyV)
+		}
 		for _, group := range merged.children {
 			switch group.name {
 			case "Size":
@@ -645,6 +655,8 @@ func (l *Loader) buildButtonTexture(node *xmlNode, parent *widget, interfacePath
 	w.parent = parent
 	w.textureFile = merged.attrDefault("file", "")
 	w.alphaMode = merged.attrDefault("alphaMode", "")
+	w.horizTile = parseBool(merged.attrDefault("horizTile", "false"), false)
+	w.vertTile = parseBool(merged.attrDefault("vertTile", "false"), false)
 	if hidden, ok := merged.attr("hidden"); ok {
 		w.shown = !parseBool(hidden, false)
 	}
@@ -691,6 +703,8 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 	if kind == kindTexture {
 		w.textureFile = merged.attrDefault("file", "")
 		w.alphaMode = merged.attrDefault("alphaMode", "")
+		w.horizTile = parseBool(merged.attrDefault("horizTile", "false"), false)
+		w.vertTile = parseBool(merged.attrDefault("vertTile", "false"), false)
 		if tc := merged.child("TexCoords"); tc != nil {
 			w.texCoordL = attrFloat(tc, "left", 0)
 			w.texCoordR = attrFloat(tc, "right", 1)
@@ -1074,7 +1088,6 @@ func mergeTemplate(l *Loader, tpl, instance *xmlNode) *xmlNode {
 	for k, v := range instance.attrs {
 		merged.attrs[k] = v
 	}
-	delete(merged.attrs, "inherits")
 	replaced := map[string]bool{}
 	for _, group := range []string{"Size", "Anchors", "Backdrop", "TexCoords", "Color", "ButtonText", "NormalFont", "HighlightFont", "DisabledFont", "CheckedFont", "NormalTexture", "PushedTexture", "DisabledTexture", "HighlightTexture", "CheckedTexture", "DisabledCheckedTexture", "ThumbTexture", "TextInsets", "HitRectInsets"} {
 		if instance.child(group) != nil {

@@ -378,7 +378,11 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 					if tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0 {
 						tc = [4]float64{0, 1, 0, 1}
 					}
-					drawSubModeFilter(target, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.alphaMode, "ADD"))
+					if (w.horizTile || w.vertTile) && !strings.EqualFold(w.alphaMode, "ADD") {
+						eng.drawTiledTexture(target, img, scaledRect, float64(screenHeight), tc, w.horizTile, w.vertTile)
+					} else {
+						drawSubModeFilter(target, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.alphaMode, "ADD"))
+					}
 				}
 			} else if !w.vertexColor.isZero() {
 				eng.drawTextureColor(target, scaledRect, w.vertexColor)
@@ -1706,6 +1710,35 @@ func (eng *UIEngine) drawTiled(canvas *image.RGBA, dst image.Rectangle, source i
 	}
 }
 
+func (eng *UIEngine) drawTiledTexture(canvas *image.RGBA, source image.Image, r Rect, screenHeight float64, tc [4]float64, horiz, vert bool) {
+	dst := ScreenRect(r, screenHeight).Intersect(canvas.Bounds())
+	if dst.Empty() {
+		return
+	}
+	tile := textureSubImage(source, tc)
+	if tile.Bounds().Empty() {
+		return
+	}
+	tileWidth := dst.Dx()
+	tileHeight := dst.Dy()
+	if horiz {
+		tileWidth = int(math.Round(float64(tile.Bounds().Dx()) * eng.uiScale))
+	}
+	if vert {
+		tileHeight = int(math.Round(float64(tile.Bounds().Dy()) * eng.uiScale))
+	}
+	if tileWidth < 1 || tileHeight < 1 {
+		return
+	}
+	resized := image.NewRGBA(image.Rect(0, 0, tileWidth, tileHeight))
+	xdraw.NearestNeighbor.Scale(resized, resized.Bounds(), tile, tile.Bounds(), xdraw.Src, nil)
+	for y := dst.Min.Y; y < dst.Max.Y; y += tileHeight {
+		for x := dst.Min.X; x < dst.Max.X; x += tileWidth {
+			draw.Draw(canvas, image.Rect(x, y, x+tileWidth, y+tileHeight).Intersect(dst), resized, image.Point{}, draw.Over)
+		}
+	}
+}
+
 // drawBorder draws a pixel-thick rect border.
 func drawBorder(canvas *image.RGBA, r image.Rectangle, c color.Color, thickness int) {
 	u := &image.Uniform{C: c}
@@ -1888,6 +1921,42 @@ func drawSubModeFilter(canvas *image.RGBA, img image.Image, r Rect, screenHeight
 			canvas.SetRGBA(x, y, color.RGBA{R: addChannel(dr, scaleChannel(sr, sa)), G: addChannel(dg, scaleChannel(sg, sa)), B: addChannel(db, scaleChannel(sb, sa)), A: maxChannel(da, sa)})
 		}
 	}
+}
+
+func textureSubImage(img image.Image, tc [4]float64) image.Image {
+	b := img.Bounds()
+	flipX := tc[1] < tc[0]
+	flipY := tc[3] < tc[2]
+	leftCoord, rightCoord := tc[0], tc[1]
+	topCoord, bottomCoord := tc[2], tc[3]
+	if flipX {
+		leftCoord, rightCoord = rightCoord, leftCoord
+	}
+	if flipY {
+		topCoord, bottomCoord = bottomCoord, topCoord
+	}
+	l := b.Min.X + int(float64(b.Dx())*leftCoord)
+	r := b.Min.X + int(float64(b.Dx())*rightCoord)
+	t := b.Min.Y + int(float64(b.Dy())*topCoord)
+	bm := b.Min.Y + int(float64(b.Dy())*bottomCoord)
+	if l < b.Min.X || r > b.Max.X || t < b.Min.Y || bm > b.Max.Y || r <= l || bm <= t {
+		l, r, t, bm = b.Min.X, b.Max.X, b.Min.Y, b.Max.Y
+		flipX, flipY = false, false
+	}
+	result := image.NewRGBA(image.Rect(0, 0, r-l, bm-t))
+	for y := 0; y < result.Bounds().Dy(); y++ {
+		for x := 0; x < result.Bounds().Dx(); x++ {
+			sourceX, sourceY := l+x, t+y
+			if flipX {
+				sourceX = r - 1 - x
+			}
+			if flipY {
+				sourceY = bm - 1 - y
+			}
+			result.Set(x, y, img.At(sourceX, sourceY))
+		}
+	}
+	return result
 }
 
 func scaleChannel(value, alpha uint32) uint32 {

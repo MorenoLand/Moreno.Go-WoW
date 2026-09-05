@@ -200,6 +200,7 @@ type widget struct {
 	texCoordL, texCoordR, texCoordT, texCoordB float64
 	vertexColor                                rgba
 	alphaMode                                  string
+	horizTile, vertTile                        bool
 
 	// FontString state.
 	fontObject      string
