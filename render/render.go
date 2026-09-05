@@ -832,8 +832,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					}
 					uiEngine.FireWorldChat(eventName,
 						lua.LString(message.Text), lua.LString(sender), lua.LString(message.LanguageName()),
-						lua.LString(message.Channel), lua.LString(""), lua.LString(""), lua.LString(""),
-						lua.LNumber(0), lua.LString(message.Channel), lua.LNumber(0), lua.LNumber(0), lua.LString(guid))
+						lua.LString(message.Channel), lua.LString(""), lua.LString(""),
+						lua.LNumber(0), lua.LNumber(0), lua.LString(message.Channel), lua.LNumber(0), lua.LString(guid))
 					refresh()
 				case world.UpdateObject, world.CompressedUpdateObject:
 					var blocks []world.UpdateBlock

@@ -42,8 +42,21 @@ func (eng *UIEngine) drawMessageLines(canvas *image.RGBA, w *widget, rect Rect, 
 	if visible < 1 {
 		return
 	}
-	if len(lines) > visible {
-		lines = lines[len(lines)-visible:]
+	end := len(lines) - w.messageOffset
+	if end < 0 {
+		end = 0
+	}
+	if end > len(lines) {
+		end = len(lines)
+	}
+	start := end - visible
+	if start < 0 {
+		start = 0
+	}
+	if start < end {
+		lines = lines[start:end]
+	} else {
+		lines = nil
 	}
 	for index := len(lines) - 1; index >= 0; index-- {
 		line := lines[index]

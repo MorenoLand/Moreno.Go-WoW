@@ -4,6 +4,8 @@ import (
 	"image"
 	"os"
 	"testing"
+
+	lua "github.com/yuin/gopher-lua"
 )
 
 func TestLoadingBarFillFitsAuthoredBorder(t *testing.T) {
@@ -26,6 +28,29 @@ func TestLoadingBarFillFitsAuthoredBorder(t *testing.T) {
 	half := loadingBarFillRect(bar, 0.5)
 	if half != image.Rect(228, 584, 480, 600) {
 		t.Fatalf("half progress fill=%v bar=%v", half, bar)
+	}
+}
+
+func TestLiveWorldChatEventArgumentsMatchFrameXML(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	engine, err := LoadUIEngineFromMPQ(dataPath, "enUS", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if err := engine.LoadWorldUI(); err != nil {
+		t.Fatal(err)
+	}
+	engine.FireWorldChat("CHAT_MSG_SAY", lua.LString("hello"), lua.LString("Sender"), lua.LString("Common"), lua.LString(""), lua.LString(""), lua.LString(""), lua.LNumber(0), lua.LNumber(0), lua.LString(""), lua.LNumber(0), lua.LString("0x0000000000000001"))
+	if errors := engine.Rt.ScriptErrors(); len(errors) != 0 {
+		t.Fatalf("chat event script errors=%v", errors)
+	}
+	chat := engine.Rt.widgets["ChatFrame1"]
+	if chat == nil || len(chat.messages) != 1 || chat.messages[0].text == "" {
+		t.Fatalf("chat event messages=%v", chat)
 	}
 }
 

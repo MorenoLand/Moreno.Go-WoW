@@ -26,3 +26,30 @@ func TestCreateLocalizedValueUsesNativeNamesWhenGlobalsAreAbsent(t *testing.T) {
 		}
 	}
 }
+
+func TestScrollingMessageFrameUsesNativeMetadataAndOffset(t *testing.T) {
+	rt := NewRuntime(nil)
+	defer rt.Close()
+	chat := newWidget(kindScrollingMessageFrame, "Chat")
+	rt.register(chat)
+	if !rt.Execute(`
+Chat:AddMessage("colored", 1, 0.5, 0.25, 7, 8, 11, "extra")
+Chat:AddMessage("plain", 12, 0, 22, 0)
+assert(Chat:GetNumMessages() == 2)
+assert(Chat:GetNumMessages(11) == 1)
+local text, accessID, typeID, extraData = Chat:GetMessageInfo(1)
+assert(text == "colored" and accessID == 11 and typeID == 7 and extraData == "extra")
+Chat:ScrollUp()
+assert(Chat:GetCurrentScroll() == 1 and not Chat:AtBottom())
+Chat:ScrollDown()
+assert(Chat:GetCurrentScroll() == 0 and Chat:AtBottom())
+Chat:ScrollToTop()
+assert(Chat:GetCurrentScroll() == 1)
+Chat:ScrollToBottom()
+assert(Chat:GetCurrentScroll() == 0)
+Chat:RemoveMessagesByAccessID(11)
+assert(Chat:GetNumMessages() == 1)
+`, "@scroll-api-test.lua") {
+		t.Fatalf("scroll API failed: %v", rt.ScriptErrors())
+	}
+}

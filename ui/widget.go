@@ -84,11 +84,13 @@ type backdrop struct {
 }
 
 type messageLine struct {
-	text     string
-	color    rgba
-	lineID   int
-	accessID string
-	age      float64
+	text      string
+	color     rgba
+	typeID    int
+	backFill  int
+	accessID  int
+	extraData lua.LValue
+	age       float64
 }
 
 // widget holds the state of one frame or region created from XML or the API.
@@ -171,6 +173,7 @@ type widget struct {
 	messageMaxLines int
 	messageDuration float64
 	messageFading   bool
+	messageOffset   int
 	messageFontSize float64
 	messageIndented bool
 	messageSpacing  float64
@@ -891,18 +894,23 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			if w.kind != kindScrollingMessageFrame && w.kind != kindSimpleHTML && w.kind != kindFrame {
 				return 0
 			}
-			line := messageLine{text: L.CheckString(2), color: rgba{1, 1, 1, 1}}
-			if L.GetTop() >= 5 {
+			line := messageLine{text: L.CheckString(2), color: rgba{1, 1, 1, 1}, extraData: lua.LNil}
+			arg := 3
+			if L.GetTop() >= 7 && L.Get(3).Type() == lua.LTNumber && L.Get(4).Type() == lua.LTNumber && L.Get(5).Type() == lua.LTNumber {
 				line.color = rgba{float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), float64(L.CheckNumber(5)), 1}
+				arg = 6
 			}
-			if L.GetTop() >= 6 && L.Get(6).Type() == lua.LTNumber {
-				line.lineID = L.CheckInt(6)
+			if L.GetTop() >= arg && L.Get(arg).Type() == lua.LTNumber {
+				line.typeID = L.CheckInt(arg)
 			}
-			if L.GetTop() >= 8 && L.Get(8).Type() == lua.LTString {
-				line.accessID = L.CheckString(8)
+			if L.GetTop() >= arg+1 && L.Get(arg+1).Type() == lua.LTNumber {
+				line.backFill = L.CheckInt(arg + 1)
 			}
-			if L.GetTop() >= 9 && L.Get(9).Type() == lua.LTNumber {
-				line.lineID = L.CheckInt(9)
+			if L.GetTop() >= arg+2 && L.Get(arg+2).Type() == lua.LTNumber {
+				line.accessID = L.CheckInt(arg + 2)
+			}
+			if L.GetTop() >= arg+3 {
+				line.extraData = L.Get(arg + 3)
 			}
 			w.messages = append(w.messages, line)
 			maxLines := w.messageMaxLines
@@ -912,28 +920,85 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			if len(w.messages) > maxLines {
 				w.messages = w.messages[len(w.messages)-maxLines:]
 			}
+			if w.messageOffset > len(w.messages)-1 {
+				w.messageOffset = len(w.messages) - 1
+			}
+			if w.messageOffset < 0 {
+				w.messageOffset = 0
+			}
 			return 0
 		},
-		"Clear": func(L *lua.LState, w *widget) int { w.messages = nil; return 0 },
+		"Clear": func(L *lua.LState, w *widget) int { w.messages = nil; w.messageOffset = 0; return 0 },
 		"SetMaxLines": func(L *lua.LState, w *widget) int {
 			w.messageMaxLines = L.CheckInt(2)
 			if w.messageMaxLines > 0 && len(w.messages) > w.messageMaxLines {
 				w.messages = w.messages[len(w.messages)-w.messageMaxLines:]
 			}
+			if w.messageOffset > len(w.messages)-1 {
+				w.messageOffset = len(w.messages) - 1
+			}
+			if w.messageOffset < 0 {
+				w.messageOffset = 0
+			}
 			return 0
 		},
-		"GetMaxLines":     func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(w.messageMaxLines)); return 1 },
-		"SetTimeVisible":  func(L *lua.LState, w *widget) int { w.messageDuration = float64(L.CheckNumber(2)); return 0 },
-		"GetTimeVisible":  func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(w.messageDuration)); return 1 },
-		"SetFading":       func(L *lua.LState, w *widget) int { w.messageFading = L.CheckBool(2); return 0 },
-		"IsFading":        func(L *lua.LState, w *widget) int { L.Push(lua.LBool(w.messageFading)); return 1 },
-		"AtBottom":        func(L *lua.LState, w *widget) int { L.Push(lua.LTrue); return 1 },
-		"ScrollDown":      func(L *lua.LState, w *widget) int { return 0 },
-		"ScrollUp":        func(L *lua.LState, w *widget) int { return 0 },
-		"ScrollToBottom":  func(L *lua.LState, w *widget) int { return 0 },
-		"ScrollToTop":     func(L *lua.LState, w *widget) int { return 0 },
-		"GetScrollOffset": func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(0)); return 1 },
-		"GetNumMessages":  func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(len(w.messages))); return 1 },
+		"GetMaxLines":    func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(w.messageMaxLines)); return 1 },
+		"SetTimeVisible": func(L *lua.LState, w *widget) int { w.messageDuration = float64(L.CheckNumber(2)); return 0 },
+		"GetTimeVisible": func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(w.messageDuration)); return 1 },
+		"SetFading":      func(L *lua.LState, w *widget) int { w.messageFading = L.CheckBool(2); return 0 },
+		"IsFading":       func(L *lua.LState, w *widget) int { L.Push(lua.LBool(w.messageFading)); return 1 },
+		"AtBottom": func(L *lua.LState, w *widget) int {
+			L.Push(lua.LBool(w.messageOffset == 0))
+			return 1
+		},
+		"ScrollDown": func(L *lua.LState, w *widget) int {
+			if w.messageOffset > 0 {
+				w.messageOffset--
+			}
+			return 0
+		},
+		"ScrollUp": func(L *lua.LState, w *widget) int {
+			if w.messageOffset < len(w.messages)-1 {
+				w.messageOffset++
+			}
+			return 0
+		},
+		"ScrollToBottom": func(L *lua.LState, w *widget) int { w.messageOffset = 0; return 0 },
+		"ScrollToTop": func(L *lua.LState, w *widget) int {
+			if len(w.messages) > 0 {
+				w.messageOffset = len(w.messages) - 1
+			}
+			return 0
+		},
+		"SetScrollOffset": func(L *lua.LState, w *widget) int {
+			w.messageOffset = L.CheckInt(2)
+			if w.messageOffset < 0 {
+				w.messageOffset = 0
+			}
+			if w.messageOffset > len(w.messages)-1 {
+				w.messageOffset = len(w.messages) - 1
+			}
+			if w.messageOffset < 0 {
+				w.messageOffset = 0
+			}
+			return 0
+		},
+		"GetCurrentScroll": func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(w.messageOffset)); return 1 },
+		"GetNumMessages": func(L *lua.LState, w *widget) int {
+			if L.GetTop() < 2 || L.Get(2).Type() != lua.LTNumber {
+				L.Push(lua.LNumber(len(w.messages)))
+				return 1
+			}
+			accessID := L.CheckInt(2)
+			count := 0
+			for _, line := range w.messages {
+				if line.accessID == accessID {
+					count++
+				}
+			}
+			L.Push(lua.LNumber(count))
+			return 1
+		},
 		"GetMessageInfo": func(L *lua.LState, w *widget) int {
 			index := L.CheckInt(2)
 			if index < 1 || index > len(w.messages) {
@@ -942,19 +1007,19 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			}
 			line := w.messages[index-1]
 			L.Push(lua.LString(line.text))
-			if line.accessID == "" {
+			L.Push(lua.LNumber(line.accessID))
+			L.Push(lua.LNumber(line.typeID))
+			if line.extraData == nil {
 				L.Push(lua.LNil)
 			} else {
-				L.Push(lua.LString(line.accessID))
+				L.Push(line.extraData)
 			}
-			L.Push(lua.LNumber(line.lineID))
-			L.Push(lua.LNil)
 			return 4
 		},
 		"RemoveMessagesByAccessID": func(L *lua.LState, w *widget) int {
-			accessID := ""
-			if L.GetTop() >= 2 && L.Get(2).Type() == lua.LTString {
-				accessID = L.CheckString(2)
+			accessID := 0
+			if L.GetTop() >= 2 && L.Get(2).Type() == lua.LTNumber {
+				accessID = L.CheckInt(2)
 			}
 			kept := w.messages[:0]
 			for _, line := range w.messages {
@@ -963,6 +1028,12 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 				}
 			}
 			w.messages = kept
+			if w.messageOffset > len(w.messages)-1 {
+				w.messageOffset = len(w.messages) - 1
+			}
+			if w.messageOffset < 0 {
+				w.messageOffset = 0
+			}
 			return 0
 		},
 		"SetIndented":          func(L *lua.LState, w *widget) int { w.messageIndented = L.CheckBool(2); return 0 },
