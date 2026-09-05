@@ -192,6 +192,9 @@ func TestLiveCharacterModelRenderable(t *testing.T) {
 	if len(selected.Children()) == 0 {
 		t.Fatal("textured character model has no drawable children")
 	}
+	if math.Abs(float64(selected.Scale().X-characterInfo.modelScale)) > 0.0001 {
+		t.Fatalf("textured character scale=%v want own model scale=%v", selected.Scale(), characterInfo.modelScale)
+	}
 	t.Logf("textured NightElf character drawable children=%d", len(selected.Children()))
 	skinData, readErr := loader.ReadFile(`Character\NightElf\Female\NightElfFemale00.skin`)
 	if readErr != nil {

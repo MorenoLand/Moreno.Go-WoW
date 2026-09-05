@@ -326,7 +326,6 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					}
 				} else {
 					if backgroundInfo, ok := sceneModel.UserData().(glueModelInfo); ok && backgroundInfo.hasStand {
-						characterModel.SetScale(backgroundInfo.modelScale, backgroundInfo.modelScale, backgroundInfo.modelScale)
 						characterModel.SetPosition(backgroundInfo.standPosition.X, backgroundInfo.standPosition.Y, backgroundInfo.standPosition.Z)
 					}
 					sceneCharacterFacing = uiEngine.SceneCharacterFacing()
