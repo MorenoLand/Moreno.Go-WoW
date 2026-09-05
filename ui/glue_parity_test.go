@@ -225,6 +225,12 @@ func TestLiveCharacterCreateStateAndTextGeometry(t *testing.T) {
 		}
 		t.Logf("create scroll=%s rect=%v text=%s rect=%v", pair[0], scroll.renderRect, pair[1], textWidget.renderRect)
 	}
+	for _, name := range []string{"CharacterCreateRaceScrollFrameScrollBar", "CharacterCreateClassScrollFrameScrollBar"} {
+		scrollbar := engine.Rt.widgets[name]
+		if scrollbar == nil || !scrollbar.shown || scrollbar.thumbTexture == nil || scrollbar.maxValue <= 0 {
+			t.Fatalf("create scrollbar=%s state=%v", name, scrollbar)
+		}
+	}
 }
 
 func TestLiveCharacterCreateDragChangesFacing(t *testing.T) {

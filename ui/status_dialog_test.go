@@ -31,6 +31,17 @@ func TestLiveGlueStatusDialogContract(t *testing.T) {
 	if !engine.Rt.Execute("assert(GlueDialog.which == 'OKAY')", "@status-dialog-test.lua") {
 		t.Fatalf("dialog type after failure: %v", engine.Rt.ScriptErrors())
 	}
+	button := engine.Rt.widgets["GlueDialogButton1"]
+	if button == nil {
+		t.Fatal("GlueDialogButton1 is missing")
+	}
+	if button.normalTexture == nil || button.normalTexture.textureFile == "" || engine.loadBLP(button.normalTexture.textureFile) == nil {
+		t.Fatalf("auth button normal texture unavailable: %+v", button.normalTexture)
+	}
+	engine.Update(1.0 / 60)
+	if button.normalTexture == nil || button.pushedTexture == nil || button.highlightTexture == nil || button.normalTexture.textureFile != `Interface\Glues\Common\Glue-Panel-Button-Up-Blue` || button.pushedTexture.textureFile != `Interface\Glues\Common\Glue-Panel-Button-Down-Blue` || button.highlightTexture.textureFile != `Interface\Glues\Common\Glue-Panel-Button-Highlight-Blue` {
+		t.Fatalf("auth button artwork normal=%v pushed=%v highlight=%v", button.normalTexture, button.pushedTexture, button.highlightTexture)
+	}
 	engine.SetStatusKey("GAME_SERVER_LOGIN")
 	if text := engine.Rt.widgets["GlueDialogText"]; text == nil || text.text != engine.resolveText("GAME_SERVER_LOGIN") {
 		t.Fatalf("dialog text=%v", text)

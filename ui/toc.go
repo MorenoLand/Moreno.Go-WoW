@@ -578,6 +578,8 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 				w.checkedTexture = texture
 			case "DisabledCheckedTexture":
 				w.disabledCheckedTexture = texture
+			case "ThumbTexture":
+				w.thumbTexture = texture
 			}
 			if texture.name != "" {
 				l.rt.register(texture)

@@ -312,6 +312,7 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 	if root != nil {
 		eng.prepareText(root, face, faceLg)
 	}
+	eng.updateScrollFrames()
 
 	virtualWidth := eng.screen.W()
 	virtualHeight := eng.screen.H()
@@ -339,13 +340,18 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 		if w.kind == kindScrollFrame {
 			children := image.NewRGBA(target.Bounds())
 			for _, child := range orderedChildren(w.children) {
-				if child.shown {
+				if child.shown && child == w.scrollChild {
 					paint(children, child, rect)
 				}
 			}
 			clip := ScreenRect(screenScaledRect(rect, eng.uiScale), float64(target.Bounds().Dy())).Intersect(target.Bounds())
 			if !clip.Empty() {
 				draw.Draw(target, clip, children, clip.Min, draw.Over)
+			}
+			for _, child := range orderedChildren(w.children) {
+				if child.shown && child != w.scrollChild {
+					paint(target, child, rect)
+				}
 			}
 			return
 		}
@@ -439,6 +445,9 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 		} else {
 			paintChildren(target, w, rect)
 		}
+		if w.kind == kindSlider {
+			eng.paintSliderThumb(w, rect, func(child *widget, childRect Rect) { paint(target, child, childRect) })
+		}
 		if w.kind == kindScrollingMessageFrame {
 			eng.drawMessageLines(target, w, rect, face, faceLg, float64(screenHeight))
 		}
@@ -504,6 +513,118 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 	}
 
 	return canvas
+}
+
+func (eng *UIEngine) updateScrollFrames() {
+	if eng == nil || eng.Rt == nil {
+		return
+	}
+	frames := make([]*widget, 0)
+	for _, w := range eng.Rt.widgets {
+		if w.kind == kindScrollFrame && w.scrollChild != nil {
+			frames = append(frames, w)
+		}
+	}
+	for _, frame := range frames {
+		contentW, contentH := eng.scrollContentExtent(frame)
+		if frame.scrollChild.width != contentW || frame.scrollChild.height != contentH {
+			frame.scrollChild.width = contentW
+			frame.scrollChild.height = contentH
+			eng.rects = make(map[*widget]Rect)
+			eng.layoutActive = make(map[*widget]bool)
+		}
+		frameRect := eng.layoutRect(frame, eng.screen)
+		frame.verticalRange = math.Max(0, contentH-frameRect.H())
+		frame.horizontalRange = math.Max(0, contentW-frameRect.W())
+		if frame.verticalScroll > frame.verticalRange {
+			frame.verticalScroll = frame.verticalRange
+		}
+		if frame.verticalScroll < 0 {
+			frame.verticalScroll = 0
+		}
+		if scrollbar := eng.Rt.widgets[frame.name+"ScrollBar"]; scrollbar != nil {
+			scrollbar.minValue = 0
+			scrollbar.maxValue = frame.verticalRange
+			scrollbar.value = frame.verticalScroll
+			up := eng.Rt.widgets[scrollbar.name+"ScrollUpButton"]
+			down := eng.Rt.widgets[scrollbar.name+"ScrollDownButton"]
+			if up != nil {
+				up.shown = true
+				up.enabled = scrollbar.value > scrollbar.minValue
+			}
+			if down != nil {
+				down.shown = true
+				down.enabled = scrollbar.value < scrollbar.maxValue
+			}
+		}
+	}
+}
+
+func (eng *UIEngine) scrollContentExtent(frame *widget) (float64, float64) {
+	if frame == nil || frame.scrollChild == nil {
+		return 0, 0
+	}
+	frameRect := eng.layoutRect(frame, eng.screen)
+	child := frame.scrollChild
+	childRect := eng.layoutRect(child, frameRect)
+	minX, maxX := childRect.X0, childRect.X1
+	minY, maxY := childRect.Y0, childRect.Y1
+	visited := map[*widget]bool{child: true}
+	var visit func(*widget)
+	visit = func(parent *widget) {
+		for _, current := range parent.children {
+			if current == nil || visited[current] {
+				continue
+			}
+			visited[current] = true
+			rect := eng.layoutRect(current, childRect)
+			minX = math.Min(minX, rect.X0)
+			maxX = math.Max(maxX, rect.X1)
+			minY = math.Min(minY, rect.Y0)
+			maxY = math.Max(maxY, rect.Y1)
+			visit(current)
+		}
+	}
+	visit(child)
+	contentW := math.Max(child.width, maxX-childRect.X0)
+	contentW = math.Max(contentW, childRect.X1-minX)
+	contentH := math.Max(child.height, childRect.Y1-minY)
+	contentH = math.Max(contentH, maxY-childRect.Y0)
+	return contentW, contentH
+}
+
+func (eng *UIEngine) paintSliderThumb(w *widget, rect Rect, paint func(*widget, Rect)) {
+	if w == nil || w.thumbTexture == nil || !w.thumbTexture.shown || rect.H() <= 0 {
+		return
+	}
+	min, max := w.minValue, w.maxValue
+	fraction := 0.0
+	if max > min {
+		fraction = (w.value - min) / (max - min)
+		if fraction < 0 {
+			fraction = 0
+		}
+		if fraction > 1 {
+			fraction = 1
+		}
+	}
+	thumbWidth, thumbHeight := w.thumbTexture.width, w.thumbTexture.height
+	if thumbWidth <= 0 {
+		thumbWidth = 18
+	}
+	if thumbHeight <= 0 {
+		thumbHeight = 24
+	}
+	trackStart := rect.Y0 + 18
+	trackEnd := rect.Y1 - 18
+	travel := math.Max(0, trackEnd-trackStart-thumbHeight)
+	centerY := trackStart + thumbHeight/2 + travel*fraction
+	centerX := (rect.X0 + rect.X1) / 2
+	thumbRect := Rect{X0: centerX - thumbWidth/2, Y0: centerY - thumbHeight/2, X1: centerX + thumbWidth/2, Y1: centerY + thumbHeight/2}
+	eng.rects[w.thumbTexture] = thumbRect
+	w.thumbTexture.renderRect = thumbRect
+	w.thumbTexture.hasRenderRect = true
+	paint(w.thumbTexture, thumbRect)
 }
 
 func (eng *UIEngine) prepareText(w *widget, face, faceLg font.Face) {

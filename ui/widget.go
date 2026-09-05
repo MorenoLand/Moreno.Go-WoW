@@ -163,6 +163,9 @@ type widget struct {
 	value              float64
 	valueStep          float64
 	orientation        string
+	thumbTexture       *widget
+	verticalRange      float64
+	horizontalRange    float64
 
 	// ScrollFrame state.
 	verticalScroll   float64
@@ -836,7 +839,17 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 2
 		},
 		"SetValue": func(L *lua.LState, w *widget) int {
-			w.value = float64(L.CheckNumber(2))
+			value := float64(L.CheckNumber(2))
+			if value < w.minValue {
+				value = w.minValue
+			}
+			if value > w.maxValue {
+				value = w.maxValue
+			}
+			if value == w.value {
+				return 0
+			}
+			w.value = value
 			rt.fire(w, "OnValueChanged", []lua.LValue{w.luaValue(L), lua.LNumber(w.value)})
 			return 0
 		},
@@ -852,9 +865,23 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.orientation = L.CheckString(2)
 			return 0
 		},
-		"SetThumbTexture": func(L *lua.LState, w *widget) int { return 0 },
+		"SetThumbTexture": func(L *lua.LState, w *widget) int {
+			w.thumbTexture = rt.textureArg(L, 2)
+			return 0
+		},
 		"SetVerticalScroll": func(L *lua.LState, w *widget) int {
-			w.verticalScroll = float64(L.CheckNumber(2))
+			value := float64(L.CheckNumber(2))
+			if value < 0 {
+				value = 0
+			}
+			if value > w.verticalRange {
+				value = w.verticalRange
+			}
+			if value == w.verticalScroll {
+				return 0
+			}
+			w.verticalScroll = value
+			rt.fire(w, "OnVerticalScroll", []lua.LValue{w.luaValue(L), lua.LNumber(value)})
 			return 0
 		},
 		"GetVerticalScroll": func(L *lua.LState, w *widget) int {
@@ -912,7 +939,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		"SetLogo":            func(L *lua.LState, w *widget) int { return 0 },
 		"SetClearConfigData": func(L *lua.LState, w *widget) int { return 0 },
 		"GetVerticalScrollRange": func(L *lua.LState, w *widget) int {
-			L.Push(lua.LNumber(0))
+			L.Push(lua.LNumber(w.verticalRange))
 			return 1
 		},
 		"SetScrollChild": func(L *lua.LState, w *widget) int {
@@ -1114,7 +1141,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 1
 		},
 		"SetNormalTexture": func(L *lua.LState, w *widget) int {
-			w.normalTexture = rt.textureArg(L, 1)
+			w.normalTexture = rt.textureArg(L, 2)
 			return 0
 		},
 		"GetNormalTexture": func(L *lua.LState, w *widget) int {
@@ -1126,11 +1153,11 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 1
 		},
 		"SetPushedTexture": func(L *lua.LState, w *widget) int {
-			w.pushedTexture = rt.textureArg(L, 1)
+			w.pushedTexture = rt.textureArg(L, 2)
 			return 0
 		},
 		"SetHighlightTexture": func(L *lua.LState, w *widget) int {
-			w.highlightTexture = rt.textureArg(L, 1)
+			w.highlightTexture = rt.textureArg(L, 2)
 			return 0
 		},
 		"GetHighlightTexture": func(L *lua.LState, w *widget) int {
