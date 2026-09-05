@@ -24,6 +24,25 @@ func TestCharacterSelectionHighlightRendersBehindSiblingText(t *testing.T) {
 	}
 }
 
+func TestLockHighlightPreservesSelectionState(t *testing.T) {
+	rt := NewRuntime(nil)
+	defer rt.Close()
+	button := newWidget(kindButton, "Button")
+	rt.register(button)
+	if !rt.Execute("Button:LockHighlight()", "@lock-highlight-test.lua") {
+		t.Fatalf("LockHighlight failed: %v", rt.ScriptErrors())
+	}
+	if !button.highlightLocked || !isHighlighted(button) {
+		t.Fatalf("locked highlight state=%t/%t", button.highlightLocked, button.highlighted)
+	}
+	if !rt.Execute("Button:UnlockHighlight()", "@lock-highlight-test.lua") {
+		t.Fatalf("UnlockHighlight failed: %v", rt.ScriptErrors())
+	}
+	if button.highlightLocked || isHighlighted(button) {
+		t.Fatalf("unlocked highlight state=%t/%t", button.highlightLocked, button.highlighted)
+	}
+}
+
 func TestAddWidgetChildDeduplicates(t *testing.T) {
 	parent := newWidget(kindFrame, "parent")
 	child := newWidget(kindFrame, "child")

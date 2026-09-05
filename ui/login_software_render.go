@@ -589,7 +589,7 @@ func (eng *UIEngine) paintButtonState(w *widget, rect Rect, paint func(*widget, 
 	if w.enabled && w.checked && w.checkedTexture != nil && w.checkedTexture.shown {
 		paint(w.checkedTexture, rect)
 	}
-	if w.enabled && w.highlighted && w.highlightTexture != nil && w.highlightTexture.shown {
+	if w.enabled && isHighlighted(w) && w.highlightTexture != nil && w.highlightTexture.shown {
 		paint(w.highlightTexture, rect)
 	}
 }
@@ -942,14 +942,14 @@ func (eng *UIEngine) HandleCursor(x, y float64) bool {
 	}
 	if eng.debugPanel.dragging {
 		eng.debugPanel.move(x, y, eng)
-		if eng.hovered != nil {
+		if eng.hovered != nil && !eng.hovered.highlightLocked {
 			eng.hovered.highlighted = false
 			eng.hovered = nil
 		}
 		return true
 	}
 	if eng.debugPanel.contains(x, y, eng) {
-		if eng.hovered != nil {
+		if eng.hovered != nil && !eng.hovered.highlightLocked {
 			eng.hovered.highlighted = false
 			eng.hovered = nil
 			return true
@@ -960,7 +960,7 @@ func (eng *UIEngine) HandleCursor(x, y float64) bool {
 	if target == eng.hovered {
 		return false
 	}
-	if eng.hovered != nil {
+	if eng.hovered != nil && !eng.hovered.highlightLocked {
 		eng.hovered.highlighted = false
 	}
 	eng.hovered = target
@@ -1426,8 +1426,8 @@ func orderedChildren(children []*widget) []*widget {
 	ordered := append([]*widget(nil), children...)
 	sort.SliceStable(ordered, func(left, right int) bool {
 		first, second := ordered[left], ordered[right]
-		if isCharacterSelectButton(first) && isCharacterSelectButton(second) && first.highlighted != second.highlighted {
-			return first.highlighted && !second.highlighted
+		if isCharacterSelectButton(first) && isCharacterSelectButton(second) && isHighlighted(first) != isHighlighted(second) {
+			return isHighlighted(first) && !isHighlighted(second)
 		}
 		if first.frameStrata != second.frameStrata {
 			return first.frameStrata < second.frameStrata
@@ -1442,6 +1442,10 @@ func orderedChildren(children []*widget) []*widget {
 
 func isCharacterSelectButton(w *widget) bool {
 	return w != nil && strings.HasPrefix(w.name, "CharSelectCharacterButton")
+}
+
+func isHighlighted(w *widget) bool {
+	return w != nil && (w.highlighted || w.highlightLocked)
 }
 
 // renderBackground draws the WotLK Northrend background.
@@ -1734,7 +1738,7 @@ func (eng *UIEngine) fontStyle(w *widget) *Font {
 		switch {
 		case !w.parent.enabled && w.parent.disabledFont != "":
 			name = w.parent.disabledFont
-		case w.parent.highlighted && w.parent.highlightFont != "":
+		case isHighlighted(w.parent) && w.parent.highlightFont != "":
 			name = w.parent.highlightFont
 		case w.parent.normalFont != "":
 			name = w.parent.normalFont

@@ -132,6 +132,7 @@ type widget struct {
 	buttonState            string
 	desaturated            bool
 	highlighted            bool
+	highlightLocked        bool
 	enabled                bool
 	normalTexture          *widget
 	pushedTexture          *widget
@@ -700,10 +701,12 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"LockHighlight": func(L *lua.LState, w *widget) int {
+			w.highlightLocked = true
 			w.highlighted = true
 			return 0
 		},
 		"UnlockHighlight": func(L *lua.LState, w *widget) int {
+			w.highlightLocked = false
 			w.highlighted = false
 			return 0
 		},
