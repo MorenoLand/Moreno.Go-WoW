@@ -32,6 +32,7 @@ type m2Animation struct {
 	playingVariation bool
 	variationEnabled bool
 	random           uint32
+	poseBuffer       []m2Bone
 }
 
 func buildM2Animation(model *parsedM2, skin parsedSkin, meshes []*m2AnimatedMesh, modelPath string) *m2Animation {
@@ -212,7 +213,7 @@ func (animation *m2Animation) Update(elapsed float64) []uint32 {
 		}
 	}
 	current := uint32(animation.clock)
-	bones := animation.poseBonesAt(uint32(animation.clock), uint32(animation.globalClock))
+	bones := animation.poseBonesAtReusable(uint32(animation.clock), uint32(animation.globalClock))
 	for index, bone := range bones {
 		animation.model.bones[index].translation = bone.translation
 		animation.model.bones[index].rotation = bone.rotation
@@ -321,6 +322,19 @@ func (animation *m2Animation) poseBones(timeMS uint32) []m2Bone {
 
 func (animation *m2Animation) poseBonesAt(timeMS, globalTimeMS uint32) []m2Bone {
 	bones := make([]m2Bone, len(animation.model.bones))
+	return animation.fillPoseBones(bones, timeMS, globalTimeMS)
+}
+
+func (animation *m2Animation) poseBonesAtReusable(timeMS, globalTimeMS uint32) []m2Bone {
+	if cap(animation.poseBuffer) < len(animation.model.bones) {
+		animation.poseBuffer = make([]m2Bone, len(animation.model.bones))
+	} else {
+		animation.poseBuffer = animation.poseBuffer[:len(animation.model.bones)]
+	}
+	return animation.fillPoseBones(animation.poseBuffer, timeMS, globalTimeMS)
+}
+
+func (animation *m2Animation) fillPoseBones(bones []m2Bone, timeMS, globalTimeMS uint32) []m2Bone {
 	for index, source := range animation.model.bones {
 		bone := source
 		bone.translation = bone.translationTrack.value(animation.sequence, m2TrackTime(bone.translationTrack.globalSequence, timeMS, globalTimeMS), animation.model.globalLoops, source.translation)
