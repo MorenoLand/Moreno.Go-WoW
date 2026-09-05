@@ -778,6 +778,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.vertexColor.r = float64(L.CheckNumber(2))
 			w.vertexColor.g = float64(L.CheckNumber(3))
 			w.vertexColor.b = float64(L.CheckNumber(4))
+			w.vertexColor.a = 1
 			return 0
 		},
 		"SetAlphaAttr": func(L *lua.LState, w *widget) int { return 0 },
