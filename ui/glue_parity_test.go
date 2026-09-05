@@ -111,6 +111,42 @@ func TestLiveOptionsCategoryButtonsAreClickable(t *testing.T) {
 	}
 }
 
+func TestLiveOptionsSliderDragUpdatesValue(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	engine, err := LoadUIEngineFromMPQ(dataPath, "enUS", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if !engine.Rt.Execute("VideoOptionsFrame:Show()", "@options-slider-test.lua") {
+		t.Fatal(engine.Rt.ScriptErrors())
+	}
+	engine.Render(1024, 768)
+	slider := engine.Rt.widgets["VideoOptionsResolutionPanelGammaSlider"]
+	if slider == nil || slider.kind != kindSlider {
+		t.Fatal("gamma slider missing")
+	}
+	rect := slider.renderRect
+	y := float64(768) - (rect.Y0+rect.Y1)*engine.uiScale/2
+	startX := (rect.X0 + 1) * engine.uiScale
+	endX := (rect.X1 - 1) * engine.uiScale
+	if !engine.HandleMouse(startX, y, window.MouseButtonLeft, true) {
+		t.Fatal("slider press was not handled")
+	}
+	if !engine.HandleCursor(endX, y) {
+		t.Fatal("slider drag was not handled")
+	}
+	if !engine.HandleMouse(endX, y, window.MouseButtonLeft, false) {
+		t.Fatal("slider release was not handled")
+	}
+	if slider.value < slider.maxValue-0.05 {
+		t.Fatalf("slider value=%v max=%v", slider.value, slider.maxValue)
+	}
+}
+
 func TestLiveGlueEnterWorldIsDisabledWhileLoading(t *testing.T) {
 	dataPath := os.Getenv("WOW_TEST_DATA")
 	if dataPath == "" {

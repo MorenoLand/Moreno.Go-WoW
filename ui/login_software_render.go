@@ -35,6 +35,7 @@ type UIEngine struct {
 	statusDialogType string
 	rememberMe       bool
 	pressed          *widget
+	sliderDragging   *widget
 	selecting        *widget
 	hovered          *widget
 	screen           Rect
@@ -1152,6 +1153,10 @@ func (eng *UIEngine) HandleCursor(x, y float64) bool {
 		eng.setEditCursorAt(eng.selecting, x, true)
 		return true
 	}
+	if eng.sliderDragging != nil {
+		eng.setSliderValueAt(eng.sliderDragging, x, y)
+		return true
+	}
 	if eng.debugPanel.dragging {
 		eng.debugPanel.move(x, y, eng)
 		if eng.hovered != nil && !eng.hovered.highlightLocked {
@@ -1206,11 +1211,24 @@ func (eng *UIEngine) HandleMouse(x, y float64, button window.MouseButton, down b
 			eng.Rt.setFocus(target)
 			eng.setEditCursor(target, x)
 			eng.selecting = target
+		} else if target.kind == kindSlider {
+			eng.sliderDragging = target
+			eng.setSliderValueAt(target, x, y)
 		} else if target.kind == kindButton || target.kind == kindCheckButton {
 			target.buttonState = "PUSHED"
 		}
 		if eng.Rt != nil {
 			eng.Rt.fire(target, "OnMouseDown", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString("LeftButton")})
+		}
+		return true
+	}
+	if eng.sliderDragging != nil {
+		slider := eng.sliderDragging
+		eng.setSliderValueAt(slider, x, y)
+		eng.sliderDragging = nil
+		eng.pressed = nil
+		if eng.Rt != nil {
+			eng.Rt.fire(slider, "OnMouseUp", []lua.LValue{slider.luaValue(eng.Rt.L), lua.LString("LeftButton")})
 		}
 		return true
 	}
@@ -1245,6 +1263,71 @@ func (eng *UIEngine) HandleMouse(x, y float64, button window.MouseButton, down b
 		return true
 	}
 	return pressed == target
+}
+
+func (eng *UIEngine) setSliderValueAt(w *widget, x, y float64) {
+	if w == nil || w.kind != kindSlider || eng.uiScale <= 0 {
+		return
+	}
+	rect, ok := eng.rects[w]
+	if !ok {
+		rect = w.renderRect
+	}
+	if rect.W() <= 0 || rect.H() <= 0 {
+		return
+	}
+	pointX := x / eng.uiScale
+	pointY := (float64(eng.screenHeight) - y) / eng.uiScale
+	thumbWidth, thumbHeight := 18.0, 24.0
+	if w.thumbTexture != nil {
+		if w.thumbTexture.width > 0 {
+			thumbWidth = w.thumbTexture.width
+		}
+		if w.thumbTexture.height > 0 {
+			thumbHeight = w.thumbTexture.height
+		}
+	}
+	var fraction float64
+	if strings.EqualFold(w.orientation, "HORIZONTAL") {
+		start := rect.X0 + thumbWidth/2
+		end := rect.X1 - thumbWidth/2
+		if end <= start {
+			fraction = 0
+		} else {
+			fraction = (pointX - start) / (end - start)
+		}
+	} else {
+		start := rect.Y0 + thumbHeight/2
+		end := rect.Y1 - thumbHeight/2
+		if end <= start {
+			fraction = 0
+		} else {
+			fraction = (pointY - start) / (end - start)
+		}
+	}
+	if fraction < 0 {
+		fraction = 0
+	}
+	if fraction > 1 {
+		fraction = 1
+	}
+	value := w.minValue + fraction*(w.maxValue-w.minValue)
+	if w.valueStep > 0 {
+		value = w.minValue + math.Round((value-w.minValue)/w.valueStep)*w.valueStep
+	}
+	if value < w.minValue {
+		value = w.minValue
+	}
+	if value > w.maxValue {
+		value = w.maxValue
+	}
+	if value == w.value {
+		return
+	}
+	w.value = value
+	if eng.Rt != nil {
+		eng.Rt.fire(w, "OnValueChanged", []lua.LValue{w.luaValue(eng.Rt.L), lua.LNumber(value)})
+	}
 }
 
 func (eng *UIEngine) HandleChar(char rune) bool {
