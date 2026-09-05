@@ -45,6 +45,8 @@ type UIEngine struct {
 	rects            map[*widget]Rect
 	layoutActive     map[*widget]bool
 	textFaces        map[string]font.Face
+	layerPool        []*image.RGBA
+	layerDepth       int
 	movieFile        string
 	movieImage       image.Image
 	movie            *moviePlayback
@@ -176,11 +178,16 @@ func newUIEngine(rt *Runtime, loader *Loader, bgImagePath string) (*UIEngine, er
 		FontObjSm:   fontObjSm,
 		AssetLoader: loader,
 		Cache:       cache,
+		textFaces:   make(map[string]font.Face),
 		BgImagePath: bgImagePath,
 	}, nil
 }
 
 func (eng *UIEngine) Close() {
+	for _, textFace := range eng.textFaces {
+		textFace.Close()
+	}
+	eng.textFaces = nil
 	if eng.Rt != nil {
 		eng.Rt.Close()
 		eng.Rt = nil
@@ -295,21 +302,13 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 	eng.uiScale = uiScale
 	eng.screenWidth = screenWidth
 	eng.screenHeight = screenHeight
+	eng.layerDepth = 0
 	eng.screen = Rect{X0: 0, Y0: 0, X1: float64(screenWidth) / uiScale, Y1: 768}
 	eng.rects = make(map[*widget]Rect)
 	eng.layoutActive = make(map[*widget]bool)
 
-	face, _ := opentype.NewFace(eng.FontObj, &opentype.FaceOptions{Size: 13 * uiScale, DPI: 96})
-	defer face.Close()
-
-	faceLg, _ := opentype.NewFace(eng.FontObj, &opentype.FaceOptions{Size: 16 * uiScale, DPI: 96})
-	defer faceLg.Close()
-	eng.textFaces = make(map[string]font.Face)
-	defer func() {
-		for _, textFace := range eng.textFaces {
-			textFace.Close()
-		}
-	}()
+	face := eng.cachedFace("__base13", eng.FontObj, 13*uiScale)
+	faceLg := eng.cachedFace("__base16", eng.FontObj, 16*uiScale)
 	if root != nil {
 		eng.prepareText(root, face, faceLg)
 	}
@@ -339,7 +338,7 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 	var paintWidget func(*image.RGBA, *widget, Rect)
 	paintChildren := func(target *image.RGBA, w *widget, rect Rect) {
 		if w.kind == kindScrollFrame {
-			children := image.NewRGBA(target.Bounds())
+			children := eng.acquireLayer(target.Bounds())
 			for _, child := range orderedChildren(w.children) {
 				if child.shown && child == w.scrollChild {
 					paint(children, child, rect)
@@ -349,6 +348,7 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 			if !clip.Empty() {
 				draw.Draw(target, clip, children, clip.Min, draw.Over)
 			}
+			eng.releaseLayer()
 			for _, child := range orderedChildren(w.children) {
 				if child.shown && child != w.scrollChild {
 					paint(target, child, rect)
@@ -483,12 +483,13 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 		if alpha <= 0 {
 			return
 		}
-		layer := image.NewRGBA(target.Bounds())
+		layer := eng.acquireLayer(target.Bounds())
 		paintWidget(layer, w, parent)
 		for index := 3; index < len(layer.Pix); index += 4 {
 			layer.Pix[index] = uint8(float64(layer.Pix[index]) * alpha)
 		}
 		draw.Draw(target, target.Bounds(), layer, layer.Bounds().Min, draw.Over)
+		eng.releaseLayer()
 	}
 
 	if root != nil {
@@ -558,6 +559,27 @@ func (eng *UIEngine) updateScrollFrames() {
 				down.enabled = scrollbar.value < scrollbar.maxValue
 			}
 		}
+	}
+}
+
+func (eng *UIEngine) acquireLayer(bounds image.Rectangle) *image.RGBA {
+	if eng.layerPool == nil {
+		eng.layerPool = make([]*image.RGBA, 0, 2)
+	}
+	if eng.layerDepth == len(eng.layerPool) {
+		eng.layerPool = append(eng.layerPool, image.NewRGBA(bounds))
+	} else if !eng.layerPool[eng.layerDepth].Bounds().Eq(bounds) {
+		eng.layerPool[eng.layerDepth] = image.NewRGBA(bounds)
+	}
+	layer := eng.layerPool[eng.layerDepth]
+	eng.layerDepth++
+	draw.Draw(layer, bounds, &image.Uniform{C: color.Transparent}, image.Point{}, draw.Src)
+	return layer
+}
+
+func (eng *UIEngine) releaseLayer() {
+	if eng.layerDepth > 0 {
+		eng.layerDepth--
 	}
 }
 
@@ -2104,15 +2126,25 @@ func (eng *UIEngine) faceFor(w *widget, fallback, fallbackLarge font.Face) font.
 	if size == 13 && style == nil {
 		return fallback
 	}
-	key := fmt.Sprintf("%s|%.3f", fontKey, size*eng.uiScale)
-	if textFace, ok := eng.textFaces[key]; ok {
+	return eng.cachedFace(fontKey, fontObj, size*eng.uiScale, fallback)
+}
+
+func (eng *UIEngine) cachedFace(key string, fontObj *opentype.Font, size float64, fallback ...font.Face) font.Face {
+	if eng.textFaces == nil {
+		eng.textFaces = make(map[string]font.Face)
+	}
+	cacheKey := fmt.Sprintf("%s|%.3f", key, size)
+	if textFace, ok := eng.textFaces[cacheKey]; ok {
 		return textFace
 	}
-	textFace, err := opentype.NewFace(fontObj, &opentype.FaceOptions{Size: size * eng.uiScale, DPI: 96})
+	textFace, err := opentype.NewFace(fontObj, &opentype.FaceOptions{Size: size, DPI: 96})
 	if err != nil {
-		return fallback
+		if len(fallback) > 0 {
+			return fallback[0]
+		}
+		return nil
 	}
-	eng.textFaces[key] = textFace
+	eng.textFaces[cacheKey] = textFace
 	return textFace
 }
 
