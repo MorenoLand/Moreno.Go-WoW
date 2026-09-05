@@ -31,8 +31,8 @@ const (
 	worldBodyHeight      = 2.0
 	worldStepHeight      = 0.8
 	worldMaxGroundSnap   = 5.0
-	worldObjectDistance  = worldTileSize * 0.75
-	worldWMODoodadBudget = 512
+	worldObjectDistance  = worldTileSize * 0.5
+	worldWMODoodadBudget = 128
 )
 
 type worldADT struct {
