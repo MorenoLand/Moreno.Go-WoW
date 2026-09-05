@@ -13,6 +13,18 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
+func TestCharacterCreateRaceOrderMatchesNative(t *testing.T) {
+	expected := []createRaceInfo{{1, "RACE_HUMAN", "Human", "Human", "Alliance"}, {3, "RACE_DWARF", "Dwarf", "Dwarf", "Alliance"}, {4, "RACE_NIGHTELF", "NightElf", "NightElf", "Alliance"}, {7, "RACE_GNOME", "Gnome", "Dwarf", "Alliance"}, {11, "RACE_DRAENEI", "Draenei", "Draenei", "Alliance"}, {2, "RACE_ORC", "Orc", "Orc", "Horde"}, {5, "RACE_SCOURGE", "Scourge", "Scourge", "Horde"}, {6, "RACE_TAUREN", "Tauren", "Tauren", "Horde"}, {8, "RACE_TROLL", "Troll", "Orc", "Horde"}, {10, "RACE_BLOODELF", "BloodElf", "BloodElf", "Horde"}}
+	if len(createRaces) != len(expected) {
+		t.Fatalf("race count=%d want=%d", len(createRaces), len(expected))
+	}
+	for index, want := range expected {
+		if createRaces[index] != want {
+			t.Fatalf("race index=%d got=%+v want=%+v", index+1, createRaces[index], want)
+		}
+	}
+}
+
 func TestLiveGlueInputGeometryMatchesMPQ(t *testing.T) {
 	dataPath := os.Getenv("WOW_TEST_DATA")
 	if dataPath == "" {
@@ -225,6 +237,24 @@ func TestLiveCharacterCreateDragChangesFacing(t *testing.T) {
 	updated, ok := engine.CreatePreviewState()
 	if !ok || math.Abs(float64(updated.Facing-initial.Facing)) < 0.1 {
 		t.Fatalf("create drag facing=%v initial=%v state=%v", updated.Facing, initial.Facing, ok)
+	}
+}
+
+func TestLiveCharacterCreateRaceContracts(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	engine, err := LoadUIEngineFromMPQ(dataPath, "enUS", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if !engine.Rt.Execute("race5Name, race5Faction = GetFactionForRace(5); race8Name, race8Faction = GetFactionForRace(8)", "@create-race-contract-test.lua") {
+		t.Fatalf("race contract failed: %v", engine.Rt.ScriptErrors())
+	}
+	if engine.Rt.L.GetGlobal("race5Name") != lua.LString("Draenei") || engine.Rt.L.GetGlobal("race5Faction") != lua.LString("Alliance") || engine.Rt.L.GetGlobal("race8Name") != lua.LString("Tauren") || engine.Rt.L.GetGlobal("race8Faction") != lua.LString("Horde") {
+		t.Fatalf("race order/factions draenei=%v/%v tauren=%v/%v", engine.Rt.L.GetGlobal("race5Name"), engine.Rt.L.GetGlobal("race5Faction"), engine.Rt.L.GetGlobal("race8Name"), engine.Rt.L.GetGlobal("race8Faction"))
 	}
 }
 

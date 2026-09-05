@@ -32,7 +32,7 @@ type createClassInfo struct {
 	tank, healer, damage bool
 }
 
-var createRaces = []createRaceInfo{{1, "RACE_HUMAN", "Human", "Human", "Alliance"}, {3, "RACE_DWARF", "Dwarf", "Dwarf", "Alliance"}, {7, "RACE_GNOME", "Gnome", "Dwarf", "Alliance"}, {4, "RACE_NIGHTELF", "NightElf", "NightElf", "Alliance"}, {6, "RACE_TAUREN", "Tauren", "Tauren", "Horde"}, {5, "RACE_SCOURGE", "Scourge", "Scourge", "Horde"}, {8, "RACE_TROLL", "Troll", "Orc", "Horde"}, {2, "RACE_ORC", "Orc", "Orc", "Horde"}, {10, "RACE_BLOODELF", "BloodElf", "BloodElf", "Horde"}, {11, "RACE_DRAENEI", "Draenei", "Draenei", "Alliance"}}
+var createRaces = []createRaceInfo{{1, "RACE_HUMAN", "Human", "Human", "Alliance"}, {3, "RACE_DWARF", "Dwarf", "Dwarf", "Alliance"}, {4, "RACE_NIGHTELF", "NightElf", "NightElf", "Alliance"}, {7, "RACE_GNOME", "Gnome", "Dwarf", "Alliance"}, {11, "RACE_DRAENEI", "Draenei", "Draenei", "Alliance"}, {2, "RACE_ORC", "Orc", "Orc", "Horde"}, {5, "RACE_SCOURGE", "Scourge", "Scourge", "Horde"}, {6, "RACE_TAUREN", "Tauren", "Tauren", "Horde"}, {8, "RACE_TROLL", "Troll", "Orc", "Horde"}, {10, "RACE_BLOODELF", "BloodElf", "BloodElf", "Horde"}}
 
 var createClasses = []createClassInfo{{"WARRIOR", "WARRIOR", true, false, true}, {"PALADIN", "PALADIN", true, true, true}, {"HUNTER", "HUNTER", false, false, true}, {"ROGUE", "ROGUE", false, false, true}, {"PRIEST", "PRIEST", false, true, true}, {"DEATHKNIGHT", "DEATHKNIGHT", true, false, true}, {"SHAMAN", "SHAMAN", false, true, true}, {"MAGE", "MAGE", false, false, true}, {"WARLOCK", "WARLOCK", false, false, true}, {"DRUID", "DRUID", true, true, true}}
 
@@ -1172,14 +1172,14 @@ func validCreateClass(raceIndex, classIndex int) bool {
 	valid := map[int]map[int]bool{
 		1:  {1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 8: true, 9: true},
 		2:  {1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true},
-		3:  {1: true, 4: true, 6: true, 8: true, 9: true},
-		4:  {1: true, 3: true, 4: true, 5: true, 6: true, 10: true},
-		5:  {1: true, 3: true, 5: true, 6: true, 7: true, 10: true},
-		6:  {1: true, 4: true, 5: true, 6: true, 8: true, 9: true},
-		7:  {1: true, 3: true, 4: true, 6: true, 8: true, 9: true, 10: true},
-		8:  {1: true, 3: true, 4: true, 5: true, 6: true, 7: true, 8: true, 9: true, 10: true},
-		9:  {1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 8: true, 9: true},
-		10: {1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true, 8: true},
+		3:  {1: true, 3: true, 4: true, 5: true, 6: true, 10: true},
+		4:  {1: true, 4: true, 6: true, 8: true, 9: true},
+		5:  {1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true, 8: true},
+		6:  {1: true, 3: true, 4: true, 5: true, 6: true, 7: true, 8: true, 9: true, 10: true},
+		7:  {1: true, 4: true, 5: true, 6: true, 8: true, 9: true},
+		8:  {1: true, 3: true, 5: true, 6: true, 7: true, 10: true},
+		9:  {1: true, 3: true, 4: true, 6: true, 8: true, 9: true, 10: true},
+		10: {1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 8: true, 9: true},
 	}
 	return valid[raceIndex][classIndex]
 }
