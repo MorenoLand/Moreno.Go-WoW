@@ -42,11 +42,15 @@ type worldEntity struct {
 	attemptedID   uint32
 }
 
-func (tables *worldCreatureTables) definition(loader *ui.Loader, displayID uint32) (worldCreatureDefinition, error) {
+func (tables *worldCreatureTables) definition(loader *ui.Loader, displayID, nativeDisplayID uint32) (worldCreatureDefinition, error) {
+	cacheID := displayID
+	if cacheID == 0 {
+		cacheID = nativeDisplayID
+	}
 	if tables.cache == nil {
 		tables.cache = make(map[uint32]worldCreatureDefinition)
 	}
-	if definition, ok := tables.cache[displayID]; ok {
+	if definition, ok := tables.cache[cacheID]; ok {
 		return definition, nil
 	}
 	if !tables.loaded {
@@ -60,14 +64,19 @@ func (tables *worldCreatureTables) definition(loader *ui.Loader, displayID uint3
 		tables.extra, _ = loadCharacterDBC(loader, `DBFilesClient\CreatureDisplayInfoExtra.dbc`)
 		tables.loaded = true
 	}
-	display := characterDBCRecordByID(tables.displays, displayID)
+	resolvedDisplayID := displayID
+	display := characterDBCRecordByID(tables.displays, resolvedDisplayID)
+	if display < 0 && nativeDisplayID != 0 {
+		resolvedDisplayID = nativeDisplayID
+		display = characterDBCRecordByID(tables.displays, resolvedDisplayID)
+	}
 	if display < 0 || tables.displays.fields < 9 {
-		return worldCreatureDefinition{}, fmt.Errorf("CreatureDisplayInfo.dbc has no display %d", displayID)
+		return worldCreatureDefinition{}, fmt.Errorf("CreatureDisplayInfo.dbc has no display %d", resolvedDisplayID)
 	}
 	modelID := tables.displays.value(display, 1)
 	model := characterDBCRecordByID(tables.models, modelID)
 	if model < 0 || tables.models.fields < 3 {
-		return worldCreatureDefinition{}, fmt.Errorf("CreatureModelData.dbc has no model %d for display %d", modelID, displayID)
+		return worldCreatureDefinition{}, fmt.Errorf("CreatureModelData.dbc has no model %d for display %d", modelID, resolvedDisplayID)
 	}
 	definition := worldCreatureDefinition{path: normalizeModelPath(tables.models.string(model, 2)), scale: tables.displays.valueFloat(display, 4) * tables.models.valueFloat(model, 4)}
 	for index := range definition.variations {
@@ -83,9 +92,9 @@ func (tables *worldCreatureTables) definition(loader *ui.Loader, displayID uint3
 		}
 	}
 	if definition.path == "" {
-		return worldCreatureDefinition{}, fmt.Errorf("display %d has no model path", displayID)
+		return worldCreatureDefinition{}, fmt.Errorf("display %d has no model path", resolvedDisplayID)
 	}
-	tables.cache[displayID] = definition
+	tables.cache[cacheID] = definition
 	return definition, nil
 }
 
@@ -347,12 +356,17 @@ func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureT
 		return nil
 	}
 	displayID := entity.fields[world.UnitDisplayIDField]
-	if displayID == 0 {
+	nativeDisplayID := entity.fields[world.UnitNativeDisplayIDField]
+	modelID := displayID
+	if modelID == 0 {
+		modelID = nativeDisplayID
+	}
+	if modelID == 0 {
 		return nil
 	}
-	if entity.node == nil && entity.attemptedID != displayID {
-		entity.attemptedID = displayID
-		definition, err := tables.definition(loader, displayID)
+	if entity.node == nil && entity.attemptedID != modelID {
+		entity.attemptedID = modelID
+		definition, err := tables.definition(loader, displayID, nativeDisplayID)
 		if err != nil {
 			return err
 		}
@@ -361,7 +375,7 @@ func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureT
 			return err
 		}
 		entity.node = wrapWorldModel(model, entity.movement.Position, definition.scale)
-		entity.displayID = displayID
+		entity.displayID = modelID
 		scene.Add(entity.node)
 	}
 	if entity.node != nil {
