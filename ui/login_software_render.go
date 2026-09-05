@@ -615,11 +615,19 @@ func (eng *UIEngine) paintSliderThumb(w *widget, rect Rect, paint func(*widget, 
 	if thumbHeight <= 0 {
 		thumbHeight = 24
 	}
-	trackStart := rect.Y0 + 18
-	trackEnd := rect.Y1 - 18
-	travel := math.Max(0, trackEnd-trackStart-thumbHeight)
-	centerY := trackStart + thumbHeight/2 + travel*fraction
-	centerX := (rect.X0 + rect.X1) / 2
+	centerX, centerY := (rect.X0+rect.X1)/2, 0.0
+	if strings.EqualFold(w.orientation, "HORIZONTAL") {
+		trackStart := rect.X0 + thumbWidth/2
+		trackEnd := rect.X1 - thumbWidth/2
+		travel := math.Max(0, trackEnd-trackStart)
+		centerX = trackStart + travel*fraction
+		centerY = (rect.Y0 + rect.Y1) / 2
+	} else {
+		trackStart := rect.Y0 + 18
+		trackEnd := rect.Y1 - 18
+		travel := math.Max(0, trackEnd-trackStart-thumbHeight)
+		centerY = trackStart + thumbHeight/2 + travel*fraction
+	}
 	thumbRect := Rect{X0: centerX - thumbWidth/2, Y0: centerY - thumbHeight/2, X1: centerX + thumbWidth/2, Y1: centerY + thumbHeight/2}
 	eng.rects[w.thumbTexture] = thumbRect
 	w.thumbTexture.renderRect = thumbRect
