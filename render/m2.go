@@ -1087,10 +1087,11 @@ func loadM2AnimationTracks(loader *ui.Loader, modelPath string, model *parsedM2)
 	events, _ := readM2Array(model.data, 0x100, 36)
 	model.events = readM2Events(model.data, events, len(model.sequences), external, inline)
 	resolveM2TrackAliases(model)
+	sequence := defaultM2Sequence(model)
 	for index := range model.bones {
-		model.bones[index].translation = model.bones[index].translationTrack.value(0, 0, model.globalLoops, [3]float32{})
-		model.bones[index].rotation = model.bones[index].rotationTrack.value(0, 0, model.globalLoops, [4]float32{0, 0, 0, 1})
-		model.bones[index].scale = model.bones[index].scaleTrack.value(0, 0, model.globalLoops, [3]float32{1, 1, 1})
+		model.bones[index].translation = model.bones[index].translationTrack.value(sequence, 0, model.globalLoops, [3]float32{})
+		model.bones[index].rotation = model.bones[index].rotationTrack.value(sequence, 0, model.globalLoops, [4]float32{0, 0, 0, 1})
+		model.bones[index].scale = model.bones[index].scaleTrack.value(sequence, 0, model.globalLoops, [3]float32{1, 1, 1})
 	}
 }
 

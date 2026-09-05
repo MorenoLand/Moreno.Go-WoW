@@ -590,7 +590,13 @@ func TestLiveM2AnimationTracks(t *testing.T) {
 		if len(model.sequences) == 0 || !modelHasAnimation(&model) {
 			t.Fatalf("%s has no decoded animation sequences", path)
 		}
-		animation := &m2Animation{model: &model}
+		sequence := defaultM2Sequence(&model)
+		for index, bone := range model.bones {
+			if got, want := bone.rotation, bone.rotationTrack.value(sequence, 0, model.globalLoops, [4]float32{0, 0, 0, 1}); got != want {
+				t.Fatalf("%s bone=%d initial rotation=%v want primary sequence=%v", path, index, got, want)
+			}
+		}
+		animation := &m2Animation{model: &model, sequence: sequence}
 		mid := uint32(0)
 		if model.sequences[0].duration > 1 {
 			mid = model.sequences[0].duration / 2
