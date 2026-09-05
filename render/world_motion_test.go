@@ -52,9 +52,9 @@ func TestWorldM2RotationMatchesPlacementAxes(t *testing.T) {
 
 func TestSceneCharacterTransformPreservesNormalizedPosition(t *testing.T) {
 	background := glueModelInfo{standPosition: *math32.NewVector3(10, 20, 30), modelScale: 4}
-	character := glueModelInfo{modelScale: 2}
+	character := glueModelInfo{modelScale: 2, modelBottom: -1.5}
 	scale, position := sceneCharacterTransform(background, character, *math32.NewVector3(-1, 2, 3))
-	if scale != 4 || position.X != 8 || position.Y != 24 || position.Z != 36 {
+	if scale != 4 || position.X != 8 || position.Y != 27 || position.Z != 36 {
 		t.Fatalf("scale=%v position=%v", scale, position)
 	}
 }

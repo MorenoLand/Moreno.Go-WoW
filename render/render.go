@@ -1040,7 +1040,7 @@ func sceneCharacterTransform(background, character glueModelInfo, normalizedPosi
 	if character.modelScale > 0 {
 		factor = background.modelScale / character.modelScale
 	}
-	return background.modelScale, *math32.NewVector3(background.standPosition.X+normalizedPosition.X*factor, background.standPosition.Y+normalizedPosition.Y*factor, background.standPosition.Z+normalizedPosition.Z*factor)
+	return background.modelScale, *math32.NewVector3(background.standPosition.X+normalizedPosition.X*factor, background.standPosition.Y+(normalizedPosition.Y-character.modelBottom)*factor, background.standPosition.Z+normalizedPosition.Z*factor)
 }
 
 func configureSceneCamera(cam *camera.Camera, model *core.Node) {
