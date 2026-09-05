@@ -1955,6 +1955,21 @@ func drawTextAlignedVStyle(canvas *image.RGBA, face font.Face, text string, r Re
 		return
 	}
 	clip := dst.Intersect(canvas.Bounds())
+	if shadow != nil {
+		padding := 0
+		if strings.EqualFold(shadow.Outline, "NORMAL") {
+			padding = 1
+		}
+		if shadow.Shadow {
+			shadowY := int(math.Round(-shadow.ShadowOffsetY * shadowScale))
+			if value := int(math.Abs(float64(shadowY))) + 1; value > padding {
+				padding = value
+			}
+		}
+		clip.Min.Y -= padding
+		clip.Max.Y += padding
+		clip = clip.Intersect(canvas.Bounds())
+	}
 	if clip.Empty() {
 		return
 	}
@@ -1974,6 +1989,10 @@ func drawTextAlignedVStyle(canvas *image.RGBA, face font.Face, text string, r Re
 	case "BOTTOM":
 		startY = dst.Max.Y - totalHeight + ascent
 	}
+	drawLine := func(line string, x, y int, c color.Color) {
+		d := &font.Drawer{Dst: destination, Src: image.NewUniform(c), Face: face, Dot: fixed.P(x, y)}
+		d.DrawString(line)
+	}
 	for index, line := range lines {
 		width := font.MeasureString(face, line).Ceil()
 		dotX := dst.Min.X + 4
@@ -1983,15 +2002,23 @@ func drawTextAlignedVStyle(canvas *image.RGBA, face font.Face, text string, r Re
 		case "RIGHT":
 			dotX = dst.Max.X - width - 4
 		}
+		if shadow != nil && strings.EqualFold(shadow.Outline, "NORMAL") {
+			outlineColor := color.RGBA{A: 255}
+			for offsetY := -1; offsetY <= 1; offsetY++ {
+				for offsetX := -1; offsetX <= 1; offsetX++ {
+					if offsetX != 0 || offsetY != 0 {
+						drawLine(line, dotX+offsetX, startY+index*height+offsetY, outlineColor)
+					}
+				}
+			}
+		}
 		if shadow != nil && shadow.Shadow {
 			shadowColor := color.RGBA{R: uint8(shadow.ShadowColor.r * 255), G: uint8(shadow.ShadowColor.g * 255), B: uint8(shadow.ShadowColor.b * 255), A: uint8(shadow.ShadowColor.a * 255)}
 			shadowX := int(math.Round(shadow.ShadowOffsetX * shadowScale))
 			shadowY := int(math.Round(-shadow.ShadowOffsetY * shadowScale))
-			d := &font.Drawer{Dst: destination, Src: image.NewUniform(shadowColor), Face: face, Dot: fixed.P(dotX+shadowX, startY+index*height+shadowY)}
-			d.DrawString(line)
+			drawLine(line, dotX+shadowX, startY+index*height+shadowY, shadowColor)
 		}
-		d := &font.Drawer{Dst: destination, Src: image.NewUniform(c), Face: face, Dot: fixed.P(dotX, startY+index*height)}
-		d.DrawString(line)
+		drawLine(line, dotX, startY+index*height, c)
 	}
 }
 
