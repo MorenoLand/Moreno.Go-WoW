@@ -14,6 +14,16 @@ func TestOrderedChildrenUsesFrameStrataAndLevels(t *testing.T) {
 	}
 }
 
+func TestCharacterSelectionHighlightRendersBehindSiblingText(t *testing.T) {
+	previous := newWidget(kindButton, "CharSelectCharacterButton1")
+	selected := newWidget(kindButton, "CharSelectCharacterButton2")
+	selected.highlighted = true
+	ordered := orderedChildren([]*widget{previous, selected})
+	if ordered[0] != selected || ordered[1] != previous {
+		t.Fatalf("character selection z order=%s,%s", ordered[0].name, ordered[1].name)
+	}
+}
+
 func TestAddWidgetChildDeduplicates(t *testing.T) {
 	parent := newWidget(kindFrame, "parent")
 	child := newWidget(kindFrame, "child")

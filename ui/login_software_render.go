@@ -1426,6 +1426,9 @@ func orderedChildren(children []*widget) []*widget {
 	ordered := append([]*widget(nil), children...)
 	sort.SliceStable(ordered, func(left, right int) bool {
 		first, second := ordered[left], ordered[right]
+		if isCharacterSelectButton(first) && isCharacterSelectButton(second) && first.highlighted != second.highlighted {
+			return first.highlighted && !second.highlighted
+		}
 		if first.frameStrata != second.frameStrata {
 			return first.frameStrata < second.frameStrata
 		}
@@ -1435,6 +1438,10 @@ func orderedChildren(children []*widget) []*widget {
 		return first.layerLevel < second.layerLevel
 	})
 	return ordered
+}
+
+func isCharacterSelectButton(w *widget) bool {
+	return w != nil && strings.HasPrefix(w.name, "CharSelectCharacterButton")
 }
 
 // renderBackground draws the WotLK Northrend background.
