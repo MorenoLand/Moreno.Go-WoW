@@ -529,6 +529,13 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.enableMouse = L.CheckBool(2)
 			return 0
 		},
+		"SetHitRectInsets": func(L *lua.LState, w *widget) int {
+			w.hitInsetL = float64(L.CheckNumber(2))
+			w.hitInsetR = float64(L.CheckNumber(3))
+			w.hitInsetT = float64(L.CheckNumber(4))
+			w.hitInsetB = float64(L.CheckNumber(5))
+			return 0
+		},
 		"SetMovable":        func(L *lua.LState, w *widget) int { w.movable = L.CheckBool(2); return 0 },
 		"RegisterForClicks": func(L *lua.LState, w *widget) int { return 0 },
 		"RegisterForDrag":   func(L *lua.LState, w *widget) int { return 0 },

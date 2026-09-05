@@ -83,3 +83,16 @@ func TestAuthoredInsetsAndWidgetScaleArePreserved(t *testing.T) {
 		t.Fatalf("scaled edit rect=%v", got)
 	}
 }
+
+func TestHitRectInsetsAreScriptConfigurable(t *testing.T) {
+	rt := NewRuntime(nil)
+	defer rt.Close()
+	button := newWidget(kindButton, "HitButton")
+	rt.register(button)
+	if !rt.Execute(`HitButton:SetHitRectInsets(1, -100, 3, 4)`, "@hit-insets-test.lua") {
+		t.Fatalf("SetHitRectInsets failed: %v", rt.ScriptErrors())
+	}
+	if button.hitInsetL != 1 || button.hitInsetR != -100 || button.hitInsetT != 3 || button.hitInsetB != 4 {
+		t.Fatalf("hit insets=%v,%v,%v,%v", button.hitInsetL, button.hitInsetR, button.hitInsetT, button.hitInsetB)
+	}
+}
