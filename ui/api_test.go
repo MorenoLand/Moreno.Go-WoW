@@ -68,3 +68,18 @@ assert(fontString:GetName() == "Label" and fontString:GetParent() == Root and fo
 		t.Fatalf("dynamic region constructors failed: %v", rt.ScriptErrors())
 	}
 }
+
+func TestAuthoredInsetsAndWidgetScaleArePreserved(t *testing.T) {
+	edit := newWidget(kindEditBox, "Name")
+	edit.width, edit.height = 200, 37
+	edit.textInsetL = 15
+	edit.textInsetsSet = true
+	textRect := (&UIEngine{}).editTextRect(Rect{X0: 10, Y0: 20, X1: 210, Y1: 57}, edit)
+	if textRect != (Rect{X0: 25, Y0: 20, X1: 210, Y1: 57}) {
+		t.Fatalf("explicit text insets=%v", textRect)
+	}
+	edit.scale = 2
+	if got := ResolveRect(edit, Rect{X0: 0, Y0: 0, X1: 300, Y1: 100}); got != (Rect{X0: -50, Y0: 13, X1: 350, Y1: 87}) {
+		t.Fatalf("scaled edit rect=%v", got)
+	}
+}

@@ -57,9 +57,9 @@ func resolveRect(w *widget, parent Rect, relative func(string) (Rect, bool)) Rec
 			// No anchors: sized widgets center on the parent.
 			cx := (parent.X0 + parent.X1) / 2
 			cy := (parent.Y0 + parent.Y1) / 2
-			return Rect{cx - w.width/2, cy - w.height/2, cx + w.width/2, cy + w.height/2}
+			return scaleRect(Rect{cx - w.width/2, cy - w.height/2, cx + w.width/2, cy + w.height/2}, w.scale)
 		}
-		return parent
+		return scaleRect(parent, w.scale)
 	}
 
 	// Compute each anchor's absolute position, then derive the rect from
@@ -170,7 +170,18 @@ func resolveRect(w *widget, parent Rect, relative func(string) (Rect, bool)) Rec
 	if rect.Y1 < rect.Y0 {
 		rect.Y0, rect.Y1 = rect.Y1, rect.Y0
 	}
-	return rect
+	return scaleRect(rect, w.scale)
+}
+
+func scaleRect(rect Rect, scale float64) Rect {
+	if scale <= 0 || scale == 1 {
+		return rect
+	}
+	cx := (rect.X0 + rect.X1) / 2
+	cy := (rect.Y0 + rect.Y1) / 2
+	halfWidth := (rect.X1 - rect.X0) * scale / 2
+	halfHeight := (rect.Y1 - rect.Y0) * scale / 2
+	return Rect{X0: cx - halfWidth, Y0: cy - halfHeight, X1: cx + halfWidth, Y1: cy + halfHeight}
 }
 
 // ScreenRect converts a client-space rect (Y up, BOTTOMLEFT origin) to an

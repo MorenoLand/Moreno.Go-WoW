@@ -219,6 +219,7 @@ type widget struct {
 	textInsetR      float64
 	textInsetT      float64
 	textInsetB      float64
+	textInsetsSet   bool
 	shadowColor     rgba
 	shadowColorSet  bool
 	shadowOffsetX   float64
@@ -790,6 +791,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.textInsetR = float64(L.CheckNumber(3))
 			w.textInsetT = float64(L.CheckNumber(4))
 			w.textInsetB = float64(L.CheckNumber(5))
+			w.textInsetsSet = true
 			return 0
 		},
 		"HighlightText": func(L *lua.LState, w *widget) int {

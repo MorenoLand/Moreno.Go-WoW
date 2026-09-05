@@ -607,6 +607,7 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 				w.textInsetR = attrFloat(inset, "right", 0)
 				w.textInsetT = attrFloat(inset, "top", 0)
 				w.textInsetB = attrFloat(inset, "bottom", 0)
+				w.textInsetsSet = true
 			}
 		case "HitRectInsets":
 			if inset := group.child("AbsInset"); inset != nil {

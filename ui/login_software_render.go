@@ -753,7 +753,7 @@ func (eng *UIEngine) layoutRect(w *widget, parent Rect) Rect {
 	}
 	if w.parent != nil && w.parent.kind == kindScrollFrame && len(w.points) == 0 {
 		shift := w.parent.verticalScroll
-		rect := Rect{X0: parentRect.X0, Y0: parentRect.Y1 - shift - w.height, X1: parentRect.X0 + w.width, Y1: parentRect.Y1 - shift}
+		rect := scaleRect(Rect{X0: parentRect.X0, Y0: parentRect.Y1 - shift - w.height, X1: parentRect.X0 + w.width, Y1: parentRect.Y1 - shift}, w.scale)
 		eng.rects[w] = rect
 		w.renderRect = rect
 		w.hasRenderRect = true
@@ -828,14 +828,16 @@ func (eng *UIEngine) editTextRect(rect Rect, w *widget) Rect {
 	right := w.textInsetR
 	top := w.textInsetT
 	bottom := w.textInsetB
-	if left == 0 {
-		left = 12
-	}
-	if right == 0 {
-		right = 5
-	}
-	if top == 0 && bottom == 0 {
-		bottom = 4
+	if !w.textInsetsSet {
+		if left == 0 {
+			left = 12
+		}
+		if right == 0 {
+			right = 5
+		}
+		if top == 0 && bottom == 0 {
+			bottom = 4
+		}
 	}
 	return Rect{X0: rect.X0 + left, Y0: rect.Y0 + bottom, X1: rect.X1 - right, Y1: rect.Y1 - top}
 }
