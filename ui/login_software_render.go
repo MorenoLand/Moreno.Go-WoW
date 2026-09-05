@@ -1918,38 +1918,19 @@ func drawBackdropEdge(canvas *image.RGBA, dst image.Rectangle, source image.Imag
 	if edge < 1 {
 		return
 	}
-	atlas := [8][4]float64{
-		{0.0078125, 0.1171875, 0.0625, 0.9375},
-		{0.1328125, 0.2421875, 0.0625, 0.9375},
-		{0.2578125, 0.3671875, 0.0625, 0.9375},
-		{0.3828125, 0.4921875, 0.0625, 0.9375},
-		{0.5078125, 0.6171875, 0.0625, 0.9375},
-		{0.6328125, 0.7421875, 0.0625, 0.9375},
-		{0.7578125, 0.8671875, 0.0625, 0.9375},
-		{0.8828125, 0.9921875, 0.0625, 0.9375},
-	}
 	drawPart := func(target image.Rectangle, index int, transpose bool, fraction float64) {
 		if target.Dx() <= 0 || target.Dy() <= 0 {
 			return
 		}
 		fraction = math.Max(0, math.Min(1, fraction))
-		coords := atlas[index]
-		x0 := b.Min.X + int(math.Round(float64(b.Dx())*coords[0]))
-		x1 := b.Min.X + int(math.Round(float64(b.Dx())*coords[1]))
-		y0 := b.Min.Y + int(math.Round(float64(b.Dy())*coords[2]))
-		y1 := b.Min.Y + int(math.Round(float64(b.Dy())*coords[3]))
-		if x0 < b.Min.X {
-			x0 = b.Min.X
+		tileWidth := b.Dx() / 8
+		if index < 0 || index >= 8 || tileWidth <= 0 {
+			return
 		}
-		if x1 > b.Max.X {
-			x1 = b.Max.X
-		}
-		if y0 < b.Min.Y {
-			y0 = b.Min.Y
-		}
-		if y1 > b.Max.Y {
-			y1 = b.Max.Y
-		}
+		x0 := b.Min.X + index*tileWidth
+		x1 := x0 + tileWidth
+		y0 := b.Min.Y
+		y1 := b.Max.Y
 		if x1 <= x0 || y1 <= y0 {
 			return
 		}
