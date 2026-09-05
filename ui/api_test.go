@@ -106,3 +106,11 @@ func TestTextInsetsRoundTripThroughLua(t *testing.T) {
 		t.Fatalf("text inset round trip failed: %v", rt.ScriptErrors())
 	}
 }
+
+func TestBackdropValuesReadFromAbsValue(t *testing.T) {
+	node := &xmlNode{name: "Backdrop", children: []*xmlNode{{name: "TileSize", children: []*xmlNode{{name: "AbsValue", attrs: map[string]string{"val": "16"}}}}, {name: "EdgeSize", children: []*xmlNode{{name: "AbsValue", attrs: map[string]string{"val": "16"}}}}}}
+	bd := parseBackdrop(node)
+	if bd.tileSize != 16 || bd.edgeSize != 16 {
+		t.Fatalf("backdrop sizes=%v,%v", bd.tileSize, bd.edgeSize)
+	}
+}

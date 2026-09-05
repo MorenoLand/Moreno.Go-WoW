@@ -1010,10 +1010,10 @@ func parseBackdrop(node *xmlNode) *backdrop {
 	bd.edgeFile = node.attrDefault("edgeFile", "")
 	bd.tile = parseBool(node.attrDefault("tile", "false"), false)
 	if ts := node.child("TileSize"); ts != nil {
-		bd.tileSize = attrFloat(ts, "val", 0)
+		bd.tileSize = backdropValue(ts)
 	}
 	if es := node.child("EdgeSize"); es != nil {
-		bd.edgeSize = attrFloat(es, "val", 0)
+		bd.edgeSize = backdropValue(es)
 	}
 	if ins := node.child("BackgroundInsets"); ins != nil {
 		if ai := ins.child("AbsInset"); ai != nil {
@@ -1032,6 +1032,16 @@ func parseBackdrop(node *xmlNode) *backdrop {
 		}
 	}
 	return bd
+}
+
+func backdropValue(node *xmlNode) float64 {
+	if node == nil {
+		return 0
+	}
+	if value := node.child("AbsValue"); value != nil {
+		return attrFloat(value, "val", 0)
+	}
+	return attrFloat(node, "val", 0)
 }
 
 func attrFloat(n *xmlNode, key string, def float64) float64 {
