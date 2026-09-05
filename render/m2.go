@@ -525,7 +525,6 @@ func parseM2(data []byte) (parsedM2, error) {
 type parsedSkin struct {
 	vertices  []uint16
 	indices   []uint16
-	bones     [][4]uint8
 	submeshes []skinSubmesh
 	batches   []skinBatch
 }
@@ -542,10 +541,6 @@ func parseSkin(data []byte) (parsedSkin, error) {
 	if err != nil {
 		return parsedSkin{}, err
 	}
-	bones, err := readSkinArray(data, 0x14, 4)
-	if err != nil {
-		return parsedSkin{}, err
-	}
 	submeshes, err := readSkinArray(data, 0x1c, skinSubmeshSize)
 	if err != nil {
 		return parsedSkin{}, err
@@ -554,16 +549,12 @@ func parseSkin(data []byte) (parsedSkin, error) {
 	if err != nil {
 		return parsedSkin{}, err
 	}
-	result := parsedSkin{vertices: make([]uint16, vertices.count), indices: make([]uint16, indices.count), bones: make([][4]uint8, bones.count), submeshes: make([]skinSubmesh, submeshes.count), batches: make([]skinBatch, batches.count)}
+	result := parsedSkin{vertices: make([]uint16, vertices.count), indices: make([]uint16, indices.count), submeshes: make([]skinSubmesh, submeshes.count), batches: make([]skinBatch, batches.count)}
 	for index := range result.vertices {
 		result.vertices[index] = binary.LittleEndian.Uint16(data[vertices.offset+index*2:])
 	}
 	for index := range result.indices {
 		result.indices[index] = binary.LittleEndian.Uint16(data[indices.offset+index*2:])
-	}
-	for index := range result.bones {
-		base := bones.offset + index*4
-		result.bones[index] = [4]uint8{data[base], data[base+1], data[base+2], data[base+3]}
 	}
 	for index := range result.submeshes {
 		base := submeshes.offset + index*skinSubmeshSize
@@ -1201,22 +1192,15 @@ func poseM2Vertex(model parsedM2, skin parsedSkin, local int, vertex m2Vertex, b
 	return poseM2VertexWithBones(&model, skin, local, vertex, boneComboIndex, model.bones)
 }
 
-func poseM2VertexWithBones(model *parsedM2, skin parsedSkin, local int, vertex m2Vertex, boneComboIndex int, bonesModel []m2Bone) posedM2Vertex {
+func poseM2VertexWithBones(_ *parsedM2, _ parsedSkin, _ int, vertex m2Vertex, _ int, bonesModel []m2Bone) posedM2Vertex {
 	weights := vertex.weights
-	bones := vertex.bones
-	if local >= 0 && local < len(skin.bones) {
-		bones = skin.bones[local]
-	}
 	var position, normal [3]float32
 	weightTotal := 0
 	for slot, weight := range weights {
 		if weight == 0 {
 			continue
 		}
-		boneIndex := int(bones[slot])
-		if model != nil && boneComboIndex >= 0 && boneComboIndex+boneIndex < len(model.boneCombos) {
-			boneIndex = int(model.boneCombos[boneComboIndex+boneIndex])
-		}
+		boneIndex := int(vertex.bones[slot])
 		if boneIndex >= len(bonesModel) {
 			continue
 		}

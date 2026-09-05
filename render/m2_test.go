@@ -61,11 +61,10 @@ func TestM2TextureTransformUsesGlobalClock(t *testing.T) {
 	}
 }
 
-func TestPoseM2VertexUsesSkinBonePalette(t *testing.T) {
-	model := parsedM2{bones: []m2Bone{{parent: -1, rotation: [4]float32{0, 0, 0, 1}, scale: [3]float32{1, 1, 1}}, {flags: 0x200, parent: -1, translation: [3]float32{2, 0, 0}, rotation: [4]float32{0, 0, 0, 1}, scale: [3]float32{1, 1, 1}}}, boneCombos: []uint16{0, 1}}
-	skin := parsedSkin{bones: [][4]uint8{{1, 0, 0, 0}}}
+func TestPoseM2VertexUsesModelBoneIndices(t *testing.T) {
+	model := parsedM2{bones: []m2Bone{{flags: 0x200, parent: -1, translation: [3]float32{2, 0, 0}, rotation: [4]float32{0, 0, 0, 1}, scale: [3]float32{1, 1, 1}}}}
 	vertex := m2Vertex{weights: [4]uint8{255, 0, 0, 0}, bones: [4]uint8{0, 0, 0, 0}}
-	posed := poseM2Vertex(model, skin, 0, vertex, 0)
+	posed := poseM2Vertex(model, parsedSkin{}, 0, vertex, 0)
 	if posed.position[0] != 2 {
 		t.Fatalf("posed x=%f", posed.position[0])
 	}
