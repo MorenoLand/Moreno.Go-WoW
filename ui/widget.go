@@ -330,6 +330,42 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			L.Push(w.parent.luaValue(L))
 			return 1
 		},
+		"CreateTexture": func(L *lua.LState, w *widget) int {
+			name := ""
+			if L.GetTop() >= 2 && L.Get(2).Type() == lua.LTString {
+				name = resolveParentName(L.CheckString(2), w.name)
+			}
+			texture := newWidget(kindTexture, name)
+			texture.parent = w
+			if L.GetTop() >= 3 && L.Get(3).Type() == lua.LTString {
+				texture.layerLevel = layerOrder(L.CheckString(3))
+			}
+			if L.GetTop() >= 4 && L.Get(4).Type() == lua.LTString && rt.instantiateTemplate != nil {
+				rt.instantiateTemplate(texture, L.CheckString(4))
+			}
+			addWidgetChild(w, texture)
+			rt.register(texture)
+			L.Push(texture.luaValue(L))
+			return 1
+		},
+		"CreateFontString": func(L *lua.LState, w *widget) int {
+			name := ""
+			if L.GetTop() >= 2 && L.Get(2).Type() == lua.LTString {
+				name = resolveParentName(L.CheckString(2), w.name)
+			}
+			fontString := newWidget(kindFontString, name)
+			fontString.parent = w
+			if L.GetTop() >= 3 && L.Get(3).Type() == lua.LTString {
+				fontString.layerLevel = layerOrder(L.CheckString(3))
+			}
+			if L.GetTop() >= 4 && L.Get(4).Type() == lua.LTString && rt.instantiateTemplate != nil {
+				rt.instantiateTemplate(fontString, L.CheckString(4))
+			}
+			addWidgetChild(w, fontString)
+			rt.register(fontString)
+			L.Push(fontString.luaValue(L))
+			return 1
+		},
 		"SetParent": func(L *lua.LState, w *widget) int {
 			ud := L.CheckUserData(2)
 			if p, ok := ud.Value.(*widget); ok {

@@ -53,3 +53,18 @@ assert(Chat:GetNumMessages() == 1)
 		t.Fatalf("scroll API failed: %v", rt.ScriptErrors())
 	}
 }
+
+func TestWidgetDynamicRegionConstructors(t *testing.T) {
+	rt := NewRuntime(nil)
+	defer rt.Close()
+	root := newWidget(kindFrame, "Root")
+	rt.register(root)
+	if !rt.Execute(`
+local texture = Root:CreateTexture("Icon", "OVERLAY")
+local fontString = Root:CreateFontString("Label", "ARTWORK")
+assert(texture:GetName() == "Icon" and texture:GetParent() == Root and texture:GetObjectType() == "Texture")
+assert(fontString:GetName() == "Label" and fontString:GetParent() == Root and fontString:GetObjectType() == "FontString")
+`, "@dynamic-region-test.lua") {
+		t.Fatalf("dynamic region constructors failed: %v", rt.ScriptErrors())
+	}
+}
