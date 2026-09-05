@@ -197,8 +197,7 @@ func (eng *UIEngine) Update(elapsed float64) bool {
 	if eng.statusTTL > 0 {
 		eng.statusTTL -= elapsed
 		if eng.statusTTL <= 0 {
-			eng.statusTTL = 0
-			eng.statusText = ""
+			eng.closeStatusDialog()
 			statusChanged = true
 		}
 	}
@@ -458,13 +457,6 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 				paint(canvas, child, rootRect)
 			}
 		}
-	}
-	if drawBackground && eng.statusKey != "" {
-		status := eng.resolveText(eng.statusKey)
-		drawTextAligned(canvas, face, status, screenScaledRect(Rect{X0: 80, Y0: 96, X1: virtualWidth - 80, Y1: 128}, uiScale), float64(screenHeight), color.RGBA{R: 255, G: 100, B: 80, A: 255}, "CENTER")
-	}
-	if drawBackground && eng.statusText != "" {
-		drawTextAligned(canvas, face, eng.statusText, screenScaledRect(Rect{X0: 80, Y0: 364, X1: virtualWidth - 80, Y1: 404}, uiScale), float64(screenHeight), color.RGBA{R: 255, G: 220, B: 80, A: 255}, "CENTER")
 	}
 	if drawBackground && eng.sceneBackground {
 		for index := 3; index < len(canvas.Pix); index += 4 {
@@ -761,12 +753,48 @@ func screenScaledRect(r Rect, scale float64) Rect {
 }
 
 func (eng *UIEngine) SetStatusKey(key string) {
+	if key == "" {
+		eng.closeStatusDialog()
+		return
+	}
+	wasOpen := eng.statusKey != "" || eng.statusText != ""
 	eng.statusKey = key
+	eng.statusText = ""
+	eng.statusTTL = 0
+	eng.updateStatusDialog(wasOpen, eng.resolveText(key))
 }
 
 func (eng *UIEngine) SetStatusText(text string) {
+	if text == "" {
+		eng.closeStatusDialog()
+		return
+	}
+	wasOpen := eng.statusKey != "" || eng.statusText != ""
+	eng.statusKey = ""
 	eng.statusText = text
 	eng.statusTTL = 3
+	eng.updateStatusDialog(wasOpen, text)
+}
+
+func (eng *UIEngine) updateStatusDialog(wasOpen bool, text string) {
+	if eng == nil || eng.Rt == nil || text == "" {
+		return
+	}
+	if wasOpen {
+		eng.Rt.FireEvent("UPDATE_STATUS_DIALOG", lua.LString(text))
+	} else {
+		eng.Rt.FireEvent("OPEN_STATUS_DIALOG", lua.LString("CANCEL"), lua.LString(text))
+	}
+}
+
+func (eng *UIEngine) closeStatusDialog() {
+	wasOpen := eng != nil && (eng.statusKey != "" || eng.statusText != "")
+	if wasOpen && eng.Rt != nil {
+		eng.Rt.FireEvent("CLOSE_STATUS_DIALOG")
+	}
+	eng.statusKey = ""
+	eng.statusText = ""
+	eng.statusTTL = 0
 }
 
 func (eng *UIEngine) SetSceneBackground(enabled bool) { eng.sceneBackground = enabled }
@@ -859,6 +887,7 @@ func (eng *UIEngine) SceneCharacterFacing() float32 {
 }
 
 func (eng *UIEngine) SetInitialCredentials(account, password string, rememberMe bool) {
+	eng.closeStatusDialog()
 	eng.SetWorldLoading(false)
 	eng.ClearLoadingScreen()
 	eng.rememberMe = rememberMe
@@ -886,9 +915,7 @@ func (eng *UIEngine) SetGlueState(state GlueState) {
 		state.AddOns = eng.Rt.Glue.AddOns
 	}
 	eng.Rt.Glue = state
-	eng.statusKey = ""
-	eng.statusText = ""
-	eng.statusTTL = 0
+	eng.closeStatusDialog()
 	eng.Rt.SetCVar("currentGlueScreen", "charselect")
 	eng.Rt.Execute("for _, name in ipairs({'VideoOptionsFrame', 'AudioOptionsFrame', 'OptionsSelectFrame', 'CinematicsFrame', 'MovieFrame', 'RealmList', 'AddonList', 'GlueDialog'}) do local frame = _G[name]; if frame then frame:Hide() end end", "@network.lua")
 	eng.Rt.Execute("GlueParent_OnEvent('SET_GLUE_SCREEN', 'charselect')", "@network.lua")
