@@ -262,9 +262,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 			path := uiEngine.CurrentModelPath()
 			characterKey := ""
+			createPreview := false
 			var selectedCharacter world.Character
 			selectedIndex := uiEngine.SelectedCharacterIndex()
 			if createState, ok := uiEngine.CreatePreviewState(); ok {
+				createPreview = true
 				selectedCharacter = world.Character{Race: createState.RaceID, Class: createState.ClassID, Gender: createState.Gender}
 				characterKey = fmt.Sprintf("create:%d:%d:%d", createState.RaceID, createState.Gender, createState.ClassID)
 			} else if uiEngine.CharacterSelectVisible() && selectedIndex >= 0 && selectedIndex < len(glueCharacters) {
@@ -326,6 +328,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					}
 				} else {
 					if backgroundInfo, ok := sceneModel.UserData().(glueModelInfo); ok && backgroundInfo.hasStand {
+						if !createPreview {
+							characterModel.SetScale(backgroundInfo.modelScale, backgroundInfo.modelScale, backgroundInfo.modelScale)
+						}
 						characterModel.SetPosition(backgroundInfo.standPosition.X, backgroundInfo.standPosition.Y, backgroundInfo.standPosition.Z)
 					}
 					sceneCharacterFacing = uiEngine.SceneCharacterFacing()
