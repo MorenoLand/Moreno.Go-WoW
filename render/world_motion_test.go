@@ -32,12 +32,12 @@ func TestWorldCameraKeepsAirbornePositionAboveFloor(t *testing.T) {
 	}
 }
 
-func TestWrapWorldModelKeepsStandAttachmentGrounded(t *testing.T) {
+func TestWrapWorldModelKeepsRenderedBottomGrounded(t *testing.T) {
 	model := core.NewNode()
 	model.SetUserData(glueModelInfo{hasStand: true, standPosition: *math32.NewVector3(1, 2, 3), modelBottom: -10})
 	root := wrapWorldModel(model, world.WorldPosition{}, 1)
 	position := root.Children()[0].Position()
-	if position.X != -1 || position.Y != 3 || position.Z != -2 {
+	if position.X != 0 || position.Y != 0 || position.Z != 10 {
 		t.Fatalf("model position=%v", position)
 	}
 }
