@@ -31,7 +31,7 @@ const (
 	worldBodyHeight      = 2.0
 	worldStepHeight      = 0.8
 	worldMaxGroundSnap   = 5.0
-	worldObjectDistance  = worldTileSize * 1.5
+	worldObjectDistance  = worldTileSize * 0.75
 	worldWMODoodadBudget = 512
 )
 
