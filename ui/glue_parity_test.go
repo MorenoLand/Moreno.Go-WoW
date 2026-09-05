@@ -130,6 +130,25 @@ func TestLiveCharacterSelectTextAlignmentMatchesXML(t *testing.T) {
 	}
 }
 
+func TestLiveGlueRenderBreaksButtonTextureCycles(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	engine, err := LoadUIEngineFromMPQ(dataPath, "enUS", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.SetGlueState(GlueState{Connected: true, Characters: []CharacterEntry{{Name: "Character", Race: "RACE_HUMAN", Class: "WARRIOR", Level: 1}}})
+	button := engine.Rt.widgets["CharSelectCharacterButton1"]
+	if button == nil || !button.shown {
+		t.Fatal("character select button is not shown")
+	}
+	button.normalTexture = button
+	engine.Render(960, 640)
+}
+
 func TestLiveCharacterSelectDragChangesFacing(t *testing.T) {
 	dataPath := os.Getenv("WOW_TEST_DATA")
 	if dataPath == "" {

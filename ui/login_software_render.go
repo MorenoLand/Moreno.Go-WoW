@@ -455,10 +455,16 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 			eng.drawEditText(target, face, faceLg, w, rect, float64(screenHeight))
 		}
 	}
+	painting := make(map[*widget]bool)
 	paint = func(target *image.RGBA, w *widget, parent Rect) {
 		if w == nil {
 			return
 		}
+		if painting[w] {
+			return
+		}
+		painting[w] = true
+		defer delete(painting, w)
 		alpha := w.alpha
 		if alpha >= 1 {
 			paintWidget(target, w, parent)
