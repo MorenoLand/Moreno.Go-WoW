@@ -73,6 +73,44 @@ func TestLiveGlueInputGeometryMatchesMPQ(t *testing.T) {
 	}
 }
 
+func TestLiveOptionsCategoryButtonsAreClickable(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	engine, err := LoadUIEngineFromMPQ(dataPath, "enUS", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if !engine.Rt.Execute("VideoOptionsFrame:Show()", "@options-click-test.lua") {
+		t.Fatal(engine.Rt.ScriptErrors())
+	}
+	engine.Render(1024, 768)
+	var target *widget
+	for index := 1; index < 20; index++ {
+		button := engine.Rt.widgets[fmt.Sprintf("VideoOptionsFrameCategoryFrameButton%d", index)]
+		if button != nil && button.shown && button.kind == kindButton {
+			target = button
+			if index > 1 {
+				break
+			}
+		}
+	}
+	if target == nil {
+		t.Fatal("video options category buttons missing")
+	}
+	rect := target.renderRect
+	x := (rect.X0 + rect.X1) * engine.uiScale / 2
+	y := float64(768) - (rect.Y0+rect.Y1)*engine.uiScale/2
+	if !engine.HandleMouse(x, y, window.MouseButtonLeft, true) || !engine.HandleMouse(x, y, window.MouseButtonLeft, false) {
+		t.Fatalf("category button click was not handled at %g,%g", x, y)
+	}
+	if !target.highlightLocked {
+		t.Fatalf("category button %s did not lock its native selection highlight", target.name)
+	}
+}
+
 func TestLiveGlueEnterWorldIsDisabledWhileLoading(t *testing.T) {
 	dataPath := os.Getenv("WOW_TEST_DATA")
 	if dataPath == "" {
