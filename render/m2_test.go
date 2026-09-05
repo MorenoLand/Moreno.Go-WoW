@@ -737,15 +737,8 @@ func TestLiveHumanCreateGeosets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hasBareLowerLeg := false
-	for _, submesh := range skin.submeshes {
-		if submesh.submeshID == 701 {
-			hasBareLowerLeg = true
-			break
-		}
-	}
-	if hasBareLowerLeg && !active[701] {
-		t.Fatalf("Human create did not select bare lower-leg geoset 701: %v", active)
+	if !active[702] {
+		t.Fatalf("Human create did not select default ear geoset 702: %v", active)
 	}
 	facial100, facial200, facial300 := resolveCharacterFacialHair(loader, world.Character{Race: 1, Gender: 0})
 	t.Logf("Human default facial geosets=%d,%d,%d", facial100, facial200, facial300)
