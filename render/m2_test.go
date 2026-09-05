@@ -3,6 +3,7 @@ package render
 import (
 	"encoding/binary"
 	"fmt"
+	"image"
 	"math"
 	"os"
 	"sort"
@@ -67,6 +68,25 @@ func TestWorldM2BasisConversionKeepsStandingAxis(t *testing.T) {
 	}
 	if got, want := []float32(part.normals), []float32{4, -6, 5}; !equalFloatSlice(got, want) {
 		t.Fatalf("normals=%v want %v", got, want)
+	}
+}
+
+func TestCharacterTextureRegionsKeepUnderwearOnThePelvis(t *testing.T) {
+	underwear, ok := characterRegionRectangle(5, image.Rect(0, 0, 512, 512))
+	if !ok || underwear != image.Rect(256, 192, 512, 320) {
+		t.Fatalf("underwear region=%v ok=%t", underwear, ok)
+	}
+	hand, ok := characterRegionRectangle(2, image.Rect(0, 0, 512, 512))
+	if !ok || hand != image.Rect(0, 256, 256, 320) {
+		t.Fatalf("hand region=%v ok=%t", hand, ok)
+	}
+	for path, want := range map[string]int{"NakedPelvisSkin00_00.blp": 5, "NakedTorsoSkin00_00.blp": 3} {
+		if got, ok := characterUnderwearRegion(path); !ok || got != want {
+			t.Fatalf("underwear path=%q region=%d ok=%t want=%d", path, got, ok, want)
+		}
+	}
+	if _, ok := characterUnderwearRegion("Character\\Human\\Male\\Skin00_00.blp"); ok {
+		t.Fatal("body skin was accepted as underwear")
 	}
 }
 
@@ -211,17 +231,28 @@ func TestLiveCharacterSectionsResolve(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer loader.Close()
-	sections, err := resolveCharacterSections(loader, world.Character{Race: 4, Gender: 1, Skin: 0, Face: 0, HairStyle: 0, HairColor: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sections.bodySkin == "" {
-		t.Fatal("Night Elf female skin did not resolve")
-	}
-	t.Logf("Night Elf female skin=%s face=(%s,%s) hair=%s underwear=%d", sections.bodySkin, sections.faceLower, sections.faceUpper, sections.hair, len(sections.underwear))
-	for _, path := range []string{sections.bodySkin, sections.faceLower, sections.faceUpper, sections.hair} {
-		if image, imageErr := loadCharacterImage(loader, path); imageErr == nil {
-			t.Logf("character texture %s bounds=%v", path, image.Bounds())
+	for _, character := range []world.Character{{Race: 4, Gender: 1, Skin: 0, Face: 0, HairStyle: 0, HairColor: 0}, {Race: 11, Gender: 0, Skin: 0, Face: 0, HairStyle: 0, HairColor: 0}} {
+		sections, resolveErr := resolveCharacterSections(loader, character)
+		if resolveErr != nil {
+			t.Fatal(resolveErr)
+		}
+		if sections.bodySkin == "" {
+			t.Fatalf("race=%d gender=%d skin did not resolve", character.Race, character.Gender)
+		}
+		if len(sections.underwear) == 0 {
+			t.Fatalf("race=%d gender=%d underwear did not resolve", character.Race, character.Gender)
+		}
+		t.Logf("race=%d gender=%d skin=%s face=(%s,%s) hair=%s underwear=%v", character.Race, character.Gender, sections.bodySkin, sections.faceLower, sections.faceUpper, sections.hair, sections.underwear)
+		for _, layer := range sections.underwear {
+			region, ok := characterUnderwearRegion(layer.path)
+			if !ok || layer.region != region {
+				t.Fatalf("underwear layer=%+v resolved region=%d ok=%t", layer, region, ok)
+			}
+		}
+		for _, path := range []string{sections.bodySkin, sections.faceLower, sections.faceUpper, sections.hair} {
+			if image, imageErr := loadCharacterImage(loader, path); imageErr == nil {
+				t.Logf("character texture %s bounds=%v", path, image.Bounds())
+			}
 		}
 	}
 }

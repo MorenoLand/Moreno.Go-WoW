@@ -25,7 +25,7 @@ type characterSectionTextures struct {
 	scalpLower      string
 	scalpUpper      string
 	cape            string
-	underwear       []string
+	underwear       []characterTextureRegionLayer
 	regions         []characterTextureRegionLayer
 }
 
@@ -107,7 +107,7 @@ func loadGlueCharacterModel(loader *ui.Loader, character world.Character) (*core
 		case 8:
 			path = sections.skinExtra
 			if path == "" && len(sections.underwear) > 0 {
-				path = sections.underwear[0]
+				path = sections.underwear[0].path
 			}
 			if path == "" {
 				path = bodyPath
@@ -198,10 +198,13 @@ func resolveCharacterSections(loader *ui.Loader, character world.Character) (cha
 			result.scalpUpper = texture3
 			foundHair = result.hair != ""
 		} else if section == 4 && !foundUnderwear && color == uint32(character.Skin) {
-			path := table.string(record, fields.texture1)
-			if path != "" {
+			for _, path := range []string{texture1, texture2, texture3} {
+				region, ok := characterUnderwearRegion(path)
+				if !ok {
+					continue
+				}
 				if _, readErr := loader.ReadAsset(path); readErr == nil {
-					result.underwear = append(result.underwear, path)
+					result.underwear = append(result.underwear, characterTextureRegionLayer{region: region, path: path})
 				}
 			}
 			foundUnderwear = len(result.underwear) > 0
@@ -505,11 +508,11 @@ func composeCharacterSkin(loader *ui.Loader, sections characterSectionTextures) 
 		drawScaledCharacterLayer(composite, region, overlay)
 	}
 	for _, layer := range sections.underwear {
-		overlay, readErr := loadCharacterImage(loader, layer)
+		overlay, readErr := loadCharacterImage(loader, layer.path)
 		if readErr != nil {
 			continue
 		}
-		region, ok := characterRegionRectangle(2, composite.Bounds())
+		region, ok := characterRegionRectangle(layer.region, composite.Bounds())
 		if ok {
 			drawScaledCharacterLayer(composite, region, overlay)
 		}
@@ -555,6 +558,18 @@ func characterTextureRegion(path string, bounds image.Rectangle) (image.Rectangl
 		return image.Rect(0, bounds.Dy()*384/512, bounds.Dx()*256/512, bounds.Dy()), true
 	default:
 		return image.Rectangle{}, false
+	}
+}
+
+func characterUnderwearRegion(path string) (int, bool) {
+	lower := strings.ToLower(path)
+	switch {
+	case strings.Contains(lower, "nakedpelvis"):
+		return 5, true
+	case strings.Contains(lower, "nakedtorso"):
+		return 3, true
+	default:
+		return 0, false
 	}
 }
 
