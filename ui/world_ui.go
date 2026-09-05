@@ -46,8 +46,14 @@ if ChatFrame1 then
     ChatFrame_RegisterForMessages(ChatFrame1, "SAY", "YELL", "PARTY", "RAID", "GUILD", "OFFICER", "WHISPER", "EMOTE", "TEXT_EMOTE", "CHANNEL");
     ChatEdit_SetLastActiveWindow(ChatFrame1.editBox);
     FCF_SetButtonSide(ChatFrame1, "left");
+    if DEFAULT_CHATFRAME_COLOR then
+        FCF_SetWindowColor(ChatFrame1, DEFAULT_CHATFRAME_COLOR.r, DEFAULT_CHATFRAME_COLOR.g, DEFAULT_CHATFRAME_COLOR.b);
+    end
+    if DEFAULT_CHATFRAME_ALPHA then
+        FCF_SetWindowAlpha(ChatFrame1, DEFAULT_CHATFRAME_ALPHA);
+    end
 end`, "@world-ui-init.lua") {
-		return fmt.Errorf("initialize world chat UI")
+		return fmt.Errorf("initialize world chat UI: %v", eng.Rt.ScriptErrors())
 	}
 	eng.worldUIReady = true
 	return nil

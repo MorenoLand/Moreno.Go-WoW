@@ -250,6 +250,23 @@ func registerGlueAPI(rt *Runtime) {
 		return 11
 	})
 	reg("GetChatWindowChannels", func(L *lua.LState) int { return 0 })
+	reg("SetChatWindowColor", func(L *lua.LState) int {
+		id := L.CheckInt(1)
+		if frame := rt.widgets["ChatFrame"+strconv.Itoa(id)]; frame != nil {
+			fields := frame.ensureFields(L)
+			fields.RawSetString("windowColorR", L.Get(2))
+			fields.RawSetString("windowColorG", L.Get(3))
+			fields.RawSetString("windowColorB", L.Get(4))
+		}
+		return 0
+	})
+	reg("SetChatWindowAlpha", func(L *lua.LState) int {
+		id := L.CheckInt(1)
+		if frame := rt.widgets["ChatFrame"+strconv.Itoa(id)]; frame != nil {
+			frame.ensureFields(L).RawSetString("windowAlpha", L.Get(2))
+		}
+		return 0
+	})
 	reg("GetPlayerInfoByGUID", func(L *lua.LState) int { return 5 })
 	reg("GetNumFriends", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 2 })
 	reg("BNGetNumFriends", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 2 })

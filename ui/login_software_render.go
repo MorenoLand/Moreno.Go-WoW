@@ -334,6 +334,7 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 	screen := eng.screen
 
 	var paint func(*image.RGBA, *widget, Rect)
+	var paintWidget func(*image.RGBA, *widget, Rect)
 	paintChildren := func(target *image.RGBA, w *widget, rect Rect) {
 		if w.kind == kindScrollFrame {
 			children := image.NewRGBA(target.Bounds())
@@ -354,7 +355,7 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 			}
 		}
 	}
-	paint = func(target *image.RGBA, w *widget, parent Rect) {
+	paintWidget = func(target *image.RGBA, w *widget, parent Rect) {
 		rect := eng.layoutRect(w, parent)
 
 		scaledRect := Rect{
@@ -377,6 +378,9 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 				if img != nil {
 					if tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0 {
 						tc = [4]float64{0, 1, 0, 1}
+					}
+					if !w.vertexColor.isZero() {
+						img = eng.tintTextureImage(w.textureFile, img, w.vertexColor)
 					}
 					if (w.horizTile || w.vertTile) && !strings.EqualFold(w.alphaMode, "ADD") {
 						eng.drawTiledTexture(target, img, scaledRect, float64(screenHeight), tc, w.horizTile, w.vertTile)
@@ -450,6 +454,25 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 		if w.kind == kindEditBox {
 			eng.drawEditText(target, face, faceLg, w, rect, float64(screenHeight))
 		}
+	}
+	paint = func(target *image.RGBA, w *widget, parent Rect) {
+		if w == nil {
+			return
+		}
+		alpha := w.alpha
+		if alpha >= 1 {
+			paintWidget(target, w, parent)
+			return
+		}
+		if alpha <= 0 {
+			return
+		}
+		layer := image.NewRGBA(target.Bounds())
+		paintWidget(layer, w, parent)
+		for index := 3; index < len(layer.Pix); index += 4 {
+			layer.Pix[index] = uint8(float64(layer.Pix[index]) * alpha)
+		}
+		draw.Draw(target, target.Bounds(), layer, layer.Bounds().Min, draw.Over)
 	}
 
 	if root != nil {
@@ -1540,6 +1563,16 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 
 func (eng *UIEngine) tintBackdropImage(path string, source image.Image, tint rgba) image.Image {
 	key := fmt.Sprintf("backdrop:%s:%.4f:%.4f:%.4f:%.4f", path, tint.r, tint.g, tint.b, tint.a)
+	if imageData, ok := eng.Cache[key]; ok {
+		return imageData
+	}
+	imageData := tintImage(source, tint)
+	eng.Cache[key] = imageData
+	return imageData
+}
+
+func (eng *UIEngine) tintTextureImage(path string, source image.Image, tint rgba) image.Image {
+	key := fmt.Sprintf("texture:%s:%.4f:%.4f:%.4f:%.4f", path, tint.r, tint.g, tint.b, tint.a)
 	if imageData, ok := eng.Cache[key]; ok {
 		return imageData
 	}
