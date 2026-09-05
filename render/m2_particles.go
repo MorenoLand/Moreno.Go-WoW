@@ -359,20 +359,9 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 		mat.SetDepthTest(true)
 		mat.SetDepthMask(false)
 		mat.SetShaderUnique(true)
-		switch emitter.blend {
-		case 0, 1:
-			mat.SetTransparent(false)
-			mat.SetBlending(material.BlendNone)
-		case 3, 4:
-			mat.SetTransparent(true)
-			mat.SetBlending(material.BlendAdditive)
-		case 5, 6:
-			mat.SetTransparent(true)
-			mat.SetBlending(material.BlendMultiply)
-		default:
-			mat.SetTransparent(true)
-			mat.SetBlending(material.BlendNormal)
-		}
+		blending := m2ParticleBlending(emitter.blend)
+		mat.SetTransparent(blending != material.BlendNone)
+		mat.SetBlending(blending)
 		mat.AddTexture(tex)
 		points := graphic.NewPoints(geom, mat)
 		points.SetRenderOrder(10)
@@ -388,6 +377,19 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 		return nil
 	}
 	return system
+}
+
+func m2ParticleBlending(raw uint8) material.Blending {
+	switch raw {
+	case 0, 1:
+		return material.BlendNone
+	case 3:
+		return material.BlendAdditive
+	case 5, 6:
+		return material.BlendMultiply
+	default:
+		return material.BlendNormal
+	}
 }
 
 func particleBasis(model parsedM2) ([3]float32, [3]float32) {

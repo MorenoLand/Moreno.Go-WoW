@@ -12,8 +12,17 @@ import (
 
 	"github.com/MorenoLand/Moreno.WoW/ui"
 	"github.com/MorenoLand/Moreno.WoW/world"
+	"github.com/g3n/engine/material"
 	"github.com/g3n/engine/math32"
 )
+
+func TestM2ParticleBlendModes(t *testing.T) {
+	for raw, want := range map[uint8]material.Blending{0: material.BlendNone, 1: material.BlendNone, 3: material.BlendAdditive, 4: material.BlendNormal, 5: material.BlendMultiply, 6: material.BlendMultiply} {
+		if got := m2ParticleBlending(raw); got != want {
+			t.Fatalf("particle blend %d=%v want %v", raw, got, want)
+		}
+	}
+}
 
 func TestM2RenderOrderUsesMaterialPriority(t *testing.T) {
 	background := &m2Part{renderOrder: 27, priorityPlane: 10, material: m2RenderFlag{blend: 2}}
