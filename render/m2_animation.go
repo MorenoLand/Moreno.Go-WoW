@@ -59,21 +59,10 @@ func (animation *m2Animation) SetMotion(id uint16) {
 	if animation.motionID == id && animation.sequence >= 0 && animation.sequence < len(animation.model.sequences) {
 		return
 	}
-	sequence := -1
-	for index, candidate := range animation.model.sequences {
-		if candidate.id == id && candidate.duration > 0 {
-			sequence = index
-			break
-		}
-	}
+	sequence := m2SequenceIndex(animation.model, id)
 	if sequence < 0 {
 		id = 0
-		for index, candidate := range animation.model.sequences {
-			if candidate.id == id && candidate.duration > 0 {
-				sequence = index
-				break
-			}
-		}
+		sequence = m2SequenceIndex(animation.model, id)
 	}
 	if sequence < 0 || sequence == animation.sequence && animation.motionID == id {
 		return
@@ -92,17 +81,32 @@ func (animation *m2Animation) SetMotion(id uint16) {
 }
 
 func defaultM2Sequence(model *parsedM2) int {
-	for index, sequence := range model.sequences {
-		if sequence.id == 0 && sequence.duration > 0 {
-			return index
-		}
+	if sequence := m2SequenceIndex(model, 0); sequence >= 0 {
+		return sequence
 	}
-	for index, sequence := range model.sequences {
-		if sequence.id == 0x93 && sequence.duration > 0 {
-			return index
-		}
+	if sequence := m2SequenceIndex(model, 0x93); sequence >= 0 {
+		return sequence
 	}
 	return 0
+}
+
+func m2SequenceIndex(model *parsedM2, id uint16) int {
+	if model == nil {
+		return -1
+	}
+	first := -1
+	for index, sequence := range model.sequences {
+		if sequence.id != id || sequence.duration == 0 {
+			continue
+		}
+		if first < 0 {
+			first = index
+		}
+		if sequence.variation == 0 {
+			return index
+		}
+	}
+	return first
 }
 
 func idleM2Sequences(model *parsedM2, id uint16) []int {

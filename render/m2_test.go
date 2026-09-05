@@ -90,6 +90,18 @@ func TestCharacterTextureRegionsKeepUnderwearOnThePelvis(t *testing.T) {
 	}
 }
 
+func TestM2SequenceSelectionPrefersPrimaryVariation(t *testing.T) {
+	model := parsedM2{sequences: []m2Sequence{{id: 0, variation: 3, duration: 100}, {id: 0, variation: 0, duration: 100}, {id: 4, variation: 2, duration: 100}, {id: 4, variation: 0, duration: 100}}}
+	if got := defaultM2Sequence(&model); got != 1 {
+		t.Fatalf("default sequence=%d want primary stand index 1", got)
+	}
+	animation := &m2Animation{model: &model, sequence: 2, motionID: 4}
+	animation.SetMotion(0)
+	if animation.sequence != 1 || animation.idleBase != 1 {
+		t.Fatalf("motion sequence=%d idleBase=%d want 1", animation.sequence, animation.idleBase)
+	}
+}
+
 func equalFloatSlice(left, right []float32) bool {
 	if len(left) != len(right) {
 		return false
