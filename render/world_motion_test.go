@@ -42,6 +42,14 @@ func TestWrapWorldModelKeepsRenderedBottomGrounded(t *testing.T) {
 	}
 }
 
+func TestWorldM2RotationMatchesPlacementAxes(t *testing.T) {
+	rotation := worldM2Rotation([3]float32{0, -90, 0})
+	got := rotateWorldM2Vector(rotation, [3]float32{1, 0, 0})
+	if math.Abs(float64(got[0])) > 0.0001 || math.Abs(float64(got[1]-1)) > 0.0001 || math.Abs(float64(got[2])) > 0.0001 {
+		t.Fatalf("rotated point=%v", got)
+	}
+}
+
 func TestWorldEntityMotionUsesMovementState(t *testing.T) {
 	for _, test := range []struct {
 		name  string

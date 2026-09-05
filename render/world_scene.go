@@ -141,6 +141,15 @@ type worldWMOMeshBuilder struct {
 	indices   math32.ArrayU32
 }
 
+type worldM2MeshBuilder struct {
+	part      *m2Part
+	positions math32.ArrayF32
+	normals   math32.ArrayF32
+	uvs       math32.ArrayF32
+	uvs2      math32.ArrayF32
+	indices   math32.ArrayU32
+}
+
 type worldSceneInfo struct {
 	mapName   string
 	tileX     int
@@ -978,7 +987,7 @@ func worldFloat32s(data []byte, components int) []float32 {
 
 func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int) {
 	root := core.NewNode()
-	meshCount := 0
+	builders := make(map[string]*worldM2MeshBuilder)
 	for _, placement := range adt.m2Placements {
 		origin := worldWMOPosition(placement.position)
 		dx, dy := origin[0]-position.X, origin[1]-position.Y
@@ -994,20 +1003,114 @@ func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.World
 			}
 			cache.m2Parts[placement.path] = parts
 		}
-		instance := buildWorldM2Instance(loader, parts, cache.textures, cache.placeholder)
-		if instance == nil {
-			continue
+		rotation := worldM2Rotation(placement.rotation)
+		for key, part := range parts {
+			if len(part.positions) == 0 || len(part.indices) == 0 {
+				continue
+			}
+			builder := builders[key]
+			if builder == nil {
+				builder = &worldM2MeshBuilder{part: part, positions: math32.NewArrayF32(0, len(part.positions)), normals: math32.NewArrayF32(0, len(part.normals)), uvs: math32.NewArrayF32(0, len(part.uvs)), uvs2: math32.NewArrayF32(0, len(part.uvs2)), indices: math32.NewArrayU32(0, len(part.indices))}
+				builders[key] = builder
+			}
+			base := uint32(len(builder.positions) / 3)
+			for index := 0; index+2 < len(part.positions); index += 3 {
+				point := rotateWorldM2Vector(rotation, [3]float32{part.positions[index], part.positions[index+1], part.positions[index+2]})
+				builder.positions.Append(point[0]*placement.scale+origin[0], point[1]*placement.scale+origin[1], point[2]*placement.scale+origin[2])
+				normal := rotateWorldM2Vector(rotation, [3]float32{part.normals[index], part.normals[index+1], part.normals[index+2]})
+				builder.normals.Append(normal[0], normal[1], normal[2])
+			}
+			builder.uvs = append(builder.uvs, part.uvs...)
+			builder.uvs2 = append(builder.uvs2, part.uvs2...)
+			for _, index := range part.indices {
+				builder.indices.Append(base + index)
+			}
 		}
-		instance.SetPosition(origin[0], origin[1], origin[2])
-		instance.SetRotationQuat(worldM2Rotation(placement.rotation))
-		instance.SetScale(placement.scale, placement.scale, placement.scale)
-		root.Add(instance)
-		meshCount += len(instance.Children())
+	}
+	meshCount := 0
+	for _, builder := range builders {
+		if mesh := buildWorldM2BatchedMesh(loader, builder, cache.textures, cache.placeholder); mesh != nil {
+			root.Add(mesh)
+			meshCount++
+		}
 	}
 	if meshCount == 0 {
 		return nil, 0
 	}
 	return root, meshCount
+}
+
+func rotateWorldM2Vector(rotation *math32.Quaternion, value [3]float32) [3]float32 {
+	axis := [3]float32{rotation.X, rotation.Y, rotation.Z}
+	twiceCross := [3]float32{2 * (axis[1]*value[2] - axis[2]*value[1]), 2 * (axis[2]*value[0] - axis[0]*value[2]), 2 * (axis[0]*value[1] - axis[1]*value[0])}
+	return [3]float32{value[0] + rotation.W*twiceCross[0] + axis[1]*twiceCross[2] - axis[2]*twiceCross[1], value[1] + rotation.W*twiceCross[1] + axis[2]*twiceCross[0] - axis[0]*twiceCross[2], value[2] + rotation.W*twiceCross[2] + axis[0]*twiceCross[1] - axis[1]*twiceCross[0]}
+}
+
+func buildWorldM2BatchedMesh(loader *ui.Loader, builder *worldM2MeshBuilder, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) *graphic.Mesh {
+	if builder == nil || builder.part == nil || len(builder.indices) < 3 {
+		return nil
+	}
+	geom := geometry.NewGeometry()
+	geom.SetIndices(builder.indices)
+	geom.AddVBO(gls.NewVBO(builder.positions).AddAttrib(gls.VertexPosition))
+	geom.AddVBO(gls.NewVBO(builder.normals).AddAttrib(gls.VertexNormal))
+	geom.AddVBO(gls.NewVBO(builder.uvs).AddAttrib(gls.VertexTexcoord))
+	if len(builder.part.uvSets) > 1 && len(builder.uvs2) > 0 {
+		geom.AddVBO(gls.NewVBO(builder.uvs2).AddCustomAttrib("VertexTexcoord2", 2))
+	}
+	mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
+	if builder.part.material.blend == 1 {
+		mat.SetShader("morenowow_m2_alpha_key")
+	} else {
+		mat.SetShader("morenowow_m2")
+	}
+	mat.SetShaderUnique(true)
+	if builder.part.material.flags&0x04 != 0 {
+		mat.SetSide(material.SideDouble)
+	} else {
+		mat.SetSide(material.SideFront)
+	}
+	mat.SetUseLights(material.UseLightNone)
+	mat.SetDepthTest(builder.part.material.flags&0x08 == 0)
+	mat.SetDepthMask(builder.part.material.flags&0x10 == 0)
+	switch builder.part.material.blend {
+	case 0, 1:
+		mat.SetTransparent(false)
+		mat.SetBlending(material.BlendNone)
+	case 3, 4:
+		mat.SetTransparent(true)
+		mat.SetBlending(material.BlendAdditive)
+	case 5, 6:
+		mat.SetTransparent(true)
+		mat.SetBlending(material.BlendMultiply)
+	default:
+		mat.SetTransparent(true)
+		mat.SetBlending(material.BlendNormal)
+	}
+	for textureIndex, texturePath := range builder.part.texturePaths {
+		tex := textures[texturePath]
+		if tex == nil {
+			tex = loadModelTexture(loader, texturePath)
+			if tex != nil {
+				textures[texturePath] = tex
+			}
+		}
+		if tex == nil {
+			tex = placeholder
+		}
+		if textureIndex < len(builder.part.textureFlags) {
+			if builder.part.textureFlags[textureIndex]&0x01 != 0 {
+				tex.SetWrapS(gls.REPEAT)
+			}
+			if builder.part.textureFlags[textureIndex]&0x02 != 0 {
+				tex.SetWrapT(gls.REPEAT)
+			}
+		}
+		mat.AddTexture(tex)
+	}
+	mesh := graphic.NewMesh(geom, mat)
+	mesh.SetRenderOrder(m2RenderOrder(builder.part))
+	return mesh
 }
 
 func loadWorldM2Parts(loader *ui.Loader, modelPath string) (map[string]*m2Part, error) {
