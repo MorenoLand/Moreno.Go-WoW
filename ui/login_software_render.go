@@ -627,6 +627,56 @@ func (eng *UIEngine) paintSliderThumb(w *widget, rect Rect, paint func(*widget, 
 	paint(w.thumbTexture, thumbRect)
 }
 
+func (eng *UIEngine) HandleScroll(delta float64) bool {
+	if eng == nil || eng.Rt == nil || delta == 0 {
+		return false
+	}
+	if eng.uiScale <= 0 {
+		return false
+	}
+	point := struct{ x, y float64 }{eng.Rt.cursorX / eng.uiScale, (float64(eng.screenHeight) - eng.Rt.cursorY) / eng.uiScale}
+	var target *widget
+	targetArea := math.MaxFloat64
+	for _, frame := range eng.Rt.widgets {
+		if frame.kind != kindScrollFrame || !frame.shown {
+			continue
+		}
+		parent := eng.screen
+		if frame.parent != nil {
+			parent = eng.layoutRect(frame.parent, eng.screen)
+		}
+		rect := eng.layoutRect(frame, parent)
+		area := rect.W() * rect.H()
+		if point.x >= rect.X0 && point.x <= rect.X1 && point.y >= rect.Y0 && point.y <= rect.Y1 && area < targetArea {
+			target = frame
+			targetArea = area
+		}
+	}
+	if target == nil {
+		return false
+	}
+	step := target.height / 2
+	if scrollbar := eng.Rt.widgets[target.name+"ScrollBar"]; scrollbar != nil && scrollbar.height > 0 {
+		step = scrollbar.height / 2
+	}
+	if step <= 0 {
+		step = 1
+	}
+	value := target.verticalScroll - delta*step
+	if value < 0 {
+		value = 0
+	}
+	if value > target.verticalRange {
+		value = target.verticalRange
+	}
+	if value == target.verticalScroll {
+		return true
+	}
+	target.verticalScroll = value
+	eng.Rt.fire(target, "OnVerticalScroll", []lua.LValue{target.luaValue(eng.Rt.L), lua.LNumber(value)})
+	return true
+}
+
 func (eng *UIEngine) prepareText(w *widget, face, faceLg font.Face) {
 	if w.kind == kindFontString {
 		text := eng.resolveText(w.text)

@@ -231,6 +231,23 @@ func TestLiveCharacterCreateStateAndTextGeometry(t *testing.T) {
 			t.Fatalf("create scrollbar=%s state=%v", name, scrollbar)
 		}
 	}
+	scroll := engine.Rt.widgets["CharacterCreateClassScrollFrame"]
+	textWidget := engine.Rt.widgets["CharacterCreateClassText"]
+	if scroll == nil || textWidget == nil {
+		t.Fatal("class description scroll widgets missing")
+	}
+	before := textWidget.renderRect
+	x := (scroll.renderRect.X0 + scroll.renderRect.X1) * engine.uiScale / 2
+	y := float64(engine.screenHeight) - (scroll.renderRect.Y0+scroll.renderRect.Y1)*engine.uiScale/2
+	engine.HandleCursor(x, y)
+	handled := engine.HandleScroll(-1)
+	if !handled || scroll.verticalScroll <= 0 {
+		t.Fatalf("class description did not scroll range=%v offset=%v", scroll.verticalRange, scroll.verticalScroll)
+	}
+	engine.Render(960, 640)
+	if textWidget.renderRect.Y1 >= before.Y1 {
+		t.Fatalf("class description did not move before=%v after=%v", before, textWidget.renderRect)
+	}
 }
 
 func TestLiveCharacterCreateDragChangesFacing(t *testing.T) {

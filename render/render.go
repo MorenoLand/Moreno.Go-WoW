@@ -470,6 +470,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			if worldMode && worldCamera != nil && worldCamera.handleScroll(scroll.Yoffset) {
 				return
 			}
+			if uiEngine.HandleScroll(float64(scroll.Yoffset)) {
+				refresh()
+			}
 		})
 		win.Subscribe(window.OnChar, func(_ string, event interface{}) {
 			char := event.(*window.CharEvent)
