@@ -24,7 +24,7 @@ const (
 	worldChunkSize       = worldTileSize / 16.0
 	worldUnitSize        = worldChunkSize / 8.0
 	worldHeightCount     = 145
-	worldStreamRadius    = 0
+	worldStreamRadius    = 1
 	worldCollisionCell   = 32.0
 	worldFloorNormalZ    = 0.5
 	worldBodyRadius      = 0.55

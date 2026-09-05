@@ -179,7 +179,9 @@ func wrapWorldModel(model *core.Node, position world.WorldPosition, scale float3
 	if info, ok := model.UserData().(glueModelInfo); ok {
 		root.SetUserData(info)
 		offsetX, offsetY, offsetZ := float32(0), float32(0), float32(0)
-		if info.modelBottom < 0 {
+		if info.hasStand {
+			offsetX, offsetY, offsetZ = -info.standPosition.X, info.standPosition.Z, -info.standPosition.Y
+		} else if info.modelBottom < 0 {
 			offsetZ = -info.modelBottom
 		}
 		model.SetPosition(offsetX, offsetY, offsetZ)
