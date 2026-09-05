@@ -1035,26 +1035,26 @@ func registerGlueAPI(rt *Runtime) {
 }
 
 func kindFromObjectType(objectType string) widgetKind {
-	switch objectType {
-	case "Button":
+	switch strings.ToUpper(objectType) {
+	case "BUTTON":
 		return kindButton
-	case "CheckButton":
+	case "CHECKBUTTON":
 		return kindCheckButton
-	case "EditBox":
+	case "EDITBOX":
 		return kindEditBox
-	case "Slider":
+	case "SLIDER":
 		return kindSlider
-	case "ScrollFrame":
+	case "SCROLLFRAME":
 		return kindScrollFrame
-	case "ScrollingMessageFrame":
+	case "SCROLLINGMESSAGEFRAME":
 		return kindScrollingMessageFrame
-	case "SimpleHTML":
+	case "SIMPLEHTML":
 		return kindSimpleHTML
-	case "Model":
+	case "MODEL":
 		return kindModel
-	case "ModelFFX":
+	case "MODELFFX":
 		return kindModelFFX
-	case "MovieFrame":
+	case "MOVIEFRAME":
 		return kindMovieFrame
 	default:
 		return kindFrame

@@ -17,6 +17,21 @@ func TestGlueStateAndCreateFrameArguments(t *testing.T) {
 	}
 }
 
+func TestCreateFramePreservesCaseInsensitiveObjectTypes(t *testing.T) {
+	rt := NewRuntime(nil)
+	defer rt.Close()
+	if !rt.Execute(`
+button = CreateFrame("BUTTON", "UpperButton")
+slider = CreateFrame("SLIDER", "UpperSlider")
+scroll = CreateFrame("SCROLLFRAME", "UpperScroll")
+assert(button:GetObjectType() == "Button")
+assert(slider:GetObjectType() == "Slider")
+assert(scroll:GetObjectType() == "ScrollFrame")
+`, "@create-frame-type-test.lua") {
+		t.Fatalf("CreateFrame type mapping failed: %v", rt.ScriptErrors())
+	}
+}
+
 func TestGlueXMLHandlerParameters(t *testing.T) {
 	for _, test := range []struct{ handler, want string }{{"OnSizeChanged", "self, width, height"}, {"OnAttributeChanged", "self, name, value"}, {"OnEnable", "self"}, {"OnDisable", "self"}} {
 		if got := scriptParams(test.handler); got != test.want {
