@@ -1672,7 +1672,7 @@ func (eng *UIEngine) hitTest(x, y float64) *widget {
 		if (w.kind == kindButton || w.kind == kindCheckButton) && !w.enabled {
 			return nil
 		}
-		if w.kind == kindButton || w.kind == kindCheckButton || w.kind == kindEditBox || w.enableMouse {
+		if w.kind == kindButton || w.kind == kindCheckButton || w.kind == kindEditBox || w.kind == kindSlider || w.enableMouse {
 			return w
 		}
 		return nil

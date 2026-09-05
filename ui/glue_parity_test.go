@@ -356,6 +356,48 @@ func TestLiveCharacterCreateDragChangesFacing(t *testing.T) {
 	}
 }
 
+func TestLiveCharacterCreateScrollbarDoesNotRotateModel(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	engine, err := LoadUIEngineFromMPQ(dataPath, "enUS", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if !engine.Rt.Execute("SetGlueScreen('charcreate')", "@create-scrollbar-input-test.lua") {
+		t.Fatal(engine.Rt.ScriptErrors())
+	}
+	engine.Rt.FireEvent("SET_GLUE_SCREEN", lua.LString("charcreate"))
+	engine.Render(960, 640)
+	scroll := engine.Rt.widgets["CharacterCreateClassScrollFrame"]
+	scrollbar := engine.Rt.widgets["CharacterCreateClassScrollFrameScrollBar"]
+	if scroll == nil || scrollbar == nil || scrollbar.kind != kindSlider || scrollbar.maxValue <= 0 {
+		t.Fatal("character create scrollbar missing range")
+	}
+	initialFacing := engine.Rt.createFacing
+	rect := scrollbar.renderRect
+	x := (rect.X0 + rect.X1) * engine.uiScale / 2
+	y := float64(640) - (rect.Y0+rect.Y1)*engine.uiScale/2
+	if !engine.HandleMouse(x, y, window.MouseButtonLeft, true) {
+		t.Fatal("scrollbar press was not handled")
+	}
+	dragY := float64(640) - rect.Y1*engine.uiScale
+	if !engine.HandleCursor(x, dragY) {
+		t.Fatal("scrollbar drag was not handled")
+	}
+	if !engine.HandleMouse(x, dragY, window.MouseButtonLeft, false) {
+		t.Fatal("scrollbar release was not handled")
+	}
+	if scrollbar.value <= 0 || scroll.verticalScroll <= 0 {
+		t.Fatalf("scrollbar value=%v scroll=%v range=%v", scrollbar.value, scroll.verticalScroll, scrollbar.maxValue)
+	}
+	if engine.Rt.createFacing != initialFacing {
+		t.Fatalf("scrollbar drag rotated model from %v to %v", initialFacing, engine.Rt.createFacing)
+	}
+}
+
 func TestLiveCharacterCreateRaceContracts(t *testing.T) {
 	dataPath := os.Getenv("WOW_TEST_DATA")
 	if dataPath == "" {
