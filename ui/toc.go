@@ -446,11 +446,22 @@ func isWidgetElement(name string) bool {
 func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string) (*widget, error) {
 	merged := node
 	if inherits, ok := node.attr("inherits"); ok && inherits != "" {
-		tpl, ok := l.rt.virtuals[inherits]
-		if !ok {
+		parts := inheritanceNames(inherits)
+		if len(parts) == 0 {
 			return nil, fmt.Errorf("%s: template %q not found", interfacePath, inherits)
 		}
-		merged = mergeTemplate(l, tpl, node)
+		base, found := l.rt.virtuals[parts[0]]
+		if !found {
+			return nil, fmt.Errorf("%s: template %q not found", interfacePath, parts[0])
+		}
+		for _, part := range parts[1:] {
+			tpl, ok := l.rt.virtuals[part]
+			if !ok {
+				return nil, fmt.Errorf("%s: template %q not found", interfacePath, part)
+			}
+			base = mergeTemplate(l, tpl, base)
+		}
+		merged = mergeTemplate(l, base, node)
 	}
 
 	kind := kindFromObjectType(node.name)
@@ -496,6 +507,12 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 					}
 				}
 			}
+		case "Texture", "FontString", "Fontstring":
+			child, err := l.buildRegion(group, w, interfacePath)
+			if err != nil {
+				return nil, err
+			}
+			child.layerLevel = layerArtwork
 		case "Frames":
 			for _, frameEl := range group.children {
 				if isWidgetElement(frameEl.name) {
@@ -1044,8 +1061,10 @@ func dirOf(path string) string {
 // handlers replace same-named template handlers.
 func mergeTemplate(l *Loader, tpl, instance *xmlNode) *xmlNode {
 	if inherits := tpl.attrDefault("inherits", ""); inherits != "" {
-		if parent, ok := l.rt.virtuals[inherits]; ok && parent != tpl {
-			tpl = mergeTemplate(l, parent, tpl)
+		for _, name := range inheritanceNames(inherits) {
+			if parent, ok := l.rt.virtuals[name]; ok && parent != tpl {
+				tpl = mergeTemplate(l, parent, tpl)
+			}
 		}
 	}
 	merged := &xmlNode{name: instance.name, attrs: make(map[string]string)}
@@ -1055,6 +1074,7 @@ func mergeTemplate(l *Loader, tpl, instance *xmlNode) *xmlNode {
 	for k, v := range instance.attrs {
 		merged.attrs[k] = v
 	}
+	delete(merged.attrs, "inherits")
 	replaced := map[string]bool{}
 	for _, group := range []string{"Size", "Anchors", "Backdrop", "TexCoords", "Color", "ButtonText", "NormalFont", "HighlightFont", "DisabledFont", "CheckedFont", "NormalTexture", "PushedTexture", "DisabledTexture", "HighlightTexture", "CheckedTexture", "DisabledCheckedTexture", "ThumbTexture", "TextInsets", "HitRectInsets"} {
 		if instance.child(group) != nil {
@@ -1068,6 +1088,17 @@ func mergeTemplate(l *Loader, tpl, instance *xmlNode) *xmlNode {
 	}
 	merged.children = append(merged.children, instance.children...)
 	return merged
+}
+
+func inheritanceNames(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if name := strings.TrimSpace(part); name != "" {
+			result = append(result, name)
+		}
+	}
+	return result
 }
 
 func removeHandler(scripts *xmlNode, handler string) {

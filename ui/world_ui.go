@@ -45,6 +45,7 @@ if ChatFrame1 then
     ChatFrame1:Show();
     ChatFrame_RegisterForMessages(ChatFrame1, "SAY", "YELL", "PARTY", "RAID", "GUILD", "OFFICER", "WHISPER", "EMOTE", "TEXT_EMOTE", "CHANNEL");
     ChatEdit_SetLastActiveWindow(ChatFrame1.editBox);
+    FCF_SetButtonSide(ChatFrame1, "left");
 end`, "@world-ui-init.lua") {
 		return fmt.Errorf("initialize world chat UI")
 	}

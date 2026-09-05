@@ -112,6 +112,29 @@ func TestVirtualTemplateAndParentName(t *testing.T) {
 	}
 }
 
+func TestCommaSeparatedVirtualTemplates(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"Interface/GlueXML/T.xml": `<Ui>
+<Frame name="BaseA" virtual="true"><Size><AbsDimension x="128" y="32"/></Size></Frame>
+<Frame name="BaseB" virtual="true"><Anchors><Anchor point="BOTTOMLEFT"/></Anchors><Layers><Layer><Texture name="$parentBackground" file="Interface\ChatFrame\ChatFrameBackground"/></Layer></Layers></Frame>
+<Frame name="Panel" inherits="BaseA,BaseB"/>
+</Ui>`,
+	})
+	rt := NewRuntime(nil)
+	defer rt.Close()
+	loader := NewLoader(root, rt)
+	if err := loader.LoadInterfaceFile("Interface\\GlueXML\\T.xml"); err != nil {
+		t.Fatal(err)
+	}
+	panel := rt.lookup("Panel")
+	if panel == nil || panel.width != 128 || panel.height != 32 {
+		t.Fatalf("combined template size = %#v", panel)
+	}
+	if rt.lookup("PanelBackground") == nil {
+		t.Fatal("combined template region missing")
+	}
+}
+
 func TestFontShadowLoadsFromXML(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"Interface/GlueXML/Font.xml": `<Ui><Font name="ShadowFont" font="Fonts\ARIALN.TTF" virtual="true"><Shadow><Offset><AbsDimension x="1" y="-1"/></Offset><Color r="0" g="0" b="0"/></Shadow><FontHeight><AbsValue val="16"/></FontHeight></Font></Ui>`,
