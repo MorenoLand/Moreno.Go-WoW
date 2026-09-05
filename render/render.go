@@ -596,6 +596,15 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					if entity.node == nil {
 						continue
 					}
+					if worldCamera != nil && entity.hasPosition {
+						dx := entity.movement.Position.X - worldCamera.position[0]
+						dy := entity.movement.Position.Y - worldCamera.position[1]
+						visible := dx*dx+dy*dy <= worldObjectDistance*worldObjectDistance
+						entity.node.SetVisible(visible)
+						if !visible {
+							continue
+						}
+					}
 					if info, ok := entity.node.UserData().(glueModelInfo); ok {
 						if info.animation != nil {
 							motion := uint16(0)
