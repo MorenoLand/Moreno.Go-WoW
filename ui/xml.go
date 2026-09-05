@@ -136,6 +136,12 @@ func scriptParams(handler string) string {
 		return "self, x, y"
 	case "OnMouseWheel":
 		return "self, delta"
+	case "OnSizeChanged":
+		return "self, width, height"
+	case "OnAttributeChanged":
+		return "self, name, value"
+	case "OnEnable", "OnDisable":
+		return "self"
 	case "OnMouseDown", "OnMouseUp":
 		return "self, button"
 	case "OnHyperlinkClick":

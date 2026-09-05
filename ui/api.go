@@ -301,9 +301,7 @@ func registerGlueAPI(rt *Runtime) {
 
 	// Screen state transitions.
 	reg("SetCurrentScreen", func(L *lua.LState) int {
-		// SetCurrentScreen is called by the interface layer to notify the C engine
-		// that the screen changed. It should NOT fire SET_GLUE_SCREEN because that
-		// would cause an infinite loop.
+		rt.SetCVar("currentGlueScreen", L.CheckString(1))
 		return 0
 	})
 
@@ -646,14 +644,16 @@ func registerGlueAPI(rt *Runtime) {
 		return 10
 	})
 	reg("SelectCharacter", func(L *lua.LState) int {
-		index := L.CheckInt(1)
+		index := clampListIndex(L.CheckInt(1), len(rt.Glue.Characters))
 		rt.Glue.SelectedCharacter = index
 		rt.FireEvent("UPDATE_SELECTED_CHARACTER", lua.LNumber(index))
 		return 0
 	})
 	reg("EnterWorld", func(L *lua.LState) int {
-		if host, ok := rt.Host.(WorldHost); ok {
-			host.EnterWorld(rt.Glue.SelectedCharacter - 1)
+		if rt.Glue.SelectedCharacter >= 1 && rt.Glue.SelectedCharacter <= len(rt.Glue.Characters) {
+			if host, ok := rt.Host.(WorldHost); ok {
+				host.EnterWorld(rt.Glue.SelectedCharacter - 1)
+			}
 		}
 		return 0
 	})
@@ -665,7 +665,7 @@ func registerGlueAPI(rt *Runtime) {
 		}
 		model := rt.Glue.Characters[idx-1].BackgroundModel
 		if model == "" {
-			model = strings.TrimPrefix(strings.ToUpper(rt.Glue.Characters[idx-1].Race), "RACE_")
+			model = "CharacterSelect"
 		}
 		L.Push(lua.LString(model))
 		return 1
@@ -1002,6 +1002,9 @@ func registerGlueAPI(rt *Runtime) {
 			name = resolveParentName(name, parent.name)
 		}
 		w := newWidget(kindFromObjectType(frameType), name)
+		if L.Get(5).Type() == lua.LTNumber {
+			w.id = L.CheckInt(5)
+		}
 		w.parent = parent
 		addWidgetChild(parent, w)
 		if template != "" && rt.instantiateTemplate != nil {
@@ -1128,6 +1131,19 @@ func clampCreateIndex(index, max int) int {
 	}
 	if index < 1 || index > max {
 		return 1
+	}
+	return index
+}
+
+func clampListIndex(index, max int) int {
+	if max == 0 {
+		return 0
+	}
+	if index < 1 {
+		return 1
+	}
+	if index > max {
+		return max
 	}
 	return index
 }
