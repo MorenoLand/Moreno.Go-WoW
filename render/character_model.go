@@ -117,7 +117,16 @@ func loadGlueCharacterModel(loader *ui.Loader, character world.Character) (*core
 			overrides[index] = path
 		}
 	}
-	return buildGlueModel(loader, modelPath, model, skin, overrides, preloaded, activeGeosets)
+	result, err := buildGlueModel(loader, modelPath, model, skin, overrides, preloaded, activeGeosets)
+	if err != nil {
+		return nil, err
+	}
+	if info, ok := result.UserData().(glueModelInfo); ok && info.animation != nil {
+		info.animation.variationEnabled = false
+		info.animation.idle = []int{info.animation.sequence}
+		info.animation.idleBase = info.animation.sequence
+	}
+	return result, nil
 }
 
 func characterRaceFolder(race uint8) string {

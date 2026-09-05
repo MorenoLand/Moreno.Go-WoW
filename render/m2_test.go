@@ -207,6 +207,10 @@ func TestLiveCharacterModelRenderable(t *testing.T) {
 	if math.Abs(float64(selected.Scale().X-characterInfo.modelScale)) > 0.0001 {
 		t.Fatalf("textured character scale=%v want own model scale=%v", selected.Scale(), characterInfo.modelScale)
 	}
+	selectedInfo, ok := selected.UserData().(glueModelInfo)
+	if !ok || selectedInfo.animation == nil || selectedInfo.animation.variationEnabled {
+		t.Fatal("character preview did not stay on explicit primary idle variation")
+	}
 	t.Logf("textured NightElf character drawable children=%d", len(selected.Children()))
 	skinData, readErr := loader.ReadFile(`Character\NightElf\Female\NightElfFemale00.skin`)
 	if readErr != nil {

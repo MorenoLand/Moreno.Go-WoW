@@ -47,7 +47,7 @@ func buildM2Animation(model *parsedM2, skin parsedSkin, meshes []*m2AnimatedMesh
 	for index := range modelPath {
 		seed = seed*16777619 ^ uint32(modelPath[index])
 	}
-	animation := &m2Animation{model: model, skin: skin, meshes: meshes, sequence: sequence, motionID: model.sequences[sequence].id, idle: idle, idleBase: idle[0], variationEnabled: model.sequences[sequence].id == 0, random: seed}
+	animation := &m2Animation{model: model, skin: skin, meshes: meshes, sequence: sequence, motionID: model.sequences[sequence].id, idle: idle, idleBase: sequence, variationEnabled: model.sequences[sequence].id == 0, random: seed}
 	animation.variationTimer = m2VariationTimer(animation, 3000, 11000)
 	return animation
 }
