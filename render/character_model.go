@@ -311,7 +311,7 @@ func resolveCharacterEquipment(loader *ui.Loader, character world.Character, sec
 	}
 	add(401)
 	add(501)
-	add(702)
+	add(701)
 	add(801)
 	add(902)
 	add(1301)
