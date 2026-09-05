@@ -326,12 +326,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					}
 				} else {
 					if backgroundInfo, ok := sceneModel.UserData().(glueModelInfo); ok && backgroundInfo.hasStand {
-						characterScale := float32(1)
-						if characterInfo, characterOK := characterModel.UserData().(glueModelInfo); characterOK && characterInfo.modelScale > 0 {
-							characterScale = backgroundInfo.modelScale / characterInfo.modelScale
-						}
+						characterInfo, _ := characterModel.UserData().(glueModelInfo)
+						characterScale, characterPosition := sceneCharacterTransform(backgroundInfo, characterInfo, characterModel.Position())
 						characterModel.SetScale(characterScale, characterScale, characterScale)
-						characterModel.SetPosition(backgroundInfo.standPosition.X, backgroundInfo.standPosition.Y, backgroundInfo.standPosition.Z)
+						characterModel.SetPosition(characterPosition.X, characterPosition.Y, characterPosition.Z)
 					}
 					sceneCharacterFacing = uiEngine.SceneCharacterFacing()
 					characterModel.SetRotation(0, sceneCharacterFacing*math.Pi/180, 0)
@@ -1035,6 +1033,14 @@ func resetSceneCamera(cam *camera.Camera) {
 	cam.SetNear(0.3)
 	cam.SetFar(1000)
 	cam.LookAt(math32.NewVector3(0, 0, 0), math32.NewVector3(0, 1, 0))
+}
+
+func sceneCharacterTransform(background, character glueModelInfo, normalizedPosition math32.Vector3) (float32, math32.Vector3) {
+	factor := float32(1)
+	if character.modelScale > 0 {
+		factor = background.modelScale / character.modelScale
+	}
+	return background.modelScale, *math32.NewVector3(background.standPosition.X+normalizedPosition.X*factor, background.standPosition.Y+normalizedPosition.Y*factor, background.standPosition.Z+normalizedPosition.Z*factor)
 }
 
 func configureSceneCamera(cam *camera.Camera, model *core.Node) {
