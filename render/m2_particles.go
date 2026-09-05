@@ -402,7 +402,7 @@ func m2ParticleBlending(raw uint8) material.Blending {
 	switch raw {
 	case 0, 1:
 		return material.BlendNone
-	case 3:
+	case 3, 4:
 		return material.BlendAdditive
 	case 5, 6:
 		return material.BlendMultiply
