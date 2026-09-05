@@ -377,13 +377,16 @@ func TestLiveMainMenuSnowMotion(t *testing.T) {
 			continue
 		}
 		base := modelVector(transformM2Point(int(emitter.bone), emitter.position, model.bones, 0))
-		group := &m2ParticleGroup{emitter: emitter, model: &model, bone: int(emitter.bone), base: base, rootScale: scale, positions: math32.NewArrayF32(0, 3), colors: math32.NewArrayF32(0, 3), params: math32.NewArrayF32(0, 4), rotations: math32.NewArrayF32(0, 1)}
+		group := &m2ParticleGroup{emitter: emitter, model: &model, bone: int(emitter.bone), base: base, rootScale: scale, positions: math32.NewArrayF32(0, 12), colors: math32.NewArrayF32(0, 12), params: math32.NewArrayF32(0, 16), alphas: math32.NewArrayF32(0, 4), rotations: math32.NewArrayF32(0, 4)}
 		group.particles = []m2Particle{spawnM2Particle(group, uint32(index+1), emitter.life/2)}
 		before := particlePosition(group.particles[0])
-		group.positions.Append(before[0], before[1], before[2])
-		group.colors.Append(1, 1, 1)
-		group.params.Append(1, 1, 0, 0)
-		group.rotations.Append(0)
+		for range particleCorners {
+			group.positions.Append(before[0], before[1], before[2])
+			group.colors.Append(1, 1, 1)
+			group.params.Append(1, 1, 0, 0)
+			group.alphas.Append(1)
+			group.rotations.Append(0)
+		}
 		(&m2ParticleSystem{groups: []*m2ParticleGroup{group}}).Update(0.5)
 		after := [3]float32{group.positions[0], group.positions[1], group.positions[2]}
 		if before == after {
