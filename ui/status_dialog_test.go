@@ -28,9 +28,15 @@ func TestLiveGlueStatusDialogContract(t *testing.T) {
 	if !dialog.shown {
 		t.Fatal("OPEN_STATUS_DIALOG did not show GlueDialog")
 	}
+	if !engine.Rt.Execute("assert(GlueDialog.which == 'OKAY')", "@status-dialog-test.lua") {
+		t.Fatalf("dialog type after failure: %v", engine.Rt.ScriptErrors())
+	}
 	engine.SetStatusKey("GAME_SERVER_LOGIN")
 	if text := engine.Rt.widgets["GlueDialogText"]; text == nil || text.text != engine.resolveText("GAME_SERVER_LOGIN") {
 		t.Fatalf("dialog text=%v", text)
+	}
+	if !engine.Rt.Execute("assert(GlueDialog.which == 'CANCEL')", "@status-dialog-test.lua") {
+		t.Fatalf("dialog type during login: %v", engine.Rt.ScriptErrors())
 	}
 	engine.SetStatusText("raw error")
 	if text := engine.Rt.widgets["GlueDialogText"]; text == nil || text.text != "raw error" {

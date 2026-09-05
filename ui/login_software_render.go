@@ -23,40 +23,41 @@ import (
 )
 
 type UIEngine struct {
-	Rt              *Runtime
-	FontObj         *opentype.Font
-	FontObjSm       *opentype.Font
-	AssetLoader     *Loader
-	Cache           map[string]image.Image
-	BgImagePath     string // Path to a static background image (JPEG/PNG)
-	statusKey       string
-	statusText      string
-	statusTTL       float64
-	rememberMe      bool
-	pressed         *widget
-	selecting       *widget
-	hovered         *widget
-	screen          Rect
-	uiScale         float64
-	screenWidth     int
-	screenHeight    int
-	rects           map[*widget]Rect
-	layoutActive    map[*widget]bool
-	textFaces       map[string]font.Face
-	movieFile       string
-	movieImage      image.Image
-	movie           *moviePlayback
-	sceneBackground bool
-	debugPanel      debugPanelState
-	lastClick       *widget
-	lastClickAt     time.Time
-	loading         bool
-	loadingPath     string
-	loadingProgress float64
-	worldRoot       *widget
-	worldUIReady    bool
-	worldLoading    bool
-	worldActive     bool
+	Rt               *Runtime
+	FontObj          *opentype.Font
+	FontObjSm        *opentype.Font
+	AssetLoader      *Loader
+	Cache            map[string]image.Image
+	BgImagePath      string // Path to a static background image (JPEG/PNG)
+	statusKey        string
+	statusText       string
+	statusTTL        float64
+	statusDialogType string
+	rememberMe       bool
+	pressed          *widget
+	selecting        *widget
+	hovered          *widget
+	screen           Rect
+	uiScale          float64
+	screenWidth      int
+	screenHeight     int
+	rects            map[*widget]Rect
+	layoutActive     map[*widget]bool
+	textFaces        map[string]font.Face
+	movieFile        string
+	movieImage       image.Image
+	movie            *moviePlayback
+	sceneBackground  bool
+	debugPanel       debugPanelState
+	lastClick        *widget
+	lastClickAt      time.Time
+	loading          bool
+	loadingPath      string
+	loadingProgress  float64
+	worldRoot        *widget
+	worldUIReady     bool
+	worldLoading     bool
+	worldActive      bool
 }
 
 func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, error) {
@@ -780,21 +781,27 @@ func (eng *UIEngine) updateStatusDialog(wasOpen bool, text string) {
 	if eng == nil || eng.Rt == nil || text == "" {
 		return
 	}
-	if wasOpen {
-		eng.Rt.FireEvent("UPDATE_STATUS_DIALOG", lua.LString(text))
-	} else {
-		eng.Rt.FireEvent("OPEN_STATUS_DIALOG", lua.LString("CANCEL"), lua.LString(text))
+	dialogType := "OKAY"
+	if eng.statusKey == "GAME_SERVER_LOGIN" {
+		dialogType = "CANCEL"
 	}
+	if eng.statusDialogType != dialogType || !wasOpen {
+		eng.Rt.FireEvent("OPEN_STATUS_DIALOG", lua.LString(dialogType), lua.LString(text))
+	} else {
+		eng.Rt.FireEvent("UPDATE_STATUS_DIALOG", lua.LString(text))
+	}
+	eng.statusDialogType = dialogType
 }
 
 func (eng *UIEngine) closeStatusDialog() {
-	wasOpen := eng != nil && (eng.statusKey != "" || eng.statusText != "")
+	wasOpen := eng != nil && eng.statusDialogType != ""
 	if wasOpen && eng.Rt != nil {
 		eng.Rt.FireEvent("CLOSE_STATUS_DIALOG")
 	}
 	eng.statusKey = ""
 	eng.statusText = ""
 	eng.statusTTL = 0
+	eng.statusDialogType = ""
 }
 
 func (eng *UIEngine) SetSceneBackground(enabled bool) { eng.sceneBackground = enabled }
