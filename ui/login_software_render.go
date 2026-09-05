@@ -1321,12 +1321,13 @@ func (eng *UIEngine) setSliderValueAt(w *widget, x, y float64) {
 			fraction = (pointX - start) / (end - start)
 		}
 	} else {
-		start := rect.Y0 + thumbHeight/2
-		end := rect.Y1 - thumbHeight/2
-		if end <= start {
+		start := rect.Y0 + 18
+		end := rect.Y1 - 18
+		travel := math.Max(0, end-start-thumbHeight)
+		if travel == 0 {
 			fraction = 0
 		} else {
-			fraction = (pointY - start) / (end - start)
+			fraction = (pointY - start - thumbHeight/2) / travel
 		}
 	}
 	if fraction < 0 {
