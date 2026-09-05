@@ -14,3 +14,9 @@ func TestReplaceCharacterGeosetGroup(t *testing.T) {
 		t.Fatalf("group 5 was not replaced: %v", active)
 	}
 }
+
+func TestResolveCharacterGeosetDoesNotSubstituteForNone(t *testing.T) {
+	if got := resolveCharacterGeoset(801, map[uint16]bool{802: true}); got != 0 {
+		t.Fatalf("none fallback=%d", got)
+	}
+}
