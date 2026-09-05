@@ -61,7 +61,7 @@ void main() {
     ParticleColor = VertexColor;
     ParticleAlpha = VertexParticleAlpha;
     ParticleCell = VertexParticleParams.zw;
-    ParticleCorner = VertexParticleCorner;
+    ParticleCorner = turned;
 }`
 
 const m2ParticleFragmentShader = `precision highp float;
@@ -75,7 +75,7 @@ void main() {
     vec4 result = vec4(1.0);
 #if MAT_TEXTURES > 0
     vec2 repeat = MatTexRepeat(0);
-    vec2 sprite = ParticleCorner * 0.5 + vec2(0.5);
+    vec2 sprite = vec2(ParticleCorner.x * 0.5 + 0.5, 0.5 - ParticleCorner.y * 0.5);
     vec2 coord = sprite * repeat + ParticleCell * repeat + MatTexOffset(0);
     result = texture(MatTexture[0], coord);
 #endif
