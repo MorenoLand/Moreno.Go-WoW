@@ -81,12 +81,16 @@ type m2ParticleGroup struct {
 	positions   math32.ArrayF32
 	colors      math32.ArrayF32
 	params      math32.ArrayF32
+	alphas      math32.ArrayF32
 	rotations   math32.ArrayF32
+	corners     math32.ArrayF32
 	positionVBO *gls.VBO
 	colorVBO    *gls.VBO
 	paramsVBO   *gls.VBO
+	alphaVBO    *gls.VBO
 	rotationVBO *gls.VBO
-	points      *graphic.Points
+	cornerVBO   *gls.VBO
+	mesh        *graphic.Mesh
 	particleTex *texture.Texture2D
 	rootScale   float32
 }
@@ -330,25 +334,40 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 			count = 64
 		}
 		base := modelVector(transformM2Point(int(emitter.bone), emitter.position, model.bones, 0))
-		group := &m2ParticleGroup{emitter: emitter, model: model, bone: int(emitter.bone), base: base, right: right, up: up, particleTex: tex, rootScale: rootScale, particles: make([]m2Particle, count), positions: math32.NewArrayF32(0, count*3), colors: math32.NewArrayF32(0, count*3), params: math32.NewArrayF32(0, count*4), rotations: math32.NewArrayF32(0, count)}
+		vertexCount := count * 4
+		group := &m2ParticleGroup{emitter: emitter, model: model, bone: int(emitter.bone), base: base, right: right, up: up, particleTex: tex, rootScale: rootScale, particles: make([]m2Particle, count), positions: math32.NewArrayF32(0, vertexCount*3), colors: math32.NewArrayF32(0, vertexCount*3), params: math32.NewArrayF32(0, vertexCount*4), alphas: math32.NewArrayF32(0, vertexCount), rotations: math32.NewArrayF32(0, vertexCount), corners: math32.NewArrayF32(0, vertexCount*2)}
 		for particleIndex := range group.particles {
 			seed := uint32(index+1)*0x9e3779b9 + uint32(particleIndex+1)*0x85ebca6b
 			group.particles[particleIndex] = spawnM2Particle(group, seed, emitter.life*float32(particleIndex)/float32(count))
 			position := particlePosition(group.particles[particleIndex])
-			group.positions.Append(position[0], position[1], position[2])
 			color, size, alpha, cell := particleAppearance(group.emitter, group.particles[particleIndex])
-			group.colors.Append(color[0], color[1], color[2])
-			group.params.Append(size*rootScale, alpha, cell[0], cell[1])
-			group.rotations.Append(group.particles[particleIndex].rotation)
+			for _, corner := range particleCorners {
+				group.positions.Append(position[0], position[1], position[2])
+				group.colors.Append(color[0], color[1], color[2])
+				group.params.Append(size[0]*rootScale*0.5, size[1]*rootScale*0.5, cell[0], cell[1])
+				group.alphas.Append(alpha)
+				group.rotations.Append(group.particles[particleIndex].rotation)
+				group.corners.Append(corner[0], corner[1])
+			}
 		}
 		geom := geometry.NewGeometry()
+		indices := math32.NewArrayU32(0, count*6)
+		for particleIndex := 0; particleIndex < count; particleIndex++ {
+			baseIndex := uint32(particleIndex * 4)
+			indices.Append(baseIndex, baseIndex+1, baseIndex+2, baseIndex, baseIndex+2, baseIndex+3)
+		}
+		geom.SetIndices(indices)
 		geom.AddVBO(gls.NewVBO(group.positions).AddAttrib(gls.VertexPosition))
 		group.colorVBO = gls.NewVBO(group.colors).AddAttrib(gls.VertexColor)
 		group.paramsVBO = gls.NewVBO(group.params).AddCustomAttrib("VertexParticleParams", 4)
+		group.alphaVBO = gls.NewVBO(group.alphas).AddCustomAttrib("VertexParticleAlpha", 1)
 		group.rotationVBO = gls.NewVBO(group.rotations).AddCustomAttrib("VertexParticleRotation", 1)
+		group.cornerVBO = gls.NewVBO(group.corners).AddCustomAttrib("VertexParticleCorner", 2)
 		geom.AddVBO(group.colorVBO)
 		geom.AddVBO(group.paramsVBO)
+		geom.AddVBO(group.alphaVBO)
 		geom.AddVBO(group.rotationVBO)
+		geom.AddVBO(group.cornerVBO)
 		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
 		mat.SetShader("morenowow_particle")
 		mat.SetShaderUnique(true)
@@ -363,12 +382,12 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 		mat.SetTransparent(blending != material.BlendNone)
 		mat.SetBlending(blending)
 		mat.AddTexture(tex)
-		points := graphic.NewPoints(geom, mat)
-		points.SetRenderOrder(10)
-		points.SetCullable(false)
+		mesh := graphic.NewMesh(geom, mat)
+		mesh.SetRenderOrder(10)
+		mesh.SetCullable(false)
 		group.positionVBO = geom.VBO(gls.VertexPosition)
-		group.points = points
-		root.Add(points)
+		group.mesh = mesh
+		root.Add(mesh)
 		system.groups = append(system.groups, group)
 		system.emitterCount++
 		system.pointCount += count
@@ -480,11 +499,16 @@ func (system *m2ParticleSystem) Update(elapsed float64) {
 				*particle = spawnM2Particle(group, particle.seed, 0)
 			}
 			position := particlePosition(*particle)
-			group.positions.Set(index*3, position[0], position[1], position[2])
 			color, size, alpha, cell := particleAppearance(group.emitter, *particle)
-			group.colors.Set(index*3, color[0], color[1], color[2])
-			group.params.Set(index*4, size*group.rootScale, alpha, cell[0], cell[1])
-			group.rotations.Set(index, particle.rotation)
+			for vertex := 0; vertex < 4; vertex++ {
+				positionIndex := (index*4 + vertex) * 3
+				group.positions.Set(positionIndex, position[0], position[1], position[2])
+				group.colors.Set(positionIndex, color[0], color[1], color[2])
+				paramsIndex := (index*4 + vertex) * 4
+				group.params.Set(paramsIndex, size[0]*group.rootScale*0.5, size[1]*group.rootScale*0.5, cell[0], cell[1])
+				group.alphas.Set(index*4+vertex, alpha)
+				group.rotations.Set(index*4+vertex, particle.rotation)
+			}
 		}
 		if group.positionVBO != nil {
 			group.positionVBO.SetBuffer(group.positions)
@@ -495,13 +519,21 @@ func (system *m2ParticleSystem) Update(elapsed float64) {
 		if group.paramsVBO != nil {
 			group.paramsVBO.SetBuffer(group.params)
 		}
+		if group.alphaVBO != nil {
+			group.alphaVBO.SetBuffer(group.alphas)
+		}
 		if group.rotationVBO != nil {
 			group.rotationVBO.SetBuffer(group.rotations)
+		}
+		if group.cornerVBO != nil {
+			group.cornerVBO.SetBuffer(group.corners)
 		}
 	}
 }
 
-func particleAppearance(emitter m2ParticleEmitter, particle m2Particle) ([3]float32, float32, float32, [2]float32) {
+var particleCorners = [][2]float32{{-1, -1}, {1, -1}, {1, 1}, {-1, 1}}
+
+func particleAppearance(emitter m2ParticleEmitter, particle m2Particle) ([3]float32, [2]float32, float32, [2]float32) {
 	age := float32(0)
 	if particle.life > 0 {
 		age = particle.age / particle.life
@@ -539,11 +571,7 @@ func particleAppearance(emitter m2ParticleEmitter, particle m2Particle) ([3]floa
 	if columns < 1 {
 		columns = 1
 	}
-	size := sizeX
-	if sizeY > size {
-		size = sizeY
-	}
-	return color, size, alpha, [2]float32{float32(cell % columns), float32(cell / columns)}
+	return color, [2]float32{sizeX, sizeY}, alpha, [2]float32{float32(cell % columns), float32(cell / columns)}
 }
 
 func particlePosition(p m2Particle) [3]float32 {

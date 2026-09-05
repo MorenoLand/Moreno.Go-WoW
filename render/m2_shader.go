@@ -41,21 +41,27 @@ void main() {
 
 const m2ParticleVertexShader = `#include <attributes>
 uniform mat4 MVP;
-uniform mat4 MV;
+uniform mat4 ModelViewMatrix;
 in vec4 VertexParticleParams;
+in float VertexParticleAlpha;
 in float VertexParticleRotation;
+in vec2 VertexParticleCorner;
 out vec3 ParticleColor;
 out float ParticleAlpha;
 out vec2 ParticleCell;
-out float ParticleRotation;
+out vec2 ParticleCorner;
 void main() {
-    vec4 position = MV * vec4(VertexPosition, 1.0);
-    gl_Position = MVP * vec4(VertexPosition, 1.0);
-    gl_PointSize = max(1.0, VertexParticleParams.x * 500.0 / -position.z);
+    float c = cos(VertexParticleRotation);
+    float s = sin(VertexParticleRotation);
+    vec2 turned = vec2(VertexParticleCorner.x * c - VertexParticleCorner.y * s, VertexParticleCorner.x * s + VertexParticleCorner.y * c);
+    vec3 cameraRight = normalize(vec3(ModelViewMatrix[0][0], ModelViewMatrix[1][0], ModelViewMatrix[2][0]));
+    vec3 cameraUp = normalize(vec3(ModelViewMatrix[0][1], ModelViewMatrix[1][1], ModelViewMatrix[2][1]));
+    vec3 vertex = VertexPosition + cameraRight * (turned.x * VertexParticleParams.x) + cameraUp * (turned.y * VertexParticleParams.y);
+    gl_Position = MVP * vec4(vertex, 1.0);
     ParticleColor = VertexColor;
-    ParticleAlpha = VertexParticleParams.y;
+    ParticleAlpha = VertexParticleAlpha;
     ParticleCell = VertexParticleParams.zw;
-    ParticleRotation = VertexParticleRotation;
+    ParticleCorner = VertexParticleCorner;
 }`
 
 const m2ParticleFragmentShader = `precision highp float;
@@ -63,22 +69,17 @@ const m2ParticleFragmentShader = `precision highp float;
 in vec3 ParticleColor;
 in float ParticleAlpha;
 in vec2 ParticleCell;
-in float ParticleRotation;
+in vec2 ParticleCorner;
 out vec4 FragColor;
 void main() {
     vec4 result = vec4(1.0);
 #if MAT_TEXTURES > 0
     vec2 repeat = MatTexRepeat(0);
-    vec2 sprite = gl_PointCoord;
-    vec2 point = sprite - vec2(0.5);
-    float c = cos(ParticleRotation);
-    float s = sin(ParticleRotation);
-    point = vec2(point.x * c - point.y * s, point.x * s + point.y * c) + vec2(0.5);
-    vec2 coord = point * repeat + ParticleCell * repeat + MatTexOffset(0);
+    vec2 sprite = ParticleCorner * 0.5 + vec2(0.5);
+    vec2 coord = sprite * repeat + ParticleCell * repeat + MatTexOffset(0);
     result = texture(MatTexture[0], coord);
 #endif
-    float edge = 1.0 - smoothstep(0.4, 0.5, length(sprite - vec2(0.5)));
-    FragColor = vec4(result.rgb * ParticleColor, result.a * ParticleAlpha * edge);
+    FragColor = vec4(result.rgb * ParticleColor, result.a * ParticleAlpha);
 }`
 
 const m2AlphaKeyFragmentShader = `precision highp float;

@@ -24,6 +24,14 @@ func TestM2ParticleBlendModes(t *testing.T) {
 	}
 }
 
+func TestM2ParticleAppearancePreservesAxisScale(t *testing.T) {
+	emitter := m2ParticleEmitter{alpha: 1, scale: [2]float32{2, 3}}
+	_, size, _, _ := particleAppearance(emitter, m2Particle{life: 1})
+	if size != ([2]float32{2, 3}) {
+		t.Fatalf("particle size=%v", size)
+	}
+}
+
 func TestM2RenderOrderUsesMaterialPriority(t *testing.T) {
 	background := &m2Part{renderOrder: 27, priorityPlane: 10, material: m2RenderFlag{blend: 2}}
 	dragon := &m2Part{renderOrder: 4, priorityPlane: 11, material: m2RenderFlag{blend: 2}}
