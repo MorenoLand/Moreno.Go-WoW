@@ -801,6 +801,13 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.textInsetsSet = true
 			return 0
 		},
+		"GetTextInsets": func(L *lua.LState, w *widget) int {
+			L.Push(lua.LNumber(w.textInsetL))
+			L.Push(lua.LNumber(w.textInsetR))
+			L.Push(lua.LNumber(w.textInsetT))
+			L.Push(lua.LNumber(w.textInsetB))
+			return 4
+		},
 		"HighlightText": func(L *lua.LState, w *widget) int {
 			length := len([]rune(w.text))
 			start, end := 0, length

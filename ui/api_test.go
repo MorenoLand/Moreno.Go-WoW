@@ -96,3 +96,13 @@ func TestHitRectInsetsAreScriptConfigurable(t *testing.T) {
 		t.Fatalf("hit insets=%v,%v,%v,%v", button.hitInsetL, button.hitInsetR, button.hitInsetT, button.hitInsetB)
 	}
 }
+
+func TestTextInsetsRoundTripThroughLua(t *testing.T) {
+	rt := NewRuntime(nil)
+	defer rt.Close()
+	edit := newWidget(kindEditBox, "InsetEdit")
+	rt.register(edit)
+	if !rt.Execute(`InsetEdit:SetTextInsets(15, 2, 3, 4); left, right, top, bottom = InsetEdit:GetTextInsets(); assert(left == 15 and right == 2 and top == 3 and bottom == 4)`, "@text-insets-test.lua") {
+		t.Fatalf("text inset round trip failed: %v", rt.ScriptErrors())
+	}
+}
