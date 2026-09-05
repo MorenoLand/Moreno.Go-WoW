@@ -173,7 +173,7 @@ func wrapWorldModel(model *core.Node, position world.WorldPosition, scale float3
 		if info.hasStand {
 			offsetX, offsetY, offsetZ = -info.standPosition.X, info.standPosition.Z, -info.standPosition.Y
 		}
-		if info.modelBottom < 0 && -info.modelBottom > offsetZ {
+		if !info.hasStand && info.modelBottom < 0 {
 			offsetZ = -info.modelBottom
 		}
 		model.SetPosition(offsetX, offsetY, offsetZ)

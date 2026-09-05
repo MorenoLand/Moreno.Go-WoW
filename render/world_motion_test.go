@@ -6,6 +6,8 @@ import (
 
 	"github.com/MorenoLand/Moreno.WoW/world"
 	"github.com/g3n/engine/camera"
+	"github.com/g3n/engine/core"
+	"github.com/g3n/engine/math32"
 	"github.com/g3n/engine/window"
 )
 
@@ -27,6 +29,16 @@ func TestWorldCameraKeepsAirbornePositionAboveFloor(t *testing.T) {
 	controller.update(1.0/60.0, camera.New(1), nil)
 	if controller.position[2] <= 0 || controller.velocity[2] <= 0 {
 		t.Fatalf("position=%v velocity=%v", controller.position, controller.velocity)
+	}
+}
+
+func TestWrapWorldModelKeepsStandAttachmentGrounded(t *testing.T) {
+	model := core.NewNode()
+	model.SetUserData(glueModelInfo{hasStand: true, standPosition: *math32.NewVector3(1, 2, 3), modelBottom: -10})
+	root := wrapWorldModel(model, world.WorldPosition{}, 1)
+	position := root.Children()[0].Position()
+	if position.X != -1 || position.Y != 3 || position.Z != -2 {
+		t.Fatalf("model position=%v", position)
 	}
 }
 
