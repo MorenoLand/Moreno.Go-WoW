@@ -47,6 +47,7 @@ type UIEngine struct {
 	textFaces        map[string]font.Face
 	layerPool        []*image.RGBA
 	layerDepth       int
+	paintCanvas      *image.RGBA
 	movieFile        string
 	movieImage       image.Image
 	movie            *moviePlayback
@@ -221,7 +222,11 @@ func (eng *UIEngine) Update(elapsed float64) bool {
 		if !w.shown {
 			return
 		}
-		eng.Rt.fire(w, "OnUpdate", []lua.LValue{w.luaValue(eng.Rt.L), lua.LNumber(elapsed)})
+		// Most Glue/FrameXML widgets have no OnUpdate script; skip building
+		// Lua args and the handler lookup for those nodes each frame.
+		if _, ok := w.scripts["OnUpdate"]; ok {
+			eng.Rt.fire(w, "OnUpdate", []lua.LValue{w.luaValue(eng.Rt.L), lua.LNumber(elapsed)})
+		}
 		for _, child := range w.children {
 			update(child)
 		}
@@ -300,9 +305,26 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 	if screenHeight < 1 {
 		screenHeight = 1
 	}
-	canvas := image.NewRGBA(image.Rect(0, 0, screenWidth, screenHeight))
-	eng.rects = make(map[*widget]Rect)
-	eng.layoutActive = make(map[*widget]bool)
+	bounds := image.Rect(0, 0, screenWidth, screenHeight)
+	if eng.paintCanvas == nil || !eng.paintCanvas.Bounds().Eq(bounds) {
+		eng.paintCanvas = image.NewRGBA(bounds)
+	} else {
+		clear := eng.paintCanvas.Pix
+		for i := range clear {
+			clear[i] = 0
+		}
+	}
+	canvas := eng.paintCanvas
+	if eng.rects == nil {
+		eng.rects = make(map[*widget]Rect)
+	} else {
+		clear(eng.rects)
+	}
+	if eng.layoutActive == nil {
+		eng.layoutActive = make(map[*widget]bool)
+	} else {
+		clear(eng.layoutActive)
+	}
 
 	uiScale := float64(screenHeight) / 768.0
 	eng.uiScale = uiScale
@@ -310,8 +332,6 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 	eng.screenHeight = screenHeight
 	eng.layerDepth = 0
 	eng.screen = Rect{X0: 0, Y0: 0, X1: float64(screenWidth) / uiScale, Y1: 768}
-	eng.rects = make(map[*widget]Rect)
-	eng.layoutActive = make(map[*widget]bool)
 
 	face := eng.cachedFace("__base13", eng.FontObj, 13*uiScale)
 	faceLg := eng.cachedFace("__base16", eng.FontObj, 16*uiScale)
@@ -2263,6 +2283,51 @@ func drawSubMode(canvas *image.RGBA, img image.Image, r Rect, screenHeight float
 }
 
 func drawSubModeFilter(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64, additive bool) {
+	srcImg, ok := resolveTextureSubRGBA(img, tc)
+	if !ok {
+		return
+	}
+	dst := ScreenRect(r, screenHeight)
+	if dst.Dx() <= 0 || dst.Dy() <= 0 {
+		return
+	}
+	if !additive {
+		xdraw.BiLinear.Scale(canvas, dst, srcImg, srcImg.Bounds(), xdraw.Over, nil)
+		return
+	}
+	blend := image.NewRGBA(dst)
+	xdraw.BiLinear.Scale(blend, blend.Bounds(), srcImg, srcImg.Bounds(), xdraw.Src, nil)
+	for y := dst.Min.Y; y < dst.Max.Y; y++ {
+		dstOff := canvas.PixOffset(dst.Min.X, y)
+		srcOff := blend.PixOffset(dst.Min.X, y)
+		for x := dst.Min.X; x < dst.Max.X; x++ {
+			sr8 := blend.Pix[srcOff+0]
+			sg8 := blend.Pix[srcOff+1]
+			sb8 := blend.Pix[srcOff+2]
+			sa8 := blend.Pix[srcOff+3]
+			// Preserve additive keying used by Glue textures: near-black
+			// source texels do not brighten the destination.
+			if sa8 != 0 && !(sr8 <= 2 && sg8 <= 2 && sb8 <= 8) {
+				sa := uint32(sa8) * 0x101
+				sr := uint32(sr8) * 0x101
+				sg := uint32(sg8) * 0x101
+				sb := uint32(sb8) * 0x101
+				dr := uint32(canvas.Pix[dstOff+0]) * 0x101
+				dg := uint32(canvas.Pix[dstOff+1]) * 0x101
+				db := uint32(canvas.Pix[dstOff+2]) * 0x101
+				da := uint32(canvas.Pix[dstOff+3]) * 0x101
+				canvas.Pix[dstOff+0] = addChannel(dr, scaleChannel(sr, sa))
+				canvas.Pix[dstOff+1] = addChannel(dg, scaleChannel(sg, sa))
+				canvas.Pix[dstOff+2] = addChannel(db, scaleChannel(sb, sa))
+				canvas.Pix[dstOff+3] = maxChannel(da, sa)
+			}
+			dstOff += 4
+			srcOff += 4
+		}
+	}
+}
+
+func resolveTextureSubRGBA(img image.Image, tc [4]float64) (*image.RGBA, bool) {
 	b := img.Bounds()
 	flipX := tc[1] < tc[0]
 	flipY := tc[3] < tc[2]
@@ -2282,86 +2347,62 @@ func drawSubModeFilter(canvas *image.RGBA, img image.Image, r Rect, screenHeight
 		l, rt, tp, bm = b.Min.X, b.Max.X, b.Min.Y, b.Max.Y
 		flipX, flipY = false, false
 	}
+	// Non-flipped RGBA crops can share the source Pix via SubImage and
+	// avoid a per-draw allocation on the common UI texture path.
+	if rgba, ok := img.(*image.RGBA); ok && !flipX && !flipY {
+		sub, ok := rgba.SubImage(image.Rect(l, tp, rt, bm)).(*image.RGBA)
+		return sub, ok && sub.Bounds().Dx() > 0 && sub.Bounds().Dy() > 0
+	}
 	src := image.NewRGBA(image.Rect(0, 0, rt-l, bm-tp))
-	for y := 0; y < src.Bounds().Dy(); y++ {
-		for x := 0; x < src.Bounds().Dx(); x++ {
-			sourceX, sourceY := l+x, tp+y
-			if flipX {
-				sourceX = rt - 1 - x
-			}
+	copyTextureRect(src, img, l, tp, rt, bm, flipX, flipY)
+	return src, true
+}
+
+func copyTextureRect(dst *image.RGBA, img image.Image, l, tp, rt, bm int, flipX, flipY bool) {
+	width := rt - l
+	height := bm - tp
+	if rgba, ok := img.(*image.RGBA); ok {
+		for y := 0; y < height; y++ {
+			sourceY := tp + y
 			if flipY {
 				sourceY = bm - 1 - y
 			}
-			src.Set(x, y, img.At(sourceX, sourceY))
-		}
-	}
-	if additive {
-		for y := src.Bounds().Min.Y; y < src.Bounds().Max.Y; y++ {
-			for x := src.Bounds().Min.X; x < src.Bounds().Max.X; x++ {
-				r, g, b, _ := src.At(x, y).RGBA()
-				if r>>8 <= 2 && g>>8 <= 2 && b>>8 <= 8 {
-					src.SetRGBA(x, y, color.RGBA{})
-				}
-			}
-		}
-	}
-
-	dst := ScreenRect(r, screenHeight)
-	if dst.Dx() <= 0 || dst.Dy() <= 0 {
-		return
-	}
-	if !additive {
-		xdraw.BiLinear.Scale(canvas, dst, src, src.Bounds(), xdraw.Over, nil)
-		return
-	}
-	blend := image.NewRGBA(dst)
-	xdraw.BiLinear.Scale(blend, blend.Bounds(), src, src.Bounds(), xdraw.Src, nil)
-	for y := dst.Min.Y; y < dst.Max.Y; y++ {
-		for x := dst.Min.X; x < dst.Max.X; x++ {
-			sr, sg, sb, sa := blend.At(x, y).RGBA()
-			if sa == 0 {
+			dstOff := dst.PixOffset(0, y)
+			if !flipX {
+				srcOff := rgba.PixOffset(l, sourceY)
+				copy(dst.Pix[dstOff:dstOff+width*4], rgba.Pix[srcOff:srcOff+width*4])
 				continue
 			}
-			dr, dg, db, da := canvas.At(x, y).RGBA()
-			canvas.SetRGBA(x, y, color.RGBA{R: addChannel(dr, scaleChannel(sr, sa)), G: addChannel(dg, scaleChannel(sg, sa)), B: addChannel(db, scaleChannel(sb, sa)), A: maxChannel(da, sa)})
+			for x := 0; x < width; x++ {
+				sourceX := rt - 1 - x
+				srcOff := rgba.PixOffset(sourceX, sourceY)
+				copy(dst.Pix[dstOff:dstOff+4], rgba.Pix[srcOff:srcOff+4])
+				dstOff += 4
+			}
+		}
+		return
+	}
+	for y := 0; y < height; y++ {
+		sourceY := tp + y
+		if flipY {
+			sourceY = bm - 1 - y
+		}
+		for x := 0; x < width; x++ {
+			sourceX := l + x
+			if flipX {
+				sourceX = rt - 1 - x
+			}
+			dst.Set(x, y, img.At(sourceX, sourceY))
 		}
 	}
 }
 
 func textureSubImage(img image.Image, tc [4]float64) image.Image {
-	b := img.Bounds()
-	flipX := tc[1] < tc[0]
-	flipY := tc[3] < tc[2]
-	leftCoord, rightCoord := tc[0], tc[1]
-	topCoord, bottomCoord := tc[2], tc[3]
-	if flipX {
-		leftCoord, rightCoord = rightCoord, leftCoord
+	src, ok := resolveTextureSubRGBA(img, tc)
+	if !ok {
+		return image.NewRGBA(image.Rect(0, 0, 1, 1))
 	}
-	if flipY {
-		topCoord, bottomCoord = bottomCoord, topCoord
-	}
-	l := b.Min.X + int(float64(b.Dx())*leftCoord)
-	r := b.Min.X + int(float64(b.Dx())*rightCoord)
-	t := b.Min.Y + int(float64(b.Dy())*topCoord)
-	bm := b.Min.Y + int(float64(b.Dy())*bottomCoord)
-	if l < b.Min.X || r > b.Max.X || t < b.Min.Y || bm > b.Max.Y || r <= l || bm <= t {
-		l, r, t, bm = b.Min.X, b.Max.X, b.Min.Y, b.Max.Y
-		flipX, flipY = false, false
-	}
-	result := image.NewRGBA(image.Rect(0, 0, r-l, bm-t))
-	for y := 0; y < result.Bounds().Dy(); y++ {
-		for x := 0; x < result.Bounds().Dx(); x++ {
-			sourceX, sourceY := l+x, t+y
-			if flipX {
-				sourceX = r - 1 - x
-			}
-			if flipY {
-				sourceY = bm - 1 - y
-			}
-			result.Set(x, y, img.At(sourceX, sourceY))
-		}
-	}
-	return result
+	return src
 }
 
 func scaleChannel(value, alpha uint32) uint32 {
