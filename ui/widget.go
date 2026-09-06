@@ -161,6 +161,7 @@ type widget struct {
 	maxLetters      int
 	maxBytes        int
 	historyLines    int
+	history         []string
 
 	// Slider state.
 	minValue, maxValue float64
@@ -929,6 +930,13 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		},
 		"SetMaxBytes": func(L *lua.LState, w *widget) int {
 			w.maxBytes = L.CheckInt(2)
+			return 0
+		},
+		"AddHistoryLine": func(L *lua.LState, w *widget) int {
+			w.history = append(w.history, L.CheckString(2))
+			if w.historyLines > 0 && len(w.history) > w.historyLines {
+				w.history = w.history[len(w.history)-w.historyLines:]
+			}
 			return 0
 		},
 		"SetMultiLine": func(L *lua.LState, w *widget) int { return 0 },

@@ -45,6 +45,7 @@ type clientHost struct {
 	height       float64
 	startLogin   func(string, string)
 	enterWorld   func(int)
+	sendChat     func(string, string, string, string) error
 	logout       func()
 	quit         func()
 	audio        *audioManager
@@ -119,6 +120,12 @@ func (h *clientHost) EnterWorld(index int) {
 		h.enterWorld(index)
 	}
 }
+func (h *clientHost) SendChatMessage(message, chatType, language, target string) error {
+	if h.sendChat == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return h.sendChat(message, chatType, language, target)
+}
 func (h *clientHost) Logout() {
 	if h.logout != nil {
 		h.logout()
@@ -161,6 +168,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var activeSession *network.Session
 	var worldPackets <-chan world.PacketEvent
 	worldLoading := false
+	host.sendChat = func(message, chatType, language, target string) error {
+		if activeSession == nil {
+			return fmt.Errorf("world session is closed")
+		}
+		return activeSession.SendChatMessage(message, chatType, language, target)
+	}
 	host.enterWorld = func(index int) {
 		if activeSession == nil || worldLoading {
 			return

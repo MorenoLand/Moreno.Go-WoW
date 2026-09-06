@@ -107,6 +107,10 @@ type WorldHost interface {
 	EnterWorld(index int)
 }
 
+type WorldChatHost interface {
+	SendChatMessage(message, chatType, language, target string) error
+}
+
 // LogoutHost returns the client from the world to the character-select glue
 // flow after Logout / ForceLogout completes.
 type LogoutHost interface {

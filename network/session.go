@@ -118,6 +118,13 @@ func (s *Session) EnterWorld(index int) (world.WorldPosition, error) {
 	return s.connection.EnterWorld(s.Characters[index].GUID)
 }
 
+func (s *Session) SendChatMessage(message, chatType, language, target string) error {
+	if s == nil || s.connection == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return s.connection.SendChatMessage(message, chatType, language, target)
+}
+
 func (s *Session) StartWorldPackets() <-chan world.PacketEvent {
 	if s == nil || s.connection == nil {
 		return nil

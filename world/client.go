@@ -108,6 +108,25 @@ func (c *Connection) EnterWorld(guid uint64) (WorldPosition, error) {
 	return ParseLoginVerifyWorld(packet.Body)
 }
 
+func (c *Connection) SendChatMessage(message, chatType, language, target string) error {
+	if c == nil || c.conn == nil {
+		return fmt.Errorf("world connection is closed")
+	}
+	typeID, err := ChatTypeFromName(chatType)
+	if err != nil {
+		return err
+	}
+	languageID, err := ChatLanguageFromName(language)
+	if err != nil {
+		return err
+	}
+	body, err := BuildMessageChat(typeID, languageID, target, message)
+	if err != nil {
+		return err
+	}
+	return c.send(ClientMessageChat, body)
+}
+
 type PacketEvent struct {
 	Packet Packet
 	Err    error

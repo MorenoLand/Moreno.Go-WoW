@@ -914,6 +914,21 @@ func registerGlueAPI(rt *Runtime) {
 		}
 		return 0
 	})
+	reg("SendChatMessage", func(L *lua.LState) int {
+		if host, ok := rt.Host.(WorldChatHost); ok {
+			message := L.OptString(1, "")
+			chatType := L.OptString(2, "SAY")
+			language := ""
+			if L.GetTop() >= 3 && L.Get(3) != lua.LNil {
+				language = L.Get(3).String()
+			}
+			target := L.OptString(4, "")
+			if err := host.SendChatMessage(message, chatType, language, target); err != nil {
+				L.RaiseError("SendChatMessage: %v", err)
+			}
+		}
+		return 0
+	})
 	reg("GetSelectBackgroundModel", func(L *lua.LState) int {
 		idx := L.CheckInt(1)
 		if idx < 1 || idx > len(rt.Glue.Characters) {
@@ -1479,6 +1494,7 @@ func registerStringHelpers(L *lua.LState) {
 		return 1
 	}))
 	L.SetGlobal("strfind", L.GetGlobal("string").(*lua.LTable).RawGetString("find"))
+	L.SetGlobal("strmatch", L.GetGlobal("string").(*lua.LTable).RawGetString("match"))
 	L.SetGlobal("strtrim", L.NewFunction(func(L *lua.LState) int {
 		s := L.CheckString(1)
 		cut := " \t\n\r"

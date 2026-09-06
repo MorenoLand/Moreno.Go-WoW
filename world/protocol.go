@@ -25,6 +25,7 @@ type ClientOpcode uint32
 const (
 	CharEnum         ClientOpcode = 0x0037
 	PlayerLogin      ClientOpcode = 0x003D
+	ClientMessageChat ClientOpcode = 0x0095
 	AuthSession      ClientOpcode = 0x01ED
 	TimeSyncResponse ClientOpcode = 0x0391
 )

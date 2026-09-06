@@ -1,6 +1,11 @@
 package world
 
-import "fmt"
+import (
+	"encoding/binary"
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 type ChatType uint8
 
@@ -167,6 +172,125 @@ func (m ChatMessage) Line() string {
 		return fmt.Sprintf("[%s] %s: %s", m.Type.label(), m.SenderName, m.Text)
 	}
 	return fmt.Sprintf("[%s] %s", m.Type.label(), m.Text)
+}
+
+func ChatTypeFromName(name string) (ChatType, error) {
+	switch strings.ToUpper(strings.TrimSpace(name)) {
+	case "", "SAY":
+		return ChatSay, nil
+	case "YELL":
+		return ChatYell, nil
+	case "PARTY":
+		return ChatParty, nil
+	case "RAID":
+		return ChatRaid, nil
+	case "GUILD":
+		return ChatGuild, nil
+	case "OFFICER":
+		return ChatOfficer, nil
+	case "WHISPER":
+		return ChatWhisper, nil
+	case "CHANNEL":
+		return ChatChannel, nil
+	case "EMOTE":
+		return ChatEmote, nil
+	default:
+		return ChatSystem, fmt.Errorf("unsupported outgoing chat type %q", name)
+	}
+}
+
+func ChatLanguageFromName(name string) (uint32, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return 7, nil
+	}
+	if value, err := strconv.ParseUint(name, 10, 32); err == nil {
+		if validChatLanguage(uint32(value)) {
+			return uint32(value), nil
+		}
+	}
+	switch strings.ToUpper(name) {
+	case "UNIVERSAL":
+		return 0, nil
+	case "ORCISH":
+		return 1, nil
+	case "DARNASSIAN":
+		return 2, nil
+	case "TAURAHE":
+		return 3, nil
+	case "DWARVISH":
+		return 6, nil
+	case "COMMON":
+		return 7, nil
+	case "DEMONIC":
+		return 8, nil
+	case "TITAN":
+		return 9, nil
+	case "THALASSIAN":
+		return 10, nil
+	case "DRACONIC":
+		return 11, nil
+	case "KALIMAG":
+		return 12, nil
+	case "GNOMISH":
+		return 13, nil
+	case "TROLL":
+		return 14, nil
+	case "GUTTERSPEAK":
+		return 33, nil
+	case "DRAENEI":
+		return 35, nil
+	case "ZOMBIE":
+		return 36, nil
+	case "GNOMISHBINARY":
+		return 37, nil
+	case "GOBLINBINARY":
+		return 38, nil
+	default:
+		return 0, fmt.Errorf("unsupported outgoing chat language %q", name)
+	}
+}
+
+func validChatLanguage(language uint32) bool {
+	switch language {
+	case 0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 33, 35, 36, 37, 38, ^uint32(0):
+		return true
+	default:
+		return false
+	}
+}
+
+func BuildMessageChat(chatType ChatType, language uint32, target, text string) ([]byte, error) {
+	switch chatType {
+	case ChatSay, ChatYell, ChatParty, ChatRaid, ChatGuild, ChatOfficer, ChatWhisper, ChatChannel, ChatEmote:
+	default:
+		return nil, fmt.Errorf("unsupported outgoing chat type %d", chatType)
+	}
+	if text == "" {
+		return nil, fmt.Errorf("outgoing chat message is empty")
+	}
+	if !validChatLanguage(language) {
+		return nil, fmt.Errorf("unsupported outgoing chat language %d", language)
+	}
+	if (chatType == ChatWhisper || chatType == ChatChannel) && target == "" {
+		return nil, fmt.Errorf("outgoing %s chat requires a target", chatType.label())
+	}
+	if strings.IndexByte(target, 0) >= 0 || strings.IndexByte(text, 0) >= 0 {
+		return nil, fmt.Errorf("outgoing chat contains a NUL byte")
+	}
+	body := make([]byte, 0, 8+len(target)+len(text)+2)
+	var word [4]byte
+	binary.LittleEndian.PutUint32(word[:], uint32(chatType))
+	body = append(body, word[:]...)
+	binary.LittleEndian.PutUint32(word[:], language)
+	body = append(body, word[:]...)
+	if chatType == ChatWhisper || chatType == ChatChannel {
+		body = append(body, target...)
+		body = append(body, 0)
+	}
+	body = append(body, text...)
+	body = append(body, 0)
+	return body, nil
 }
 
 func ParseMessageChat(body []byte) (ChatMessage, error) {
