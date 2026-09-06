@@ -948,6 +948,9 @@ func (eng *UIEngine) paintButtonState(w *widget, rect Rect, paint func(*widget, 
 func (eng *UIEngine) editTextWidget(w *widget) *widget {
 	for _, child := range w.children {
 		if child.kind == kindFontString {
+			if w.justifyH != "" {
+				child.justifyH = w.justifyH
+			}
 			return child
 		}
 	}

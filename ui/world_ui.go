@@ -77,11 +77,6 @@ func (eng *UIEngine) LoadWorldUI() error {
 		if (path == `Interface\FrameXML\VideoOptionsFrame.xml` && eng.Rt.widgets["VideoOptionsFrame"] != nil) || (path == `Interface\FrameXML\AudioOptionsFrame.xml` && eng.Rt.widgets["AudioOptionsFrame"] != nil) {
 			continue
 		}
-		if path == `Interface\FrameXML\FloatingChatFrame.xml` {
-			if err := eng.loadCombatLogBase(); err != nil {
-				return err
-			}
-		}
 		if path == `Interface\FrameXML\GameTooltip.xml` && eng.Rt.L.GetGlobal("GameTooltip") == lua.LNil {
 			if !eng.Rt.Execute(`GameTooltip = CreateFrame("Frame", "GameTooltip", UIParent); GameTooltip:Hide();`, "@world-ui-tooltip.lua") {
 				return fmt.Errorf("initialize GameTooltip: %v", eng.Rt.ScriptErrors())
@@ -103,7 +98,11 @@ if ChatFrame1 then
     ChatFrame1:Show();
     ChatFrame_RegisterForMessages(ChatFrame1, "SAY", "YELL", "PARTY", "RAID", "GUILD", "OFFICER", "WHISPER", "EMOTE", "TEXT_EMOTE", "CHANNEL");
     ChatEdit_SetLastActiveWindow(ChatFrame1.editBox);
+    ChatFrame1.editBox:SetJustifyH("LEFT");
     FCF_SetButtonSide(ChatFrame1, "left");
+    if ChatFrame2 then
+        FCF_SetButtonSide(ChatFrame2, "left", true);
+    end
     if DEFAULT_CHATFRAME_COLOR then
         FCF_SetWindowColor(ChatFrame1, DEFAULT_CHATFRAME_COLOR.r, DEFAULT_CHATFRAME_COLOR.g, DEFAULT_CHATFRAME_COLOR.b);
     end
@@ -206,21 +205,18 @@ func (eng *UIEngine) syncCombatLogButtons() {
 	}
 	buttons := eng.Rt.widgets["CombatLogButtons"]
 	combat := eng.Rt.widgets["ChatFrame2"]
-	if buttons != nil && combat != nil {
-		buttons.shown = combat.shown
+	if buttons != nil {
+		buttons.shown = false
 	}
-}
-
-func (eng *UIEngine) loadCombatLogBase() error {
-	path := `Interface\FrameXML\CombatLog.xml`
-	if _, err := eng.AssetLoader.ReadFile(path); err == nil {
-		if err := eng.AssetLoader.LoadInterfaceFile(path); err != nil {
-			return fmt.Errorf("load world UI %s: %w", path, err)
+	if combat != nil && combat.shown && eng.Rt.L.GetGlobal("FCF_SetButtonSide").Type() == lua.LTFunction {
+		buttonSide := ""
+		if combat.fields != nil {
+			buttonSide = combat.fields.RawGetString("buttonSide").String()
 		}
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("probe world UI %s: %w", path, err)
+		if buttonSide != "left" {
+			eng.Rt.Execute(`FCF_SetButtonSide(ChatFrame2, "left", true)`, "@world-ui-chat-side.lua")
+		}
 	}
-	return nil
 }
 
 func (eng *UIEngine) loadCombatLogAddon() error {

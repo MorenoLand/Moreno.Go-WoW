@@ -40,13 +40,13 @@ func TestChatFrame2DockedHiddenAndSetAllPointsToPrimary(t *testing.T) {
 	if tab2.text == "" {
 		t.Fatal("Combat Log tab text empty")
 	}
-	for _, name := range []string{"CombatLogUpButton", "CombatLogDownButton", "CombatLogBottomButton", "CombatLogQuickButtonFrame_Custom"} {
+	for _, name := range []string{"ChatFrame2ButtonFrame", "CombatLogQuickButtonFrame_Custom"} {
 		if engine.Rt.widgets[name] == nil {
 			t.Fatalf("Combat Log widget %s missing", name)
 		}
 	}
-	if buttons := engine.Rt.widgets["CombatLogButtons"]; buttons == nil || buttons.shown {
-		t.Fatalf("CombatLogButtons should be hidden with General selected: %#v", buttons)
+	if buttons := engine.Rt.widgets["CombatLogButtons"]; buttons != nil {
+		t.Fatalf("legacy CombatLogButtons should not be loaded: %#v", buttons)
 	}
 
 	// SetAllPoints(primary) must retain relativeTo, not fill UIParent.
@@ -124,15 +124,15 @@ func TestCombatLogTabSwitchKeepsFiniteGeometry(t *testing.T) {
 	if !engine.Rt.Execute(`ChatFrame1:AddMessage("transition message", 1, 1, 0)`, "@chat-transition-message.lua") {
 		t.Fatalf("general message setup failed: %v", engine.Rt.ScriptErrors())
 	}
-	if buttons := engine.Rt.widgets["CombatLogButtons"]; buttons == nil || buttons.shown {
-		t.Fatalf("CombatLogButtons visible before Combat Log selection: %#v", buttons)
+	if buttons := engine.Rt.widgets["CombatLogButtons"]; buttons != nil {
+		t.Fatalf("legacy CombatLogButtons loaded before Combat Log selection: %#v", buttons)
 	}
 	if !engine.Rt.Execute(`ChatFrame2Tab:Click()`, "@combat-tab-geometry.lua") {
 		t.Fatalf("combat tab click failed: %v", engine.Rt.ScriptErrors())
 	}
 	engine.RenderWorld(960, 640)
-	if buttons := engine.Rt.widgets["CombatLogButtons"]; buttons == nil || !buttons.shown {
-		t.Fatalf("CombatLogButtons hidden with Combat Log selected: %#v", buttons)
+	if buttons := engine.Rt.widgets["CombatLogButtons"]; buttons != nil {
+		t.Fatalf("legacy CombatLogButtons loaded with Combat Log selected: %#v", buttons)
 	}
 	combat := engine.Rt.widgets["ChatFrame2"]
 	quick := engine.Rt.widgets["CombatLogQuickButtonFrame_Custom"]
@@ -148,8 +148,8 @@ func TestCombatLogTabSwitchKeepsFiniteGeometry(t *testing.T) {
 		t.Fatalf("general tab click failed: %v", engine.Rt.ScriptErrors())
 	}
 	engine.RenderWorld(960, 640)
-	if buttons := engine.Rt.widgets["CombatLogButtons"]; buttons == nil || buttons.shown {
-		t.Fatalf("CombatLogButtons visible after returning to General: %#v", buttons)
+	if buttons := engine.Rt.widgets["CombatLogButtons"]; buttons != nil {
+		t.Fatalf("legacy CombatLogButtons loaded after returning to General: %#v", buttons)
 	}
 	if !engine.Rt.widgets["ChatFrame1"].shown || engine.Rt.widgets["ChatFrame2"].shown {
 		t.Fatal("general/combat tab visibility did not switch back")
