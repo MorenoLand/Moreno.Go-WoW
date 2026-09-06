@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -91,11 +92,6 @@ func openMPQSet(dataPath, locale string) (*mpqSet, error) {
 	if localeDir := findLocaleDirectory(root, locale); localeDir != "" {
 		set.looseRoots = append(set.looseRoots, localeDir)
 	}
-	if strings.EqualFold(filepath.Base(root), "Data") {
-		if parent := filepath.Dir(root); parent != root {
-			set.looseRoots = append(set.looseRoots, parent)
-		}
-	}
 	seen := make(map[string]struct{}, len(paths))
 	for _, path := range paths {
 		key := strings.ToLower(filepath.Clean(path))
@@ -179,25 +175,16 @@ func findMPQDataRoot(dataPath string) (string, error) {
 	if !info.IsDir() {
 		root = filepath.Dir(dataPath)
 	}
-	if !hasMPQFile(root) {
-		parent := filepath.Dir(root)
-		if dataRoot := filepath.Join(root, "Data"); hasMPQFile(dataRoot) {
-			root = dataRoot
-		} else if hasMPQFile(parent) {
-			root = parent
-		} else if dataRoot := filepath.Join(parent, "Data"); hasMPQFile(dataRoot) {
-			root = dataRoot
-		}
-	}
-	// Prefer Data when both the install root and Data contain MPQs (custom
-	// patch-4.MPQ is often also copied beside the install root).
 	if !strings.EqualFold(filepath.Base(root), "Data") {
-		if dataRoot := filepath.Join(root, "Data"); hasMPQFile(dataRoot) {
-			root = dataRoot
+		dataRoot := filepath.Join(root, "Data")
+		dataInfo, dataErr := os.Stat(dataRoot)
+		if dataErr != nil || !dataInfo.IsDir() {
+			return "", fmt.Errorf("MPQ data path must point to a Data directory: %s", dataPath)
 		}
+		root = dataRoot
 	}
 	if !hasMPQFile(root) {
-		return "", fmt.Errorf("no MPQ archives found under %s or its Data directory", dataPath)
+		return "", fmt.Errorf("no MPQ archives found under Data directory %s", root)
 	}
 	return root, nil
 }
@@ -211,16 +198,18 @@ func findMPQDataRoots(dataPath string) ([]string, error) {
 }
 
 func hasMPQFile(root string) bool {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.EqualFold(filepath.Ext(entry.Name()), ".mpq") {
-			return true
+	found := false
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-	}
-	return false
+		if !entry.IsDir() && strings.EqualFold(filepath.Ext(entry.Name()), ".mpq") {
+			found = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 func findLocaleDirectory(root, locale string) string {
@@ -268,26 +257,16 @@ func discoverMPQArchives(root, locale string) ([]string, error) {
 	if locale == "" {
 		locale = "enus"
 	}
-	rootEntries, err := mpqDirectory(root)
+	rootEntries, err := mpqDirectoryRecursive(root, locale)
 	if err != nil {
 		return nil, err
 	}
 	localeDir := findLocaleDirectory(root, locale)
 	localeEntries := map[string]string{}
 	if localeDir != "" {
-		localeEntries, err = mpqDirectory(localeDir)
+		localeEntries, err = mpqDirectoryRecursive(localeDir, "")
 		if err != nil {
 			return nil, err
-		}
-	}
-	// Fold install-root patch-*.MPQ into the same sort so patch-4 overrides locale.
-	extraPatchEntries := map[string]string{}
-	if strings.EqualFold(filepath.Base(root), "Data") {
-		if parent := filepath.Dir(root); parent != "" && parent != root {
-			extraPatchEntries, err = mpqDirectory(parent)
-			if err != nil {
-				return nil, err
-			}
 		}
 	}
 	paths := make([]string, 0, len(fixedMPQArchives)+16)
@@ -315,7 +294,6 @@ func discoverMPQArchives(root, locale string) ([]string, error) {
 	}
 	addPatches(rootEntries)
 	addPatches(localeEntries)
-	addPatches(extraPatchEntries)
 	sort.SliceStable(patches, func(i, j int) bool {
 		if patches[i].number != patches[j].number {
 			return patches[i].number < patches[j].number
@@ -341,18 +319,34 @@ type mpqPatchPath struct {
 }
 
 func mpqDirectory(root string) (map[string]string, error) {
-	entries, err := os.ReadDir(root)
+	return mpqDirectoryRecursive(root, "")
+}
+
+func mpqDirectoryRecursive(root, excludedDir string) (map[string]string, error) {
+	result := make(map[string]string)
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if path != root && excludedDir != "" && strings.EqualFold(entry.Name(), excludedDir) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if strings.EqualFold(filepath.Ext(entry.Name()), ".mpq") {
+			name := strings.ToLower(entry.Name())
+			if _, exists := result[name]; !exists {
+				result[name] = path
+			}
+		}
+		return nil
+	})
 	if os.IsNotExist(err) {
-		return map[string]string{}, nil
+		return result, nil
 	}
 	if err != nil {
 		return nil, err
-	}
-	result := make(map[string]string)
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.EqualFold(filepath.Ext(entry.Name()), ".mpq") {
-			result[strings.ToLower(entry.Name())] = filepath.Join(root, entry.Name())
-		}
 	}
 	return result, nil
 }
