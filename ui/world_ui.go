@@ -22,6 +22,7 @@ var worldUIFiles = []string{
 	`Interface\FrameXML\UIParent.xml`,
 	`Interface\FrameXML\ChatFrame.xml`,
 	`Interface\FrameXML\FloatingChatFrame.xml`,
+	`Interface\FrameXML\GameMenuFrame.xml`,
 }
 
 func (eng *UIEngine) LoadWorldUI() error {
@@ -68,6 +69,47 @@ if ChatFrame1 then
 end`, "@world-ui-button-side.lua") {
 		return fmt.Errorf("set world chat button side: %v", eng.Rt.ScriptErrors())
 	}
+	if !eng.Rt.Execute(`
+if not StaticPopup_Visible then
+    function StaticPopup_Visible()
+        return nil;
+    end
+end
+if not UpdateMicroButtons then
+    function UpdateMicroButtons()
+    end
+end
+if not Disable_BagButtons then
+    function Disable_BagButtons()
+    end
+end
+if not Enable_BagButtons then
+    function Enable_BagButtons()
+    end
+end
+if not VoiceChat_Toggle then
+    function VoiceChat_Toggle()
+    end
+end
+for _, name in ipairs({
+    "HelpFrame",
+    "VideoOptionsFrame",
+    "AudioOptionsFrame",
+    "InterfaceOptionsFrame",
+    "MultiCastFlyoutFrame",
+    "OpacityFrame",
+}) do
+    if not _G[name] then
+        local frame = CreateFrame("Frame", name, UIParent);
+        frame:Hide();
+    end
+end
+`, "@world-ui-game-menu-stubs.lua") {
+		return fmt.Errorf("initialize game menu stubs: %v", eng.Rt.ScriptErrors())
+	}
+	// Drop glue-screen keyboard focus (e.g. AccountLoginAccountEdit) so the
+	// first world ESC runs TOGGLEGAMEMENU instead of only clearing focus.
+	eng.Rt.setFocus(nil)
 	eng.worldUIReady = true
 	return nil
 }
@@ -97,4 +139,97 @@ func (eng *UIEngine) FireWorldChat(event string, args ...lua.LValue) int {
 		return 0
 	}
 	return eng.Rt.FireEvent(event, args...)
+}
+
+const logoutCampSeconds = 20
+
+func (rt *Runtime) beginLogout(quit bool) {
+	if rt == nil {
+		return
+	}
+	rt.logoutPending = !quit
+	rt.quitPending = quit
+	rt.logoutRemaining = logoutCampSeconds
+	if quit {
+		rt.FireEvent("PLAYER_QUITING")
+	} else {
+		rt.FireEvent("PLAYER_CAMPING")
+	}
+}
+
+func (rt *Runtime) cancelLogout() {
+	if rt == nil {
+		return
+	}
+	if !rt.logoutPending && !rt.quitPending {
+		return
+	}
+	rt.logoutPending = false
+	rt.quitPending = false
+	rt.logoutRemaining = 0
+	rt.FireEvent("LOGOUT_CANCEL")
+}
+
+func (rt *Runtime) completeLogout() {
+	if rt == nil {
+		return
+	}
+	rt.logoutPending = false
+	rt.quitPending = false
+	rt.logoutRemaining = 0
+	if host, ok := rt.Host.(LogoutHost); ok {
+		host.Logout()
+	}
+}
+
+func (rt *Runtime) completeQuit() {
+	if rt == nil {
+		return
+	}
+	rt.logoutPending = false
+	rt.quitPending = false
+	rt.logoutRemaining = 0
+	if rt.Host != nil {
+		rt.Host.Quit(false)
+	}
+}
+
+func (rt *Runtime) tickLogout(elapsed float64) bool {
+	if rt == nil || (!rt.logoutPending && !rt.quitPending) {
+		return false
+	}
+	rt.logoutRemaining -= elapsed
+	if rt.logoutRemaining > 0 {
+		return false
+	}
+	if rt.quitPending {
+		rt.completeQuit()
+	} else {
+		rt.completeLogout()
+	}
+	return true
+}
+
+// ToggleGameMenu runs the live FrameXML ToggleGameMenu binding used by ESC.
+func (eng *UIEngine) ToggleGameMenu() bool {
+	if eng == nil || eng.Rt == nil || !eng.worldUIReady {
+		return false
+	}
+	return eng.Rt.Execute(`ToggleGameMenu();`, "@bindings-TOGGLEGAMEMENU.lua")
+}
+
+func (eng *UIEngine) GameMenuShown() bool {
+	if eng == nil || eng.Rt == nil {
+		return false
+	}
+	menu := eng.Rt.widgets["GameMenuFrame"]
+	if menu == nil || !menu.shown {
+		return false
+	}
+	for p := menu.parent; p != nil; p = p.parent {
+		if !p.shown {
+			return false
+		}
+	}
+	return true
 }

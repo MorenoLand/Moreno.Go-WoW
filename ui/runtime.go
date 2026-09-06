@@ -63,6 +63,13 @@ type Runtime struct {
 	// data. Nil hooks behave as an idle, unconnected client.
 	Host Host
 
+	// logoutPending / quitPending mirror the original client's camping and
+	// quitting timers started by Logout() / Quit(). remaining counts down in
+	// UIEngine.Update; zero completes the host Logout or Quit.
+	logoutPending   bool
+	quitPending     bool
+	logoutRemaining float64
+
 	// The original client aborts runaway scripts through a Lua debug hook
 	// with a 110-instruction budget. The Go VM in use exposes no debug-hook
 	// API, and its context deadline corrupts state on error unwinding, so
@@ -91,6 +98,12 @@ type LoginHost interface {
 
 type WorldHost interface {
 	EnterWorld(index int)
+}
+
+// LogoutHost returns the client from the world to the character-select glue
+// flow after Logout / ForceLogout completes.
+type LogoutHost interface {
+	Logout()
 }
 
 type AudioHost interface {

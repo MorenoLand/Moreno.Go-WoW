@@ -213,6 +213,9 @@ func (eng *UIEngine) Update(elapsed float64) bool {
 			statusChanged = true
 		}
 	}
+	if eng.Rt != nil && eng.Rt.tickLogout(elapsed) {
+		statusChanged = true
+	}
 	var update func(*widget)
 	update = func(w *widget) {
 		if !w.shown {
@@ -1501,13 +1504,18 @@ func (eng *UIEngine) handleKey(key window.Key, extendSelection bool) bool {
 	}
 	w := eng.Rt.focused
 	if key == window.KeyEscape {
-		target := eng.keyboardTarget()
-		if target != nil && target != w && !eng.isLoginTarget(target) {
-			eng.Rt.fire(target, "OnKeyDown", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString("ESCAPE")})
-			return true
-		}
+		// Focused edit boxes clear first (chat/login). With no focus, world ESC
+		// runs the live TOGGLEGAMEMENU binding; glue keeps OnKeyDown dispatch.
 		if w != nil {
 			eng.Rt.setFocus(nil)
+			return true
+		}
+		if eng.worldUIReady {
+			return eng.ToggleGameMenu()
+		}
+		target := eng.keyboardTarget()
+		if target != nil && !eng.isLoginTarget(target) {
+			eng.Rt.fire(target, "OnKeyDown", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString("ESCAPE")})
 			return true
 		}
 		if target != nil {

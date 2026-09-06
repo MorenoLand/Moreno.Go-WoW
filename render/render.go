@@ -45,6 +45,7 @@ type clientHost struct {
 	height       float64
 	startLogin   func(string, string)
 	enterWorld   func(int)
+	logout       func()
 	quit         func()
 	audio        *audioManager
 	saveAudio    func(string, string)
@@ -116,6 +117,11 @@ func (h *clientHost) DefaultServerLogin(account, password string) {
 func (h *clientHost) EnterWorld(index int) {
 	if h.enterWorld != nil {
 		h.enterWorld(index)
+	}
+}
+func (h *clientHost) Logout() {
+	if h.logout != nil {
+		h.logout()
 	}
 }
 
@@ -212,6 +218,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var worldModel *core.Node
 	var worldSky *core.Node
 	worldEntities := make(map[uint64]*worldEntity)
+
 	worldCreatureCache := worldCreatureTables{}
 	var worldFloor func(float32, float32, float32) (float32, bool)
 	var worldCharacter world.Character
@@ -419,6 +426,45 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		debugUIRenderMS = time.Since(uiStarted).Seconds() * 1000
 		uiImage.SetSize(float32(width), float32(height))
 		lastUIRefresh = time.Now()
+	}
+
+	host.logout = func() {
+		if !worldMode {
+			return
+		}
+		worldMode = false
+		worldCamera = nil
+		worldPackets = nil
+		worldLoading = false
+		if uiEngine != nil {
+			uiEngine.SetWorldLoading(false)
+			uiEngine.ClearLoadingScreen()
+			uiEngine.SetGlueState(uiEngine.Rt.Glue)
+		}
+		if worldModel != nil {
+			scene.Remove(worldModel)
+			worldModel.Dispose()
+			worldModel = nil
+		}
+		if worldSky != nil {
+			scene.Remove(worldSky)
+			worldSky.Dispose()
+			worldSky = nil
+		}
+		if worldPlayer != nil {
+			scene.Remove(worldPlayer)
+			worldPlayer.Dispose()
+			worldPlayer = nil
+		}
+		for guid, entity := range worldEntities {
+			if entity != nil && entity.node != nil {
+				scene.Remove(entity.node)
+				entity.node.Dispose()
+			}
+			delete(worldEntities, guid)
+		}
+		gl.ClearColor(.04, .06, .1, 1)
+		refresh()
 	}
 
 	onResize := func(string, interface{}) {

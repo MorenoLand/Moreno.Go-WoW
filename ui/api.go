@@ -512,6 +512,40 @@ func registerGlueAPI(rt *Runtime) {
 		}
 		return 0
 	})
+	// World ESC / GameMenuFrame C APIs. Logout and Quit start the original
+	// camping/quitting timers and fire PLAYER_CAMPING / PLAYER_QUITING so
+	// FrameXML (StaticPopup when loaded) can present cancel UI.
+	reg("Logout", func(L *lua.LState) int {
+		rt.beginLogout(false)
+		return 0
+	})
+	reg("Quit", func(L *lua.LState) int {
+		rt.beginLogout(true)
+		return 0
+	})
+	reg("CancelLogout", func(L *lua.LState) int {
+		rt.cancelLogout()
+		return 0
+	})
+	reg("ForceLogout", func(L *lua.LState) int {
+		rt.completeLogout()
+		return 0
+	})
+	reg("ForceQuit", func(L *lua.LState) int {
+		rt.logoutPending = false
+		rt.quitPending = false
+		rt.logoutRemaining = 0
+		if rt.Host != nil {
+			rt.Host.Quit(false)
+		}
+		return 0
+	})
+	reg("SetUIVisibility", func(L *lua.LState) int { return 0 })
+	reg("SpellStopCasting", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
+	reg("SpellStopTargeting", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
+	reg("ClearTarget", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
+	reg("UnitIsDead", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
+	reg("UnitIsCharmed", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
 	reg("Screenshot", func(L *lua.LState) int {
 		if rt.Host != nil {
 			rt.Host.Screenshot()

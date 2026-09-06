@@ -621,6 +621,34 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 				w.hitInsetT = attrFloat(inset, "top", 0)
 				w.hitInsetB = attrFloat(inset, "bottom", 0)
 			}
+		case "Attributes":
+			// XML Attributes seed frame fields (UIParent panel offsets). Apply
+			// without firing OnAttributeChanged so load-time setup does not
+			// recurse through UpdateUIPanelPositions before layout exists.
+			fields := w.ensureFields(l.rt.L)
+			for _, attrEl := range group.children {
+				if !strings.EqualFold(attrEl.name, "Attribute") {
+					continue
+				}
+				name := attrEl.attrDefault("name", "")
+				if name == "" {
+					continue
+				}
+				raw := attrEl.attrDefault("value", "")
+				typ := strings.ToLower(attrEl.attrDefault("type", "string"))
+				var value lua.LValue = lua.LString(raw)
+				switch typ {
+				case "number":
+					if f, err := strconv.ParseFloat(raw, 64); err == nil {
+						value = lua.LNumber(f)
+					}
+				case "boolean", "bool":
+					value = lua.LBool(parseBool(raw, false))
+				case "nil":
+					value = lua.LNil
+				}
+				fields.RawSetString(name, value)
+			}
 		default:
 			// Remaining child elements (insets, scroll children, model
 			// tuning) carry visual state the headless runtime does not
