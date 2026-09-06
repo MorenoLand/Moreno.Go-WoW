@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/g3n/engine/window"
@@ -26,6 +27,7 @@ type UIEngine struct {
 	Rt               *Runtime
 	FontObj          *opentype.Font
 	FontObjSm        *opentype.Font
+	FontObjArial     *opentype.Font
 	AssetLoader      *Loader
 	Cache            map[string]image.Image
 	BgImagePath      string // Path to a static background image (JPEG/PNG)
@@ -170,18 +172,29 @@ func newUIEngine(rt *Runtime, loader *Loader, bgImagePath string) (*UIEngine, er
 	if fontObjSm == nil {
 		fontObjSm = fontObj
 	}
+	// ChatFontNormal uses Fonts\\ARIALN.TTF in live Fonts.xml.
+	var fontObjArial *opentype.Font
+	if arialData, err2 := loader.readAsset("Fonts\\ARIALN.TTF"); err2 == nil {
+		if ao, err3 := opentype.Parse(arialData); err3 == nil {
+			fontObjArial = ao
+		}
+	}
+	if fontObjArial == nil {
+		fontObjArial = fontObj
+	}
 
 	cache := map[string]image.Image{}
 
 	eng := &UIEngine{
-		Rt:          rt,
-		FontObj:     fontObj,
-		FontObjSm:   fontObjSm,
-		AssetLoader: loader,
-		Cache:       cache,
-		textFaces:   make(map[string]font.Face),
-		BgImagePath: bgImagePath,
-		uiScale:     1,
+		Rt:           rt,
+		FontObj:      fontObj,
+		FontObjSm:    fontObjSm,
+		FontObjArial: fontObjArial,
+		AssetLoader:  loader,
+		Cache:        cache,
+		textFaces:    make(map[string]font.Face),
+		BgImagePath:  bgImagePath,
+		uiScale:      1,
 	}
 	rt.measureText = eng.measureFontString
 	return eng, nil
@@ -952,7 +965,7 @@ func (eng *UIEngine) editFace(w *widget) (font.Face, func()) {
 	if fontObj == nil {
 		return nil, func() {}
 	}
-	face, err := opentype.NewFace(fontObj, &opentype.FaceOptions{Size: size * eng.uiScale, DPI: 96})
+	face, err := opentype.NewFace(fontObj, &opentype.FaceOptions{Size: size * eng.uiScale, DPI: 72})
 	if err != nil {
 		return nil, func() {}
 	}
@@ -2207,8 +2220,14 @@ func (eng *UIEngine) faceFor(w *widget, fallback, fallbackLarge font.Face) font.
 		if style.FontFile != "" {
 			fontKey = style.FontFile
 		}
-		if strings.Contains(strings.ToLower(style.FontFile), "morpheus") {
+		lowerFile := strings.ToLower(style.FontFile)
+		switch {
+		case strings.Contains(lowerFile, "morpheus"):
 			fontObj = eng.FontObjSm
+		case strings.Contains(lowerFile, "arialn"):
+			if eng.FontObjArial != nil {
+				fontObj = eng.FontObjArial
+			}
 		}
 	} else if strings.Contains(strings.ToLower(w.fontObject), "large") || strings.Contains(strings.ToLower(w.fontObject), "huge") {
 		return fallbackLarge
@@ -2227,7 +2246,7 @@ func (eng *UIEngine) cachedFace(key string, fontObj *opentype.Font, size float64
 	if textFace, ok := eng.textFaces[cacheKey]; ok {
 		return textFace
 	}
-	textFace, err := opentype.NewFace(fontObj, &opentype.FaceOptions{Size: size, DPI: 96})
+	textFace, err := opentype.NewFace(fontObj, &opentype.FaceOptions{Size: size, DPI: 72})
 	if err != nil {
 		if len(fallback) > 0 {
 			return fallback[0]
@@ -2274,6 +2293,23 @@ func (h hostScreen) Quit(bool)                      {}
 func (h hostScreen) ConsoleExec(string)             {}
 func (h hostScreen) Screenshot()                    {}
 
+var uiBlendPool sync.Pool
+
+func acquireBlendScratch(bounds image.Rectangle) *image.RGBA {
+	if item := uiBlendPool.Get(); item != nil {
+		if scratch, ok := item.(*image.RGBA); ok && scratch != nil && scratch.Bounds().Eq(bounds) {
+			return scratch
+		}
+	}
+	return image.NewRGBA(bounds)
+}
+
+func releaseBlendScratch(scratch *image.RGBA) {
+	if scratch != nil {
+		uiBlendPool.Put(scratch)
+	}
+}
+
 func drawSub(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64) {
 	drawSubModeFilter(canvas, img, r, screenHeight, tc, false)
 }
@@ -2295,7 +2331,8 @@ func drawSubModeFilter(canvas *image.RGBA, img image.Image, r Rect, screenHeight
 		xdraw.BiLinear.Scale(canvas, dst, srcImg, srcImg.Bounds(), xdraw.Over, nil)
 		return
 	}
-	blend := image.NewRGBA(dst)
+	blend := acquireBlendScratch(dst)
+	defer releaseBlendScratch(blend)
 	xdraw.BiLinear.Scale(blend, blend.Bounds(), srcImg, srcImg.Bounds(), xdraw.Src, nil)
 	for y := dst.Min.Y; y < dst.Max.Y; y++ {
 		dstOff := canvas.PixOffset(dst.Min.X, y)

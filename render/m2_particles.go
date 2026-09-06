@@ -532,9 +532,8 @@ func (system *m2ParticleSystem) Update(elapsed float64) {
 		if group.rotationVBO != nil {
 			group.rotationVBO.SetBuffer(group.rotations)
 		}
-		if group.cornerVBO != nil {
-			group.cornerVBO.SetBuffer(group.corners)
-		}
+		// Corner attributes are static billboard offsets; re-uploading them
+		// every frame forced a useless GPU BufferData for every emitter.
 	}
 }
 
