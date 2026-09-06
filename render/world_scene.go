@@ -147,6 +147,8 @@ type worldM2MeshBuilder struct {
 	normals   math32.ArrayF32
 	uvs       math32.ArrayF32
 	uvs2      math32.ArrayF32
+	colors    math32.ArrayF32
+	alphas    math32.ArrayF32
 	indices   math32.ArrayU32
 }
 
@@ -1010,7 +1012,7 @@ func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.World
 			}
 			builder := builders[key]
 			if builder == nil {
-				builder = &worldM2MeshBuilder{part: part, positions: math32.NewArrayF32(0, len(part.positions)), normals: math32.NewArrayF32(0, len(part.normals)), uvs: math32.NewArrayF32(0, len(part.uvs)), uvs2: math32.NewArrayF32(0, len(part.uvs2)), indices: math32.NewArrayU32(0, len(part.indices))}
+				builder = &worldM2MeshBuilder{part: part, positions: math32.NewArrayF32(0, len(part.positions)), normals: math32.NewArrayF32(0, len(part.normals)), uvs: math32.NewArrayF32(0, len(part.uvs)), uvs2: math32.NewArrayF32(0, len(part.uvs2)), colors: math32.NewArrayF32(0, len(part.colors)), alphas: math32.NewArrayF32(0, len(part.alphas)), indices: math32.NewArrayU32(0, len(part.indices))}
 				builders[key] = builder
 			}
 			base := uint32(len(builder.positions) / 3)
@@ -1020,6 +1022,8 @@ func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.World
 				normal := rotateWorldM2Vector(rotation, [3]float32{part.normals[index], part.normals[index+1], part.normals[index+2]})
 				builder.normals.Append(normal[0], normal[1], normal[2])
 			}
+			builder.colors = append(builder.colors, part.colors...)
+			builder.alphas = append(builder.alphas, part.alphas...)
 			builder.uvs = append(builder.uvs, part.uvs...)
 			builder.uvs2 = append(builder.uvs2, part.uvs2...)
 			for _, index := range part.indices {
@@ -1055,6 +1059,8 @@ func buildWorldM2BatchedMesh(loader *ui.Loader, builder *worldM2MeshBuilder, tex
 	geom.AddVBO(gls.NewVBO(builder.positions).AddAttrib(gls.VertexPosition))
 	geom.AddVBO(gls.NewVBO(builder.normals).AddAttrib(gls.VertexNormal))
 	geom.AddVBO(gls.NewVBO(builder.uvs).AddAttrib(gls.VertexTexcoord))
+	geom.AddVBO(gls.NewVBO(builder.colors).AddAttrib(gls.VertexColor))
+	geom.AddVBO(gls.NewVBO(builder.alphas).AddCustomAttrib("VertexM2Alpha", 1))
 	if len(builder.part.uvSets) > 1 && len(builder.uvs2) > 0 {
 		geom.AddVBO(gls.NewVBO(builder.uvs2).AddCustomAttrib("VertexTexcoord2", 2))
 	}
@@ -1161,6 +1167,8 @@ func buildWorldM2Instance(loader *ui.Loader, parts map[string]*m2Part, textures 
 		geom.AddVBO(gls.NewVBO(part.positions).AddAttrib(gls.VertexPosition))
 		geom.AddVBO(gls.NewVBO(part.normals).AddAttrib(gls.VertexNormal))
 		geom.AddVBO(gls.NewVBO(part.uvs).AddAttrib(gls.VertexTexcoord))
+		geom.AddVBO(gls.NewVBO(part.colors).AddAttrib(gls.VertexColor))
+		geom.AddVBO(gls.NewVBO(part.alphas).AddCustomAttrib("VertexM2Alpha", 1))
 		if len(part.uvSets) > 1 {
 			geom.AddVBO(gls.NewVBO(part.uvs2).AddCustomAttrib("VertexTexcoord2", 2))
 		}

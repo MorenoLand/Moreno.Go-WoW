@@ -5,11 +5,16 @@ import "github.com/g3n/engine/renderer"
 const m2VertexShader = `#include <attributes>
 uniform mat4 MVP;
 in vec2 VertexTexcoord2;
+in float VertexM2Alpha;
 out vec2 FragTexcoord;
 out vec2 FragTexcoord2;
+out vec3 FragVertexColor;
+out float FragM2Alpha;
 void main() {
     FragTexcoord = VertexTexcoord;
     FragTexcoord2 = VertexTexcoord2;
+    FragVertexColor = VertexColor;
+    FragM2Alpha = VertexM2Alpha;
     gl_Position = MVP * vec4(VertexPosition, 1.0);
 }`
 
@@ -19,6 +24,8 @@ uniform sampler2D MatTexture[MAT_TEXTURES];
 #endif
 in vec2 FragTexcoord;
 in vec2 FragTexcoord2;
+in vec3 FragVertexColor;
+in float FragM2Alpha;
 out vec4 FragColor;
 void main() {
     vec4 result = vec4(1.0);
@@ -36,7 +43,7 @@ void main() {
     }
 #endif
 #endif
-    FragColor = result;
+    FragColor = vec4(result.rgb * FragVertexColor, result.a * FragM2Alpha);
 }`
 
 const m2ParticleVertexShader = `#include <attributes>
@@ -88,6 +95,8 @@ uniform sampler2D MatTexture[MAT_TEXTURES];
 #endif
 in vec2 FragTexcoord;
 in vec2 FragTexcoord2;
+in vec3 FragVertexColor;
+in float FragM2Alpha;
 out vec4 FragColor;
 void main() {
     vec4 result = vec4(1.0);
@@ -105,10 +114,10 @@ void main() {
     }
 #endif
 #endif
-    if (result.a < 0.5) {
+    if (result.a * FragM2Alpha < 0.5) {
         discard;
     }
-    FragColor = vec4(result.rgb, 1.0);
+    FragColor = vec4(result.rgb * FragVertexColor, 1.0);
 }`
 
 const worldTerrainVertexShader = `#include <attributes>

@@ -162,6 +162,10 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 			uv2VBO = gls.NewVBO(part.uvs2).AddCustomAttrib("VertexTexcoord2", 2)
 			geom.AddVBO(uv2VBO)
 		}
+		colorVBO := gls.NewVBO(part.colors).AddAttrib(gls.VertexColor)
+		alphaVBO := gls.NewVBO(part.alphas).AddCustomAttrib("VertexM2Alpha", 1)
+		geom.AddVBO(colorVBO)
+		geom.AddVBO(alphaVBO)
 		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
 		if part.material.blend == 1 {
 			mat.SetShader("morenowow_m2_alpha_key")
@@ -214,7 +218,7 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 		mesh := graphic.NewMesh(geom, mat)
 		mesh.SetRenderOrder(m2RenderOrder(part))
 		root.Add(mesh)
-		animatedMeshes = append(animatedMeshes, &m2AnimatedMesh{part: part, positionVBO: positionVBO, normalVBO: normalVBO, uvVBO: uvVBO, uv2VBO: uv2VBO, baseUVs: append(math32.ArrayF32(nil), part.uvs...), baseUVs2: append(math32.ArrayF32(nil), part.uvs2...), textureTransformIndices: append([]int(nil), part.textureTransformIndices...)})
+		animatedMeshes = append(animatedMeshes, &m2AnimatedMesh{part: part, positionVBO: positionVBO, normalVBO: normalVBO, uvVBO: uvVBO, uv2VBO: uv2VBO, colorVBO: colorVBO, alphaVBO: alphaVBO, baseUVs: append(math32.ArrayF32(nil), part.uvs...), baseUVs2: append(math32.ArrayF32(nil), part.uvs2...), textureTransformIndices: append([]int(nil), part.textureTransformIndices...)})
 	}
 	if len(root.Children()) == 0 {
 		return nil, fmt.Errorf("%s: model textures or geometry unavailable", modelPath)

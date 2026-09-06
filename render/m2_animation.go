@@ -13,6 +13,8 @@ type m2AnimatedMesh struct {
 	normalVBO               *gls.VBO
 	uvVBO                   *gls.VBO
 	uv2VBO                  *gls.VBO
+	colorVBO                *gls.VBO
+	alphaVBO                *gls.VBO
 	baseUVs                 math32.ArrayF32
 	baseUVs2                math32.ArrayF32
 	textureTransformIndices []int
@@ -36,7 +38,7 @@ type m2Animation struct {
 }
 
 func buildM2Animation(model *parsedM2, skin parsedSkin, meshes []*m2AnimatedMesh, modelPath string) *m2Animation {
-	if model == nil || len(model.sequences) == 0 || len(meshes) == 0 || (!modelHasAnimation(model) && !modelHasTextureAnimation(model)) {
+	if model == nil || len(model.sequences) == 0 || len(meshes) == 0 || (!modelHasAnimation(model) && !modelHasTextureAnimation(model) && !modelHasColorAnimation(model)) {
 		return nil
 	}
 	sequence := defaultM2Sequence(model)
@@ -153,6 +155,23 @@ func modelHasTextureAnimation(model *parsedM2) bool {
 	return false
 }
 
+func modelHasColorAnimation(model *parsedM2) bool {
+	if model == nil {
+		return false
+	}
+	for _, color := range model.colors {
+		if trackVec3HasKeys(color.colorTrack) || trackScalarHasKeys(color.alphaTrack) {
+			return true
+		}
+	}
+	for _, weight := range model.textureWeights {
+		if trackScalarHasKeys(weight.weightTrack) {
+			return true
+		}
+	}
+	return false
+}
+
 func trackVec3HasKeys(track m2TrackVec3) bool {
 	for _, sequence := range track.sequences {
 		if len(sequence.values) > 1 {
@@ -163,6 +182,15 @@ func trackVec3HasKeys(track m2TrackVec3) bool {
 }
 
 func trackQuatHasKeys(track m2TrackQuat) bool {
+	for _, sequence := range track.sequences {
+		if len(sequence.values) > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func trackScalarHasKeys(track m2TrackScalar) bool {
 	for _, sequence := range track.sequences {
 		if len(sequence.values) > 1 {
 			return true
@@ -219,6 +247,7 @@ func (animation *m2Animation) Update(elapsed float64) []uint32 {
 		animation.model.bones[index].rotation = bone.rotation
 		animation.model.bones[index].scale = bone.scale
 	}
+	updateM2AnimatedValues(animation.model, animation.sequence, uint32(animation.clock), uint32(animation.globalClock))
 	for _, animatedMesh := range animation.meshes {
 		if animatedMesh == nil || animatedMesh.part == nil || len(animatedMesh.part.vertexRefs) != len(animatedMesh.part.positions)/3 {
 			continue
@@ -235,6 +264,27 @@ func (animation *m2Animation) Update(elapsed float64) []uint32 {
 		}
 		if animatedMesh.normalVBO != nil {
 			animatedMesh.normalVBO.SetBuffer(animatedMesh.part.normals)
+		}
+	}
+	for _, animatedMesh := range animation.meshes {
+		if animatedMesh == nil || animatedMesh.part == nil {
+			continue
+		}
+		part := animatedMesh.part
+		part.color, part.alpha = m2PartTintAt(animation.model, part.colorIndex, part.textureWeightIndex, animation.sequence, uint32(animation.clock), uint32(animation.globalClock))
+		for index := 0; index+2 < len(part.colors); index += 3 {
+			part.colors[index] = part.color[0]
+			part.colors[index+1] = part.color[1]
+			part.colors[index+2] = part.color[2]
+		}
+		for index := range part.alphas {
+			part.alphas[index] = part.alpha
+		}
+		if animatedMesh.colorVBO != nil {
+			animatedMesh.colorVBO.SetBuffer(part.colors)
+		}
+		if animatedMesh.alphaVBO != nil {
+			animatedMesh.alphaVBO.SetBuffer(part.alphas)
 		}
 	}
 	animation.updateTextureCoordinatesAt(uint32(animation.clock), uint32(animation.globalClock))

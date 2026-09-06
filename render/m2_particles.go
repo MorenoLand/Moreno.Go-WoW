@@ -19,6 +19,7 @@ type m2ParticleEmitter struct {
 	position        [3]float32
 	bone            uint16
 	texture         uint16
+	colorIndex      uint16
 	blend           uint8
 	emitterType     uint8
 	rows            uint16
@@ -114,6 +115,7 @@ func parseM2ParticleEmitter(data []byte, base int) m2ParticleEmitter {
 		position:        [3]float32{readF32(data, base+0x08), readF32(data, base+0x0c), readF32(data, base+0x10)},
 		bone:            binaryU16(data, base+0x14),
 		texture:         binaryU16(data, base+0x16),
+		colorIndex:      binaryU16(data, base+0x2a),
 		blend:           data[base+0x28],
 		emitterType:     data[base+0x29],
 		textureRotation: int16(binaryU16(data, base+0x2e)),
@@ -343,6 +345,11 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 			group.particles[particleIndex] = spawnM2Particle(group, seed, emitter.life*float32(particleIndex)/float32(count))
 			position := particlePosition(group.particles[particleIndex])
 			color, size, alpha, cell := particleAppearance(group.emitter, group.particles[particleIndex])
+			modelColor, modelAlpha := m2ParticleColor(model, emitter.colorIndex)
+			color[0] *= modelColor[0]
+			color[1] *= modelColor[1]
+			color[2] *= modelColor[2]
+			alpha *= modelAlpha
 			for _, corner := range particleCorners {
 				group.positions.Append(position[0], position[1], position[2])
 				group.colors.Append(color[0], color[1], color[2])
@@ -507,6 +514,11 @@ func (system *m2ParticleSystem) Update(elapsed float64) {
 			}
 			position := particlePosition(*particle)
 			color, size, alpha, cell := particleAppearance(group.emitter, *particle)
+			modelColor, modelAlpha := m2ParticleColor(group.model, group.emitter.colorIndex)
+			color[0] *= modelColor[0]
+			color[1] *= modelColor[1]
+			color[2] *= modelColor[2]
+			alpha *= modelAlpha
 			for vertex := 0; vertex < 4; vertex++ {
 				positionIndex := (index*4 + vertex) * 3
 				group.positions.Set(positionIndex, position[0], position[1], position[2])
@@ -535,6 +547,20 @@ func (system *m2ParticleSystem) Update(elapsed float64) {
 		// Corner attributes are static billboard offsets; re-uploading them
 		// every frame forced a useless GPU BufferData for every emitter.
 	}
+}
+
+func m2ParticleColor(model *parsedM2, index uint16) ([3]float32, float32) {
+	color := [3]float32{1, 1, 1}
+	alpha := float32(1)
+	if model == nil || index == 0xffff || int(index) >= len(model.colors) {
+		return color, alpha
+	}
+	entry := model.colors[index]
+	color = entry.current
+	if entry.currentAlpha > 0.001 {
+		alpha = entry.currentAlpha
+	}
+	return color, alpha
 }
 
 var particleCorners = [][2]float32{{-1, -1}, {1, -1}, {1, 1}, {-1, 1}}

@@ -1124,10 +1124,9 @@ func configureWorldCamera(cam *camera.Camera, position world.WorldPosition) {
 	cam.LookAt(target, math32.NewVector3(0, 0, 1))
 }
 
-func setSceneCameraFOV(cam *camera.Camera, diagonal float32) {
-	if diagonal <= 0 {
+func setSceneCameraFOV(cam *camera.Camera, fov float32) {
+	if cam == nil || fov <= 0 || cam.Aspect() <= 0 {
 		return
 	}
-	vertical := 2 * math32.Atan(math32.Tan(diagonal/2)/math32.Sqrt(cam.Aspect()*cam.Aspect()+1))
-	cam.SetFov(math32.RadToDeg(vertical))
+	cam.SetFov(math32.RadToDeg(fov / math32.Sqrt(cam.Aspect()*cam.Aspect()+1)))
 }
