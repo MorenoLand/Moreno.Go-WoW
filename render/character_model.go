@@ -313,10 +313,10 @@ func resolveCharacterEquipment(loader *ui.Loader, character world.Character, sec
 	add(501)
 	add(702)
 	add(801)
-	add(902)
+	// Native FUN_004DFDA0 defaults group 9 to 901 (bare). Stock models omit 901;
+	// resolveCharacterGeoset then keeps the group off. 902/903 are equipment kneepads.
+	add(901)
 	add(1301)
-	add(2001)
-	add(2002)
 	facial100, facial200, facial300 := resolveCharacterFacialHair(loader, character)
 	if facial100 != 0 {
 		add(uint16(100 + facial100))

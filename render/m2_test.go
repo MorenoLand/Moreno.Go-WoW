@@ -787,3 +787,71 @@ func entryName(entries map[string]soundEntry, id uint32) string {
 	}
 	return ""
 }
+
+func TestLiveUnequippedCharactersOmitKneepadGeosets(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	rt := ui.NewRuntime(nil)
+	defer rt.Close()
+	loader, err := ui.NewMPQLoader(dataPath, "enUS", rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loader.Close()
+
+	cases := []struct {
+		name   string
+		path   string
+		race   uint8
+		gender uint8
+	}{
+		{"HumanMale", `Character\Human\Male\HumanMale.m2`, 1, 0},
+		{"HumanFemale", `Character\Human\Female\HumanFemale.m2`, 1, 1},
+		{"NightElfMale", `Character\NightElf\Male\NightElfMale.m2`, 4, 0},
+		{"NightElfFemale", `Character\NightElf\Female\NightElfFemale.m2`, 4, 1},
+		{"DraeneiMale", `Character\Draenei\Male\DraeneiMale.m2`, 11, 0},
+		{"DraeneiFemale", `Character\Draenei\Female\DraeneiFemale.m2`, 11, 1},
+		{"TaurenMale", `Character\Tauren\Male\TaurenMale.m2`, 6, 0},
+		{"TaurenFemale", `Character\Tauren\Female\TaurenFemale.m2`, 6, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			skinPath := strings.TrimSuffix(tc.path, ".m2") + "00.skin"
+			skinData, err := loader.ReadFile(skinPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			skin, err := parseSkin(skinData)
+			if err != nil {
+				t.Fatal(err)
+			}
+			available := map[uint16]bool{}
+			for _, submesh := range skin.submeshes {
+				available[submesh.submeshID] = true
+			}
+			if available[901] {
+				t.Fatalf("%s unexpectedly ships bare kneepad geoset 901", tc.name)
+			}
+			active, err := resolveCharacterEquipment(loader, world.Character{Race: tc.race, Gender: tc.gender}, &characterSectionTextures{}, skin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for id := range active {
+				if id/100 == 9 {
+					t.Fatalf("%s unequipped active group-9 geoset %d (want none; native bare default is 901): %v", tc.name, id, active)
+				}
+			}
+			if !active[501] && available[501] {
+				t.Fatalf("%s missing bare feet geoset 501: %v", tc.name, active)
+			}
+			if !active[1301] && available[1301] {
+				t.Fatalf("%s missing bare legs geoset 1301: %v", tc.name, active)
+			}
+			if active[2001] || active[2002] {
+				t.Fatalf("%s unexpectedly enabled group-20 geosets: %v", tc.name, active)
+			}
+		})
+	}
+}
