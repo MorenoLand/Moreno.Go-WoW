@@ -16,6 +16,7 @@ func TestLiveWorldMainMenuBarLoads(t *testing.T) {
 	}
 	defer engine.Close()
 	engine.Rt.SetUnit("player", UnitInfo{Exists: true, Name: "Tester", Level: 21, RaceID: 4, RaceFile: "NightElf", ClassID: 2, ClassFile: "PALADIN", Health: 1, HealthMax: 1, Power: 1, PowerMax: 1, PowerToken: "MANA", Sex: 2, Connected: true, Player: true, Visible: true})
+	engine.Rt.SetUnit("pet", UnitInfo{Exists: true, Name: "Companion", Level: 20, Health: 1, HealthMax: 1, Power: 1, PowerMax: 1, PowerToken: "MANA", Connected: true, Visible: true})
 	if err := engine.LoadWorldUI(); err != nil {
 		t.Fatal(err)
 	}
@@ -26,8 +27,10 @@ func TestLiveWorldMainMenuBarLoads(t *testing.T) {
 			t.Fatalf("%s missing or hidden: %#v", name, frame)
 		}
 	}
-	if engine.Rt.widgets["TargetFrame"] == nil {
-		t.Fatal("TargetFrame missing")
+	for _, name := range []string{"TargetFrame", "PetFrame", "PetFrameHealthBar", "PetFrameManaBar"} {
+		if engine.Rt.widgets[name] == nil {
+			t.Fatalf("%s missing", name)
+		}
 	}
 	bar := engine.Rt.widgets["MainMenuExpBar"]
 	if bar.kind != kindStatusBar || bar.statusBarTexture == nil || bar.statusBarTexture.textureFile == "" {

@@ -212,6 +212,8 @@ func registerGlueAPI(rt *Runtime) {
 	started := time.Now()
 	reg("GetTime", func(L *lua.LState) int { L.Push(lua.LNumber(time.Since(started).Seconds())); return 1 })
 	L.SetGlobal("PI", lua.LNumber(math.Pi))
+	L.SetGlobal("MAX_PARTY_DEBUFFS", lua.LNumber(4))
+	L.SetGlobal("MAX_TARGET_DEBUFFS", lua.LNumber(16))
 	reg("CalendarGetDate", func(L *lua.LState) int {
 		now := time.Now()
 		L.Push(lua.LNumber(int(now.Weekday()) + 1))
@@ -279,6 +281,8 @@ func registerGlueAPI(rt *Runtime) {
 	reg("IsPetAttackAction", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("GetPetActionSlotUsable", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("GetPetActionCooldown", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 3 })
+	reg("GetPetHappiness", func(L *lua.LState) int { return 2 })
+	reg("HasPetUI", func(L *lua.LState) int { L.Push(lua.LFalse); L.Push(lua.LFalse); return 2 })
 	reg("CastPetAction", func(L *lua.LState) int { return 0 })
 	reg("GetCurrentMapAreaID", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
 	reg("GetTrackingTexture", func(L *lua.LState) int { L.Push(lua.LNil); return 1 })

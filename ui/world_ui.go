@@ -57,6 +57,8 @@ var worldUIFiles = []string{
 	`Interface\FrameXML\PlayerFrame.xml`,
 	`Interface\FrameXML\CastingBarFrame.xml`,
 	`Interface\FrameXML\TargetFrame.xml`,
+	`Interface\FrameXML\PartyFrameTemplates.xml`,
+	`Interface\FrameXML\PetFrame.xml`,
 }
 
 func (eng *UIEngine) LoadWorldUI() error {
