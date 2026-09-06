@@ -164,6 +164,32 @@ if not VoiceChat_Toggle then
     end
 end
 for _, name in ipairs({
+    "MainMenuMicroButton_SetPushed",
+    "MainMenuMicroButton_SetNormal",
+    "PVPMicroButton_SetPushed",
+    "PVPMicroButton_SetNormal",
+    "UpdateSpells",
+    "ShowTextStatusBarText",
+    "HideTextStatusBarText",
+    "ShowWatchedReputationBarText",
+    "HideWatchedReputationBarText",
+    "SetButtonPulse",
+}) do
+    if type(_G[name]) ~= "function" then
+        _G[name] = function()
+        end
+    end
+end
+if not WatchFrame then
+    WatchFrame = {showObjectives = true}
+elseif WatchFrame.showObjectives == nil then
+    WatchFrame.showObjectives = true
+end
+if not PlayerFrameAlternateManaBar then
+    PlayerFrameAlternateManaBar = CreateFrame("StatusBar", "PlayerFrameAlternateManaBar", UIParent)
+    PlayerFrameAlternateManaBar:Hide()
+end
+for _, name in ipairs({
     "GameTooltip",
     "Minimap",
     "MinimapCluster",

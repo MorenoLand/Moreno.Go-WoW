@@ -306,6 +306,15 @@ func registerUnitAPI(rt *Runtime) {
 		}
 		return 2
 	})
+	reg("UnitPVPName", func(L *lua.LState) int {
+		info := rt.unitInfo(L.OptString(1, ""))
+		if info == nil || !info.Exists {
+			L.Push(lua.LNil)
+			return 1
+		}
+		L.Push(lua.LString(info.Name))
+		return 1
+	})
 	reg("GetUnitName", func(L *lua.LState) int {
 		info := rt.unitInfo(L.OptString(1, ""))
 		if info == nil || !info.Exists {

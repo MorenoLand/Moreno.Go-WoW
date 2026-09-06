@@ -294,6 +294,7 @@ func registerGlueAPI(rt *Runtime) {
 	reg("SelectQuestLogEntry", func(L *lua.LState) int { return 0 })
 	reg("GetNumQuestLogEntries", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 2 })
 	reg("GetQuestLogSelection", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("GetDailyQuestsCompleted", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
 	reg("SetAbandonQuest", func(L *lua.LState) int { return 0 })
 	reg("GetMaxDailyQuests", func(L *lua.LState) int { L.Push(lua.LNumber(25)); return 1 })
 	reg("GetInventorySlotInfo", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LString("")); L.Push(lua.LFalse); return 3 })

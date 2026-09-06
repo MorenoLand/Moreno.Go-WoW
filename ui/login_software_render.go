@@ -1608,6 +1608,9 @@ func (eng *UIEngine) handleKey(key window.Key, extendSelection bool) bool {
 	if eng.worldUIReady && key == window.KeyEnter && eng.Rt.focused == nil {
 		return eng.activateWorldChat()
 	}
+	if eng.worldUIReady && eng.worldActive && eng.Rt.focused == nil && eng.handleWorldHotkey(key) {
+		return true
+	}
 	w := eng.Rt.focused
 	if key == window.KeyEscape {
 		// Focused edit boxes clear first (chat/login). With no focus, world ESC
@@ -1690,6 +1693,34 @@ func (eng *UIEngine) handleKey(key window.Key, extendSelection bool) bool {
 	}
 	eng.Rt.fire(target, "OnKeyDown", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString(name)})
 	return true
+}
+
+func (eng *UIEngine) handleWorldHotkey(key window.Key) bool {
+	var frame string
+	switch key {
+	case window.KeyL:
+		frame = "QuestLogFrame"
+	case window.KeyC:
+		frame = "CharacterFrame"
+	case window.KeyP:
+		frame = "SpellBookFrame"
+	default:
+		return false
+	}
+	if eng.Rt.widgets[frame] == nil {
+		return false
+	}
+	script := fmt.Sprintf(`
+local target = %s
+local wasShown = target:IsShown()
+if GameMenuFrame then GameMenuFrame:Hide() end
+for _, name in ipairs({"QuestLogFrame", "CharacterFrame", "SpellBookFrame"}) do
+    local other = _G[name]
+    if other and other ~= target then other:Hide() end
+end
+if wasShown then target:Hide() else target:Show() end
+`, frame)
+	return eng.Rt.Execute(script, "@world-hotkey-"+frame+".lua")
 }
 
 func (eng *UIEngine) HandleKeyWithMods(key window.Key, mods window.ModifierKey) bool {
