@@ -61,7 +61,7 @@ void main() {
     ParticleColor = VertexColor;
     ParticleAlpha = VertexParticleAlpha;
     ParticleCell = VertexParticleParams.zw;
-    ParticleCorner = turned;
+    ParticleCorner = VertexParticleCorner;
 }`
 
 const m2ParticleFragmentShader = `precision highp float;

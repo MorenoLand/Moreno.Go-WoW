@@ -311,17 +311,19 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 		key := particleTextureKey{path: path, rows: emitter.rows, cols: emitter.cols}
 		tex := particleTextures[key]
 		if tex == nil {
-			if len(particleTextures) == 0 {
-				tex = textures[path]
-			}
-			if tex == nil {
-				tex = loadModelTexture(loader, path)
-			}
+			// Always load a particle-owned texture so SetRepeat/wrap cannot
+			// mutate mesh materials that share the same BLP path.
+			tex = loadModelTexture(loader, path)
 			if tex == nil {
 				continue
 			}
-			tex.SetWrapS(gls.REPEAT)
-			tex.SetWrapT(gls.REPEAT)
+			if emitter.rows > 1 || emitter.cols > 1 {
+				tex.SetWrapS(gls.REPEAT)
+				tex.SetWrapT(gls.REPEAT)
+			} else {
+				tex.SetWrapS(gls.CLAMP_TO_EDGE)
+				tex.SetWrapT(gls.CLAMP_TO_EDGE)
+			}
 			tex.SetRepeat(1/float32(emitter.cols), 1/float32(emitter.rows))
 			tex.SetOffset(0, 0)
 			particleTextures[key] = tex
@@ -344,7 +346,7 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 			for _, corner := range particleCorners {
 				group.positions.Append(position[0], position[1], position[2])
 				group.colors.Append(color[0], color[1], color[2])
-				group.params.Append(size[0]*rootScale*0.5, size[1]*rootScale*0.5, cell[0], cell[1])
+				group.params.Append(size[0]*0.5, size[1]*0.5, cell[0], cell[1])
 				group.alphas.Append(alpha)
 				group.rotations.Append(group.particles[particleIndex].rotation)
 				group.corners.Append(corner[0], corner[1])
@@ -399,6 +401,11 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 }
 
 func m2ParticleBlending(raw uint8) material.Blending {
+	// WotLK particle blendingType maps through s_gxBlend to EGxBlend:
+	// 0 Opaque, 1 AlphaKey, 2 Alpha, 3 NoAlphaAdd, 4 Add, 5 Mod, 6 Mod2x.
+	// g3n BlendAdditive is SRC_ALPHA,ONE (GxBlend_Add). NoAlphaAdd (ONE,ONE)
+	// is approximated the same way; soft RGB falloff still modulates intensity
+	// when texture alpha is opaque.
 	switch raw {
 	case 0, 1:
 		return material.BlendNone
@@ -505,7 +512,7 @@ func (system *m2ParticleSystem) Update(elapsed float64) {
 				group.positions.Set(positionIndex, position[0], position[1], position[2])
 				group.colors.Set(positionIndex, color[0], color[1], color[2])
 				paramsIndex := (index*4 + vertex) * 4
-				group.params.Set(paramsIndex, size[0]*group.rootScale*0.5, size[1]*group.rootScale*0.5, cell[0], cell[1])
+				group.params.Set(paramsIndex, size[0]*0.5, size[1]*0.5, cell[0], cell[1])
 				group.alphas.Set(index*4+vertex, alpha)
 				group.rotations.Set(index*4+vertex, particle.rotation)
 			}
