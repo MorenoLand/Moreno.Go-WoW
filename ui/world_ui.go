@@ -43,6 +43,10 @@ var worldUIFiles = []string{
 	`Interface\FrameXML\TextStatusBar.lua`,
 	`Interface\FrameXML\TextStatusBar.xml`,
 	`Interface\FrameXML\MainMenuBar.xml`,
+	`Interface\FrameXML\SecureTemplates.xml`,
+	`Interface\FrameXML\Cooldown.xml`,
+	`Interface\FrameXML\ActionButtonTemplate.xml`,
+	`Interface\FrameXML\ActionBarFrame.xml`,
 }
 
 func (eng *UIEngine) LoadWorldUI() error {

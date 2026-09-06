@@ -104,6 +104,7 @@ type widget struct {
 	name            string
 	id              int
 	parent          *widget
+	owner           *widget
 	children        []*widget
 	shown           bool
 	topLevel        bool
@@ -1545,10 +1546,19 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		"SetOwner": func(L *lua.LState, w *widget) int {
 			if ud, ok := L.Get(2).(*lua.LUserData); ok {
 				if owner, ok := ud.Value.(*widget); ok {
+					w.owner = owner
 					w.parent = owner
 				}
 			}
 			return 0
+		},
+		"GetOwner": func(L *lua.LState, w *widget) int {
+			if w.owner != nil {
+				L.Push(w.owner.luaValue(L))
+			} else {
+				L.Push(lua.LNil)
+			}
+			return 1
 		},
 		"IsOwned": func(L *lua.LState, w *widget) int {
 			owner, ok := L.Get(2).(*lua.LUserData)
