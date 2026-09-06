@@ -143,6 +143,17 @@ for _, name in ipairs({
     "InterfaceOptionsFrame",
     "MultiCastFlyoutFrame",
     "OpacityFrame",
+    "CharacterFrame",
+    "SpellBookFrame",
+    "QuestLogFrame",
+    "PVPParentFrame",
+    "FriendsFrame",
+    "LFDParentFrame",
+    "PlayerTalentFrame",
+    "AchievementFrame",
+    "KeyRingButton",
+    "ChannelFrameAutoJoin",
+    "VoiceChatTalkers",
 }) do
     if not _G[name] then
         local frame = CreateFrame("Frame", name, UIParent);

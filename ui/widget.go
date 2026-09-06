@@ -16,6 +16,7 @@ const (
 	kindCheckButton
 	kindEditBox
 	kindSlider
+	kindStatusBar
 	kindScrollFrame
 	kindScrollingMessageFrame
 	kindSimpleHTML
@@ -46,6 +47,8 @@ func (k widgetKind) objectType() string {
 		return "EditBox"
 	case kindSlider:
 		return "Slider"
+	case kindStatusBar:
+		return "StatusBar"
 	case kindScrollFrame:
 		return "ScrollFrame"
 	case kindScrollingMessageFrame:
@@ -166,6 +169,10 @@ type widget struct {
 	thumbTexture       *widget
 	verticalRange      float64
 	horizontalRange    float64
+
+	// StatusBar state.
+	statusBarTexture *widget
+	statusBarColor   rgba
 
 	// ScrollFrame state.
 	verticalScroll   float64
@@ -823,7 +830,11 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 1
 		},
 		"SetText": func(L *lua.LState, w *widget) int {
-			rt.setText(w, L.CheckString(2))
+			text := ""
+			if L.Get(2).Type() != lua.LTNil {
+				text = L.Get(2).String()
+			}
+			rt.setText(w, text)
 			return 0
 		},
 		"SetFormattedText": func(L *lua.LState, w *widget) int {
@@ -952,6 +963,36 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		},
 		"SetValueStep": func(L *lua.LState, w *widget) int {
 			w.valueStep = float64(L.CheckNumber(2))
+			return 0
+		},
+		"SetStatusBarColor": func(L *lua.LState, w *widget) int {
+			w.statusBarColor = rgba{float64(L.CheckNumber(2)), float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), 1}
+			if L.GetTop() >= 5 {
+				w.statusBarColor.a = float64(L.CheckNumber(5))
+			}
+			return 0
+		},
+		"GetStatusBarColor": func(L *lua.LState, w *widget) int {
+			L.Push(lua.LNumber(w.statusBarColor.r))
+			L.Push(lua.LNumber(w.statusBarColor.g))
+			L.Push(lua.LNumber(w.statusBarColor.b))
+			L.Push(lua.LNumber(w.statusBarColor.a))
+			return 4
+		},
+		"SetStatusBarTexture": func(L *lua.LState, w *widget) int {
+			w.statusBarTexture = rt.buttonTextureArg(w, w.statusBarTexture, L, 2)
+			return 0
+		},
+		"GetStatusBarTexture": func(L *lua.LState, w *widget) int {
+			if w.statusBarTexture != nil {
+				L.Push(w.statusBarTexture.luaValue(L))
+			} else {
+				L.Push(lua.LNil)
+			}
+			return 1
+		},
+		"SetDrawLayer": func(L *lua.LState, w *widget) int {
+			w.layerLevel = layerOrder(L.CheckString(2))
 			return 0
 		},
 		"SetOrientation": func(L *lua.LState, w *widget) int {
@@ -1254,6 +1295,18 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		"SetPushedTexture": func(L *lua.LState, w *widget) int {
 			w.pushedTexture = rt.buttonTextureArg(w, w.pushedTexture, L, 2)
 			return 0
+		},
+		"SetDisabledTexture": func(L *lua.LState, w *widget) int {
+			w.disabledTexture = rt.buttonTextureArg(w, w.disabledTexture, L, 2)
+			return 0
+		},
+		"GetDisabledTexture": func(L *lua.LState, w *widget) int {
+			if w.disabledTexture != nil {
+				L.Push(w.disabledTexture.luaValue(L))
+			} else {
+				L.Push(lua.LNil)
+			}
+			return 1
 		},
 		"SetHighlightTexture": func(L *lua.LState, w *widget) int {
 			w.highlightTexture = rt.buttonTextureArg(w, w.highlightTexture, L, 2)

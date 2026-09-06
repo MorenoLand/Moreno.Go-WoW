@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"math"
 	"runtime"
 	"strconv"
 	"strings"
@@ -210,6 +211,88 @@ func registerGlueAPI(rt *Runtime) {
 	reg("GetLocale", func(L *lua.LState) int { L.Push(lua.LString("enUS")); return 1 })
 	started := time.Now()
 	reg("GetTime", func(L *lua.LState) int { L.Push(lua.LNumber(time.Since(started).Seconds())); return 1 })
+	L.SetGlobal("PI", lua.LNumber(math.Pi))
+	reg("CalendarGetDate", func(L *lua.LState) int {
+		now := time.Now()
+		L.Push(lua.LNumber(int(now.Weekday()) + 1))
+		L.Push(lua.LNumber(int(now.Month())))
+		L.Push(lua.LNumber(now.Day()))
+		L.Push(lua.LNumber(now.Year()))
+		return 4
+	})
+	reg("GetGameTime", func(L *lua.LState) int {
+		now := time.Now()
+		L.Push(lua.LNumber(now.Hour()))
+		L.Push(lua.LNumber(now.Minute()))
+		return 2
+	})
+	reg("GetActionBarPage", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
+	reg("GetBonusBarOffset", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("HasAction", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("GetActionTexture", func(L *lua.LState) int { L.Push(lua.LNil); return 1 })
+	reg("GetActionText", func(L *lua.LState) int { L.Push(lua.LString("")); return 1 })
+	reg("GetActionCount", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("GetActionCooldown", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 3 })
+	reg("IsEquippedAction", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("IsConsumableAction", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("IsStackableAction", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("IsCurrentAction", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("IsAutoRepeatAction", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("IsAttackAction", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("IsUsableAction", func(L *lua.LState) int { L.Push(lua.LFalse); L.Push(lua.LFalse); return 2 })
+	reg("GetSubZoneText", func(L *lua.LState) int { L.Push(lua.LString("")); return 1 })
+	reg("GetZoneText", func(L *lua.LState) int {
+		if idx := rt.Glue.SelectedCharacter; idx >= 1 && idx <= len(rt.Glue.Characters) {
+			L.Push(lua.LString(rt.Glue.Characters[idx-1].Zone))
+		} else {
+			L.Push(lua.LString(""))
+		}
+		return 1
+	})
+	reg("GetLatestThreeSenders", func(L *lua.LState) int { return 0 })
+	reg("GetVoiceSessionInfo", func(L *lua.LState) int { return 0 })
+	reg("GetVoiceCurrentSessionID", func(L *lua.LState) int { L.Push(lua.LNil); return 1 })
+	reg("SetActiveVoiceChannelBySessionID", func(L *lua.LState) int { return 0 })
+	reg("BNGetMaxPlayersInConversation", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("IsModifiedClick", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("SetDesaturation", func(L *lua.LState) int { return 0 })
+	reg("GetNumShapeshiftForms", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("GetMultiCastBarOffset", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("HasMultiCastActionBar", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("IsRaidOfficer", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("UnitInBattleground", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("HasLFGRestrictions", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("UnitCanCooperate", func(L *lua.LState) int { L.Push(lua.LTrue); return 1 })
+	reg("UnitIsPossessed", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("PetHasActionBar", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("GetPetActionInfo", func(L *lua.LState) int { return 7 })
+	reg("IsPetAttackAction", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("GetPetActionSlotUsable", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("GetPetActionCooldown", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 3 })
+	reg("CastPetAction", func(L *lua.LState) int { return 0 })
+	reg("GetCurrentMapAreaID", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("GetMinimapZoneText", func(L *lua.LState) int {
+		if idx := rt.Glue.SelectedCharacter; idx >= 1 && idx <= len(rt.Glue.Characters) {
+			L.Push(lua.LString(rt.Glue.Characters[idx-1].Zone))
+		} else {
+			L.Push(lua.LString(""))
+		}
+		return 1
+	})
+	reg("GetZonePVPInfo", func(L *lua.LState) int {
+		L.Push(lua.LNil)
+		L.Push(lua.LFalse)
+		L.Push(lua.LNil)
+		return 3
+	})
+	reg("IsInInstance", func(L *lua.LState) int { L.Push(lua.LFalse); L.Push(lua.LNil); return 2 })
+	reg("GetNumWorldStateUI", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("HasCompletedAnyAchievement", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("CanShowAchievementUI", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("IsBagOpen", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("IsVoiceChatEnabled", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("IsVoiceChatAllowedByServer", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("GetNumVoiceSessions", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
 	reg("GetDefaultLanguage", func(L *lua.LState) int { L.Push(lua.LString("Common")); return 1 })
 	reg("GetChatTypeIndex", func(L *lua.LState) int {
 		indices := map[string]int{"SYSTEM": 0, "SAY": 1, "PARTY": 2, "RAID": 3, "GUILD": 4, "OFFICER": 5, "YELL": 6, "WHISPER": 7, "WHISPER_INFORM": 9, "EMOTE": 10, "TEXT_EMOTE": 11, "MONSTER_SAY": 12, "MONSTER_PARTY": 13, "MONSTER_YELL": 14, "MONSTER_WHISPER": 15, "MONSTER_EMOTE": 16, "CHANNEL": 17, "AFK": 23, "DND": 24, "SKILL": 26, "LOOT": 27, "MONEY": 28, "OPENING": 29, "TRADESKILLS": 30, "PET_INFO": 31, "COMBAT_MISC_INFO": 32, "COMBAT_XP_GAIN": 33, "COMBAT_HONOR_GAIN": 34, "COMBAT_FACTION_CHANGE": 35, "BG_SYSTEM_NEUTRAL": 36, "BG_SYSTEM_ALLIANCE": 37, "BG_SYSTEM_HORDE": 38, "RAID_LEADER": 39, "RAID_WARNING": 40, "RAID_BOSS_EMOTE": 41, "RAID_BOSS_WHISPER": 42, "FILTERED": 43, "BATTLEGROUND": 44, "BATTLEGROUND_LEADER": 45, "RESTRICTED": 46, "ACHIEVEMENT": 48, "GUILD_ACHIEVEMENT": 49, "PARTY_LEADER": 51}
@@ -413,6 +496,8 @@ func registerGlueAPI(rt *Runtime) {
 	reg("GetClientExpansionLevel", func(L *lua.LState) int { L.Push(lua.LNumber(3)); return 1 })
 	reg("GetAccountExpansionLevel", func(L *lua.LState) int { L.Push(lua.LNumber(2)); return 1 })
 	reg("IsShiftKeyDown", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
+	reg("IsControlKeyDown", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
+	reg("IsAltKeyDown", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
 
 	// Screen state transitions.
 	reg("SetCurrentScreen", func(L *lua.LState) int {
@@ -1179,6 +1264,8 @@ func kindFromObjectType(objectType string) widgetKind {
 		return kindEditBox
 	case "SLIDER":
 		return kindSlider
+	case "STATUSBAR":
+		return kindStatusBar
 	case "SCROLLFRAME":
 		return kindScrollFrame
 	case "SCROLLINGMESSAGEFRAME":
