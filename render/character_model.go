@@ -55,6 +55,13 @@ type charSectionsFields struct {
 }
 
 func loadGlueCharacterModel(loader *ui.Loader, character world.Character) (*core.Node, error) {
+	// Character Create builds a GUID-0 preview with race/class/gender only. Native
+	// dresses that preview from CharStartOutfit.dbc (DisplayInfo + InventoryType).
+	if character.GUID == 0 && character.Class != 0 {
+		if err := applyCharStartOutfit(loader, &character); err != nil {
+			return nil, fmt.Errorf("resolve create outfit: %w", err)
+		}
+	}
 	modelPath := normalizeModelPath(worldCharacterModelPath(character))
 	modelData, err := loader.ReadFile(modelPath)
 	if err != nil {
@@ -397,6 +404,131 @@ func resolveCharacterEquipment(loader *ui.Loader, character world.Character, sec
 		}
 	}
 	return active, nil
+}
+
+// applyCharStartOutfit fills character.Equipment from CharStartOutfit.dbc for the
+// race/class/gender triple. ItemID columns are ignored by the client; DisplayInfo
+// and InventoryType drive paperdoll geosets and ItemDisplayInfo textures.
+func applyCharStartOutfit(loader *ui.Loader, character *world.Character) error {
+	equipment, ok, err := resolveCharStartOutfit(loader, character.Race, character.Class, character.Gender)
+	if err != nil {
+		return err
+	}
+	if ok {
+		character.Equipment = equipment
+	}
+	return nil
+}
+
+func resolveCharStartOutfit(loader *ui.Loader, race, class, gender uint8) ([world.EquipmentSlots]world.Equipment, bool, error) {
+	var empty [world.EquipmentSlots]world.Equipment
+	data, err := loader.ReadFile(`DBFilesClient\CharStartOutfit.dbc`)
+	if err != nil {
+		return empty, false, err
+	}
+	if len(data) < 20 || string(data[:4]) != "WDBC" {
+		return empty, false, fmt.Errorf("invalid CharStartOutfit.dbc")
+	}
+	records := int(binary.LittleEndian.Uint32(data[4:8]))
+	stride := int(binary.LittleEndian.Uint32(data[12:16]))
+	// Header field count is 77 but record size is 296 (74 uint32s). Use stride.
+	const itemSlots = 24
+	if records < 1 || stride < (2+itemSlots*3)*4 || records > (len(data)-20)/stride {
+		return empty, false, fmt.Errorf("invalid CharStartOutfit.dbc dimensions")
+	}
+	match := -1
+	fallback := -1
+	for record := 0; record < records; record++ {
+		base := 20 + record*stride
+		packed := binary.LittleEndian.Uint32(data[base+4 : base+8])
+		recRace := uint8(packed)
+		recClass := uint8(packed >> 8)
+		recGender := uint8(packed >> 16)
+		recOutfit := uint8(packed >> 24)
+		if recRace != race || recClass != class || recGender != gender {
+			continue
+		}
+		if recOutfit == 0 {
+			match = record
+			break
+		}
+		if fallback < 0 {
+			fallback = record
+		}
+	}
+	if match < 0 {
+		match = fallback
+	}
+	if match < 0 {
+		return empty, false, nil
+	}
+	base := 20 + match*stride
+	var equipment [world.EquipmentSlots]world.Equipment
+	fingerSlot, trinketSlot := 10, 12
+	for index := 0; index < itemSlots; index++ {
+		display := binary.LittleEndian.Uint32(data[base+(2+itemSlots+index)*4 : base+(2+itemSlots+index)*4+4])
+		invType := binary.LittleEndian.Uint32(data[base+(2+itemSlots*2+index)*4 : base+(2+itemSlots*2+index)*4+4])
+		if display == 0 || display == 0xFFFFFFFF || invType == 0 || invType == 0xFFFFFFFF || invType > 26 {
+			continue
+		}
+		slot := equipmentSlotForInventoryType(uint8(invType), &fingerSlot, &trinketSlot)
+		if slot < 0 || slot >= world.EquipmentSlots || equipment[slot].DisplayID != 0 {
+			continue
+		}
+		equipment[slot] = world.Equipment{DisplayID: display, InventoryType: uint8(invType)}
+	}
+	return equipment, true, nil
+}
+
+func equipmentSlotForInventoryType(invType uint8, fingerSlot, trinketSlot *int) int {
+	switch invType {
+	case 1:
+		return 0
+	case 2:
+		return 1
+	case 3:
+		return 2
+	case 4:
+		return 3
+	case 5, 20:
+		return 4
+	case 6:
+		return 5
+	case 7:
+		return 6
+	case 8:
+		return 7
+	case 9:
+		return 8
+	case 10:
+		return 9
+	case 11:
+		if *fingerSlot > 11 {
+			return -1
+		}
+		slot := *fingerSlot
+		*fingerSlot++
+		return slot
+	case 12:
+		if *trinketSlot > 13 {
+			return -1
+		}
+		slot := *trinketSlot
+		*trinketSlot++
+		return slot
+	case 16:
+		return 14
+	case 13, 17, 21:
+		return 15
+	case 14, 22, 23:
+		return 16
+	case 15, 25, 26:
+		return 17
+	case 19:
+		return 18
+	default:
+		return -1
+	}
 }
 
 func loadCharacterDBC(loader *ui.Loader, path string) (charSectionsTable, error) {
