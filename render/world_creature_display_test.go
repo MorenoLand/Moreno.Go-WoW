@@ -73,6 +73,9 @@ func TestLiveWorldCreatureKeepsNativeScaleAndExtraGeosets(t *testing.T) {
 	if math.Abs(float64(info.modelScale-1)) > 1e-5 {
 		t.Fatalf("world creature normalized to UI scale=%v; want native 1", info.modelScale)
 	}
+	if info.hasStand {
+		t.Fatal("world creature used attachment 0 instead of its rendered bounds for grounding")
+	}
 
 	skinData, err := loader.ReadFile(worldM2SkinPath(def.path))
 	if err != nil {

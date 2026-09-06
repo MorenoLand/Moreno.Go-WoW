@@ -277,6 +277,15 @@ func registerGlueAPI(rt *Runtime) {
 		return 11
 	})
 	reg("GetChatWindowChannels", func(L *lua.LState) int { return 0 })
+	reg("CombatLogResetFilter", func(L *lua.LState) int { return 0 })
+	reg("CombatLogAddFilter", func(L *lua.LState) int { return 0 })
+	reg("CombatLogGetNumEntries", func(L *lua.LState) int {
+		L.Push(lua.LNumber(0))
+		return 1
+	})
+	reg("CombatLogSetCurrentEntry", func(L *lua.LState) int { return 0 })
+	reg("CombatLogGetCurrentEntry", func(L *lua.LState) int { return 0 })
+	reg("CombatLogAdvanceEntry", func(L *lua.LState) int { return 0 })
 	reg("SetChatWindowColor", func(L *lua.LState) int {
 		id := L.CheckInt(1)
 		if frame := rt.widgets["ChatFrame"+strconv.Itoa(id)]; frame != nil {
@@ -311,7 +320,7 @@ func registerGlueAPI(rt *Runtime) {
 		frame := L.Get(1)
 		chat2 := rt.widgets["ChatFrame2"]
 		ok := false
-		if chat2 != nil && frame.Type() == lua.LTUserData {
+		if chat2 != nil && rt.widgets["CombatLogQuickButtonFrame_Custom"] != nil && frame.Type() == lua.LTUserData {
 			if ud, okUD := frame.(*lua.LUserData); okUD {
 				if w, okW := ud.Value.(*widget); okW && w == chat2 {
 					ok = true
@@ -324,7 +333,7 @@ func registerGlueAPI(rt *Runtime) {
 	reg("IsAddOnLoaded", func(L *lua.LState) int {
 		name := strings.ToLower(L.OptString(1, ""))
 		if name == "blizzard_combatlog" {
-			L.Push(lua.LTrue)
+			L.Push(lua.LBool(rt.widgets["CombatLogQuickButtonFrame_Custom"] != nil))
 			return 1
 		}
 		L.Push(lua.LFalse)

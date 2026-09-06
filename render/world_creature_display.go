@@ -219,7 +219,6 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 	if len(root.Children()) == 0 {
 		return nil, fmt.Errorf("%s: model textures or geometry unavailable", modelPath)
 	}
-	center := [3]float32{}
 	scale := float32(1)
 	modelBottom := float32(math.MaxFloat32)
 	for _, part := range parts {
@@ -237,14 +236,6 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 	}
 	animation := buildM2Animation(&model, skin, animatedMeshes, modelPath)
 	info := glueModelInfo{stats: stats, particles: particles, animation: animation, modelScale: scale, modelBottom: modelBottom}
-	for _, attachment := range model.attachments {
-		if attachment.id == 0 {
-			point := modelPoint(attachment.position, center, scale)
-			info.standPosition = *math32.NewVector3(point[0], point[1], point[2])
-			info.hasStand = true
-			break
-		}
-	}
 	root.SetUserData(info)
 	return root, nil
 }

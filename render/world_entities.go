@@ -187,15 +187,6 @@ func worldEntityMotion(entity *worldEntity) uint16 {
 	return 5
 }
 
-func worldGroundedPosition(position world.WorldPosition, floor func(float32, float32, float32) (float32, bool)) world.WorldPosition {
-	if floor != nil {
-		if height, ok := floor(position.X, position.Y, position.Z); ok {
-			position.Z = height
-		}
-	}
-	return position
-}
-
 func applyWorldMonsterMove(entities map[uint64]*worldEntity, move world.MonsterMove) {
 	entity := entities[move.GUID]
 	if entity == nil {
@@ -264,7 +255,7 @@ func worldEntityArrivalFacing(entities map[uint64]*worldEntity, entity *worldEnt
 	return 0, false
 }
 
-func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64, floor func(float32, float32, float32) (float32, bool)) {
+func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64, _ func(float32, float32, float32) (float32, bool)) {
 	if elapsed <= 0 {
 		return
 	}
@@ -302,7 +293,6 @@ func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64, flo
 			entity.pathDuration = 0
 			entity.movement.MovementFlags &^= world.MovementFlagForward | world.MovementFlagBackward | world.MovementFlagStrafeLeft | world.MovementFlagStrafeRight
 		}
-		entity.movement.Position = worldGroundedPosition(entity.movement.Position, floor)
 		if entity.node != nil {
 			entity.node.SetPosition(entity.movement.Position.X, entity.movement.Position.Y, entity.movement.Position.Z)
 			entity.node.SetRotation(0, 0, entity.movement.Position.Orientation)
@@ -310,7 +300,7 @@ func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64, flo
 	}
 }
 
-func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureTables, entity *worldEntity, ownGUID uint64, floor func(float32, float32, float32) (float32, bool)) error {
+func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureTables, entity *worldEntity, ownGUID uint64, _ func(float32, float32, float32) (float32, bool)) error {
 	if entity.guid == ownGUID || !entity.hasPosition || (entity.objectType != world.ObjectTypeUnit && entity.objectType != world.ObjectTypePlayer) {
 		return nil
 	}
@@ -338,7 +328,6 @@ func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureT
 		scene.Add(entity.node)
 	}
 	if entity.node != nil {
-		entity.movement.Position = worldGroundedPosition(entity.movement.Position, floor)
 		entity.node.SetPosition(entity.movement.Position.X, entity.movement.Position.Y, entity.movement.Position.Z)
 		entity.node.SetRotation(0, 0, entity.movement.Position.Orientation)
 		if definition, defErr := tables.definition(loader, displayID, nativeDisplayID); defErr == nil {

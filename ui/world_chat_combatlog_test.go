@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/g3n/engine/window"
 	lua "github.com/yuin/gopher-lua"
 )
 
@@ -39,6 +40,11 @@ func TestChatFrame2DockedHiddenAndSetAllPointsToPrimary(t *testing.T) {
 	if tab2.text == "" {
 		t.Fatal("Combat Log tab text empty")
 	}
+	for _, name := range []string{"CombatLogUpButton", "CombatLogDownButton", "CombatLogBottomButton", "CombatLogQuickButtonFrame_Custom"} {
+		if engine.Rt.widgets[name] == nil {
+			t.Fatalf("Combat Log widget %s missing", name)
+		}
+	}
 
 	// SetAllPoints(primary) must retain relativeTo, not fill UIParent.
 	if !engine.Rt.Execute(`
@@ -68,6 +74,34 @@ _G.DiagRel = rel and rel:GetName() or ""
 		if cf2.renderRect != cf1.renderRect {
 			t.Fatalf("ChatFrame2 render=%v want ChatFrame1=%v", cf2.renderRect, cf1.renderRect)
 		}
+	}
+}
+
+func TestEnterActivatesWorldChatWithoutPriorFocus(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	engine, err := LoadUIEngineFromMPQ(dataPath, "enUS", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if err := engine.LoadWorldUI(); err != nil {
+		t.Fatal(err)
+	}
+	edit := engine.Rt.widgets["ChatFrame1EditBox"]
+	if edit == nil {
+		t.Fatal("ChatFrame1EditBox missing")
+	}
+	if engine.Rt.focused != nil {
+		t.Fatalf("world chat started focused on %s", engine.Rt.focused.name)
+	}
+	if !engine.HandleKey(window.KeyEnter) {
+		t.Fatal("Enter did not activate world chat")
+	}
+	if engine.Rt.focused != edit || !edit.shown {
+		t.Fatalf("chat activation focus=%v shown=%v", engine.Rt.focused, edit.shown)
 	}
 }
 

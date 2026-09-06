@@ -446,7 +446,7 @@ func (l *Loader) instantiateTopLevel(node *xmlNode, interfacePath string) error 
 func isWidgetElement(name string) bool {
 	switch name {
 	case "Frame", "Button", "CheckButton", "EditBox", "Slider", "ScrollFrame", "ScrollingMessageFrame",
-		"SimpleHTML", "Model", "ModelFFX", "MovieFrame", "Texture", "FontString":
+		"SimpleHTML", "Model", "ModelFFX", "MovieFrame", "StatusBar", "Texture", "FontString":
 		return true
 	}
 	return false

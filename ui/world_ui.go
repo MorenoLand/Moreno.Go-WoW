@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	lua "github.com/yuin/gopher-lua"
@@ -33,9 +35,17 @@ func (eng *UIEngine) LoadWorldUI() error {
 		return fmt.Errorf("world UI has no asset loader")
 	}
 	for _, path := range worldUIFiles {
+		if path == `Interface\FrameXML\FloatingChatFrame.xml` {
+			if err := eng.loadCombatLogBase(); err != nil {
+				return err
+			}
+		}
 		if err := eng.AssetLoader.LoadInterfaceFile(path); err != nil {
 			return fmt.Errorf("load world UI %s: %w", path, err)
 		}
+	}
+	if err := eng.loadCombatLogAddon(); err != nil {
+		return err
 	}
 	eng.worldRoot = eng.Rt.widgets["UIParent"]
 	if eng.worldRoot == nil {
@@ -115,6 +125,31 @@ end
 	// first world ESC runs TOGGLEGAMEMENU instead of only clearing focus.
 	eng.Rt.setFocus(nil)
 	eng.worldUIReady = true
+	return nil
+}
+
+func (eng *UIEngine) loadCombatLogBase() error {
+	path := `Interface\FrameXML\CombatLog.xml`
+	if _, err := eng.AssetLoader.ReadFile(path); err == nil {
+		if err := eng.AssetLoader.LoadInterfaceFile(path); err != nil {
+			return fmt.Errorf("load world UI %s: %w", path, err)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("probe world UI %s: %w", path, err)
+	}
+	return nil
+}
+
+func (eng *UIEngine) loadCombatLogAddon() error {
+	combatLogTOC := `Interface\AddOns\Blizzard_CombatLog\Blizzard_CombatLog.toc`
+	if _, err := eng.AssetLoader.ReadFile(combatLogTOC); err == nil {
+		if err := eng.AssetLoader.LoadTOC(combatLogTOC, nil); err != nil {
+			return fmt.Errorf("load world UI %s: %w", combatLogTOC, err)
+		}
+		eng.Rt.FireEvent("ADDON_LOADED", lua.LString("Blizzard_CombatLog"))
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("probe world UI %s: %w", combatLogTOC, err)
+	}
 	return nil
 }
 

@@ -1531,11 +1531,42 @@ func deleteEditSelection(eng *UIEngine, w *widget) bool {
 	return true
 }
 
+func (eng *UIEngine) worldChatEditBox() *widget {
+	if eng == nil || eng.Rt == nil {
+		return nil
+	}
+	chat := eng.Rt.widgets["ChatFrame1"]
+	if chat != nil && chat.fields != nil {
+		if value := chat.fields.RawGetString("editBox"); value != lua.LNil {
+			if userData, ok := value.(*lua.LUserData); ok {
+				if edit, ok := userData.Value.(*widget); ok {
+					return edit
+				}
+			}
+		}
+	}
+	return eng.Rt.widgets["ChatFrame1EditBox"]
+}
+
+func (eng *UIEngine) activateWorldChat() bool {
+	edit := eng.worldChatEditBox()
+	if edit == nil || eng.Rt.L.GetGlobal("ChatEdit_ActivateChat").Type() != lua.LTFunction {
+		return false
+	}
+	if !eng.Rt.Execute(`ChatEdit_ActivateChat(ChatFrame1.editBox)`, "@world-chat-activate.lua") {
+		return false
+	}
+	return eng.Rt.focused == edit
+}
+
 func (eng *UIEngine) HandleKey(key window.Key) bool { return eng.handleKey(key, false) }
 
 func (eng *UIEngine) handleKey(key window.Key, extendSelection bool) bool {
 	if eng.worldLoading && key == window.KeyEnter {
 		return true
+	}
+	if eng.worldUIReady && key == window.KeyEnter && eng.Rt.focused == nil {
+		return eng.activateWorldChat()
 	}
 	w := eng.Rt.focused
 	if key == window.KeyEscape {

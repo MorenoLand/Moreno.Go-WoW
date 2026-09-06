@@ -107,3 +107,12 @@ func TestWorldMonsterMovePreservesActivePositionUntilCompletion(t *testing.T) {
 		t.Fatalf("end=%v", entity.movement.Position)
 	}
 }
+
+func TestAdvanceWorldEntitiesKeepsReplicatedZ(t *testing.T) {
+	entities := map[uint64]*worldEntity{}
+	applyWorldMonsterMove(entities, world.MonsterMove{GUID: 7, From: world.WorldPosition{X: 10, Y: 10, Z: 10}, To: world.WorldPosition{X: 10, Y: 10, Z: 12}, Duration: 1000})
+	advanceWorldEntities(entities, 0.5, func(float32, float32, float32) (float32, bool) { return 100, true })
+	if got := entities[7].movement.Position.Z; math.Abs(float64(got-11)) > 0.001 {
+		t.Fatalf("replicated Z=%v want 11", got)
+	}
+}

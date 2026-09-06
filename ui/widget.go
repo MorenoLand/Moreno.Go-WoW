@@ -380,20 +380,28 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 1
 		},
 		"SetParent": func(L *lua.LState, w *widget) int {
-			ud := L.CheckUserData(2)
-			if p, ok := ud.Value.(*widget); ok {
-				if w.parent != nil && w.parent != p {
-					children := w.parent.children[:0]
-					for _, child := range w.parent.children {
-						if child != w {
-							children = append(children, child)
-						}
-					}
-					w.parent.children = children
-				}
-				w.parent = p
-				addWidgetChild(p, w)
+			var p *widget
+			switch value := L.Get(2).(type) {
+			case *lua.LUserData:
+				p, _ = value.Value.(*widget)
+			case lua.LString:
+				p = rt.widgets[value.String()]
 			}
+			if p == nil {
+				L.ArgError(2, "known frame userdata or name")
+				return 0
+			}
+			if w.parent != nil && w.parent != p {
+				children := w.parent.children[:0]
+				for _, child := range w.parent.children {
+					if child != w {
+						children = append(children, child)
+					}
+				}
+				w.parent.children = children
+			}
+			w.parent = p
+			addWidgetChild(p, w)
 			return 0
 		},
 		"GetID": func(L *lua.LState, w *widget) int {
@@ -566,6 +574,10 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		"RegisterForDrag":   func(L *lua.LState, w *widget) int { return 0 },
 		"SetScript": func(L *lua.LState, w *widget) int {
 			handler := L.CheckString(2)
+			if L.Get(3) == lua.LNil {
+				delete(w.scripts, handler)
+				return 0
+			}
 			fn := L.CheckFunction(3)
 			w.scripts[handler] = fn
 			return 0
@@ -719,6 +731,10 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			L.Push(lua.LNumber(p.x))
 			L.Push(lua.LNumber(p.y))
 			return 5
+		},
+		"GetNumPoints": func(L *lua.LState, w *widget) int {
+			L.Push(lua.LNumber(len(w.points)))
+			return 1
 		},
 		"GetCenter": func(L *lua.LState, w *widget) int {
 			L.Push(lua.LNumber(w.width / 2))
