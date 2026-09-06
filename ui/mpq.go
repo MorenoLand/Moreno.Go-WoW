@@ -75,30 +75,34 @@ type mpqSet struct {
 }
 
 func openMPQSet(dataPath, locale string) (*mpqSet, error) {
-	roots, err := findMPQDataRoots(dataPath)
+	root, err := findMPQDataRoot(dataPath)
 	if err != nil {
 		return nil, err
 	}
-	paths := make([]string, 0)
-	for _, root := range roots {
-		found, discoverErr := discoverMPQArchives(root, locale)
-		if discoverErr != nil {
-			continue
-		}
-		paths = append(paths, found...)
+	paths, err := discoverMPQArchives(root, locale)
+	if err != nil {
+		return nil, err
 	}
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("no recognized MPQ archives under %s", dataPath)
 	}
 	set := &mpqSet{locale: mpqLocaleID(locale), files: make(map[string]mpqFileRef), loose: make(map[string]string), missing: make(map[string]struct{})}
-	for index := len(roots) - 1; index >= 0; index-- {
-		root := roots[index]
-		set.looseRoots = append(set.looseRoots, root)
-		if localeDir := findLocaleDirectory(root, locale); localeDir != "" {
-			set.looseRoots = append(set.looseRoots, localeDir)
+	set.looseRoots = append(set.looseRoots, root)
+	if localeDir := findLocaleDirectory(root, locale); localeDir != "" {
+		set.looseRoots = append(set.looseRoots, localeDir)
+	}
+	if strings.EqualFold(filepath.Base(root), "Data") {
+		if parent := filepath.Dir(root); parent != root {
+			set.looseRoots = append(set.looseRoots, parent)
 		}
 	}
+	seen := make(map[string]struct{}, len(paths))
 	for _, path := range paths {
+		key := strings.ToLower(filepath.Clean(path))
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
 		archive, err := openMPQArchive(path)
 		if err != nil {
 			set.Close()
@@ -131,14 +135,20 @@ func (set *mpqSet) ReadFile(name string) ([]byte, error) {
 	if _, ok := set.missing[name]; ok {
 		return nil, os.ErrNotExist
 	}
+	var lastReadErr error
 	for index := len(set.archives) - 1; index >= 0; index-- {
 		archive := set.archives[index]
 		block, ok := archive.findBlock(name, set.locale)
 		if !ok {
 			continue
 		}
+		data, err := archive.readBlock(name, block)
+		if err != nil {
+			lastReadErr = err
+			continue
+		}
 		set.files[name] = mpqFileRef{archive: archive, block: block}
-		return archive.readBlock(name, block)
+		return data, nil
 	}
 	if path, ok := set.loose[name]; ok {
 		return os.ReadFile(path)
@@ -149,26 +159,21 @@ func (set *mpqSet) ReadFile(name string) ([]byte, error) {
 			return os.ReadFile(path)
 		}
 	}
+	if lastReadErr != nil {
+		return nil, lastReadErr
+	}
 	set.missing[name] = struct{}{}
 	return nil, os.ErrNotExist
 }
 
 func findMPQDataRoot(dataPath string) (string, error) {
-	roots, err := findMPQDataRoots(dataPath)
-	if err != nil {
-		return "", err
-	}
-	return roots[len(roots)-1], nil
-}
-
-func findMPQDataRoots(dataPath string) ([]string, error) {
 	dataPath = strings.TrimSpace(dataPath)
 	if dataPath == "" {
-		return nil, fmt.Errorf("MPQ data path is empty")
+		return "", fmt.Errorf("MPQ data path is empty")
 	}
 	info, err := os.Stat(dataPath)
 	if err != nil {
-		return nil, fmt.Errorf("MPQ data path %s: %w", dataPath, err)
+		return "", fmt.Errorf("MPQ data path %s: %w", dataPath, err)
 	}
 	root := dataPath
 	if !info.IsDir() {
@@ -176,26 +181,33 @@ func findMPQDataRoots(dataPath string) ([]string, error) {
 	}
 	if !hasMPQFile(root) {
 		parent := filepath.Dir(root)
-		if hasMPQFile(parent) {
+		if dataRoot := filepath.Join(root, "Data"); hasMPQFile(dataRoot) {
+			root = dataRoot
+		} else if hasMPQFile(parent) {
 			root = parent
-		} else if dataRoot := filepath.Join(root, "Data"); hasMPQFile(dataRoot) {
+		} else if dataRoot := filepath.Join(parent, "Data"); hasMPQFile(dataRoot) {
+			root = dataRoot
+		}
+	}
+	// Prefer Data when both the install root and Data contain MPQs (custom
+	// patch-4.MPQ is often also copied beside the install root).
+	if !strings.EqualFold(filepath.Base(root), "Data") {
+		if dataRoot := filepath.Join(root, "Data"); hasMPQFile(dataRoot) {
 			root = dataRoot
 		}
 	}
 	if !hasMPQFile(root) {
-		return nil, fmt.Errorf("no MPQ archives found under %s or its Data directory", dataPath)
+		return "", fmt.Errorf("no MPQ archives found under %s or its Data directory", dataPath)
 	}
-	roots := make([]string, 0, 2)
-	if strings.EqualFold(filepath.Base(root), "Data") {
-		if parent := filepath.Dir(root); hasMPQFile(parent) {
-			roots = append(roots, parent)
-		}
+	return root, nil
+}
+
+func findMPQDataRoots(dataPath string) ([]string, error) {
+	root, err := findMPQDataRoot(dataPath)
+	if err != nil {
+		return nil, err
 	}
-	roots = append(roots, root)
-	if dataRoot := filepath.Join(root, "Data"); hasMPQFile(dataRoot) {
-		roots = append(roots, dataRoot)
-	}
-	return roots, nil
+	return []string{root}, nil
 }
 
 func hasMPQFile(root string) bool {
@@ -248,7 +260,8 @@ func resolveLoosePath(root, name string) (string, bool) {
 	return dir, err == nil && !info.IsDir()
 }
 
-var fixedMPQArchives = []string{"alternate.MPQ", "interface.MPQ", "misc.MPQ", "model.MPQ", "texture.MPQ", "terrain.MPQ", "wmo.MPQ", "sound.MPQ", "fonts.MPQ", "dbc.MPQ", "speech.MPQ", "expansionloc.MPQ", "lichkingloc.MPQ", "expansionspeech.MPQ", "lichkingspeech.MPQ", "expansion.MPQ", "lichking.MPQ", "common.MPQ", "common-2.MPQ"}
+// fixedMPQArchives lists non-patch archives lowest priority first (later overrides).
+var fixedMPQArchives = []string{"alternate.MPQ", "interface.MPQ", "misc.MPQ", "model.MPQ", "texture.MPQ", "terrain.MPQ", "wmo.MPQ", "sound.MPQ", "fonts.MPQ", "dbc.MPQ", "speech.MPQ", "common.MPQ", "common-2.MPQ", "expansion.MPQ", "lichking.MPQ", "expansionloc.MPQ", "lichkingloc.MPQ", "expansionspeech.MPQ", "lichkingspeech.MPQ"}
 
 func discoverMPQArchives(root, locale string) ([]string, error) {
 	locale = strings.ToLower(strings.TrimSpace(locale))
@@ -259,15 +272,7 @@ func discoverMPQArchives(root, locale string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	localeDir := ""
-	if entries, err := os.ReadDir(root); err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() && strings.EqualFold(entry.Name(), locale) {
-				localeDir = filepath.Join(root, entry.Name())
-				break
-			}
-		}
-	}
+	localeDir := findLocaleDirectory(root, locale)
 	localeEntries := map[string]string{}
 	if localeDir != "" {
 		localeEntries, err = mpqDirectory(localeDir)
@@ -275,7 +280,17 @@ func discoverMPQArchives(root, locale string) ([]string, error) {
 			return nil, err
 		}
 	}
-	paths := make([]string, 0, len(fixedMPQArchives)+6)
+	// Fold install-root patch-*.MPQ into the same sort so patch-4 overrides locale.
+	extraPatchEntries := map[string]string{}
+	if strings.EqualFold(filepath.Base(root), "Data") {
+		if parent := filepath.Dir(root); parent != "" && parent != root {
+			extraPatchEntries, err = mpqDirectory(parent)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	paths := make([]string, 0, len(fixedMPQArchives)+16)
 	appendIfPresent := func(entries map[string]string, name string) {
 		if path, ok := entries[strings.ToLower(name)]; ok {
 			paths = append(paths, path)
@@ -287,26 +302,26 @@ func discoverMPQArchives(root, locale string) ([]string, error) {
 	for _, name := range []string{"base-" + locale + ".MPQ", "locale-" + locale + ".MPQ", "speech-" + locale + ".MPQ", "expansion-locale-" + locale + ".MPQ", "lichking-locale-" + locale + ".MPQ", "expansion-speech-" + locale + ".MPQ", "lichking-speech-" + locale + ".MPQ"} {
 		appendIfPresent(rootEntries, name)
 	}
-	for _, name := range []string{"locale-" + locale + ".MPQ", "speech-" + locale + ".MPQ", "expansion-locale-" + locale + ".MPQ", "lichking-locale-" + locale + ".MPQ", "expansion-speech-" + locale + ".MPQ", "lichking-speech-" + locale + ".MPQ"} {
+	for _, name := range []string{"base-" + locale + ".MPQ", "locale-" + locale + ".MPQ", "speech-" + locale + ".MPQ", "expansion-locale-" + locale + ".MPQ", "lichking-locale-" + locale + ".MPQ", "expansion-speech-" + locale + ".MPQ", "lichking-speech-" + locale + ".MPQ"} {
 		appendIfPresent(localeEntries, name)
 	}
 	patches := make([]mpqPatchPath, 0)
-	for name, path := range rootEntries {
-		if number, ok := rootPatchNumber(name); ok {
-			patches = append(patches, mpqPatchPath{path: path, number: number})
-		}
-		if number, ok := localePatchNumber(name, locale); ok {
-			patches = append(patches, mpqPatchPath{path: path, number: 100000 + number})
-		}
-	}
-	for name, path := range localeEntries {
-		if number, ok := localePatchNumber(name, locale); ok {
-			patches = append(patches, mpqPatchPath{path: path, number: 100000 + number})
+	addPatches := func(entries map[string]string) {
+		for name, path := range entries {
+			if number, localePatch, ok := classifyPatchArchive(name, locale); ok {
+				patches = append(patches, mpqPatchPath{path: path, number: number, locale: localePatch})
+			}
 		}
 	}
+	addPatches(rootEntries)
+	addPatches(localeEntries)
+	addPatches(extraPatchEntries)
 	sort.SliceStable(patches, func(i, j int) bool {
 		if patches[i].number != patches[j].number {
 			return patches[i].number < patches[j].number
+		}
+		if patches[i].locale != patches[j].locale {
+			return !patches[i].locale && patches[j].locale
 		}
 		return strings.ToLower(patches[i].path) < strings.ToLower(patches[j].path)
 	})
@@ -322,6 +337,7 @@ func discoverMPQArchives(root, locale string) ([]string, error) {
 type mpqPatchPath struct {
 	path   string
 	number int
+	locale bool
 }
 
 func mpqDirectory(root string) (map[string]string, error) {
@@ -341,29 +357,67 @@ func mpqDirectory(root string) (map[string]string, error) {
 	return result, nil
 }
 
-func rootPatchNumber(name string) (int, bool) {
-	name = strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name)))
-	if name == "patch" {
-		return 0, true
+// classifyPatchArchive recognizes patch.MPQ, patch-N.MPQ, patch-{locale}.MPQ,
+// patch-{locale}-N.MPQ, and lettered private-server patches (patch-A / patch-enUS-A).
+// Numeric generations share one ladder so patch-4 overrides patch-enUS-3.
+func classifyPatchArchive(name, locale string) (number int, localePatch bool, ok bool) {
+	base := strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name)))
+	locale = strings.ToLower(strings.TrimSpace(locale))
+	if locale != "" {
+		prefix := "patch-" + locale
+		if base == prefix {
+			return 0, true, true
+		}
+		if strings.HasPrefix(base, prefix+"-") {
+			rest := strings.TrimPrefix(base, prefix+"-")
+			if n, parsed := parsePatchGeneration(rest); parsed {
+				return n, true, true
+			}
+		}
 	}
-	if !strings.HasPrefix(name, "patch-") {
+	if base == "patch" {
+		return 0, false, true
+	}
+	if !strings.HasPrefix(base, "patch-") {
+		return 0, false, false
+	}
+	rest := strings.TrimPrefix(base, "patch-")
+	if locale != "" && (rest == locale || strings.HasPrefix(rest, locale+"-")) {
+		return 0, false, false
+	}
+	if strings.Contains(rest, "-") {
+		return 0, false, false
+	}
+	if n, parsed := parsePatchGeneration(rest); parsed {
+		return n, false, true
+	}
+	return 0, false, false
+}
+
+func parsePatchGeneration(rest string) (int, bool) {
+	if rest == "" {
 		return 0, false
 	}
-	number, err := strconv.Atoi(strings.TrimPrefix(name, "patch-"))
-	return number, err == nil && number >= 1
+	if number, err := strconv.Atoi(rest); err == nil && number >= 1 {
+		return number, true
+	}
+	if len(rest) == 1 {
+		letter := rest[0]
+		if letter >= 'a' && letter <= 'z' {
+			return 1000 + int(letter-'a'), true
+		}
+	}
+	return 0, false
+}
+
+func rootPatchNumber(name string) (int, bool) {
+	number, isLocale, ok := classifyPatchArchive(name, "")
+	return number, ok && !isLocale
 }
 
 func localePatchNumber(name, locale string) (int, bool) {
-	name = strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name)))
-	prefix := "patch-" + locale
-	if name == prefix {
-		return 0, true
-	}
-	if !strings.HasPrefix(name, prefix+"-") {
-		return 0, false
-	}
-	number, err := strconv.Atoi(strings.TrimPrefix(name, prefix+"-"))
-	return number, err == nil && number >= 1
+	number, isLocale, ok := classifyPatchArchive(name, locale)
+	return number, ok && isLocale
 }
 
 func mpqLocaleID(locale string) uint16 {
@@ -508,7 +562,12 @@ func (archive *mpqArchive) readBlock(name string, block mpqBlockEntry) ([]byte, 
 	if block.fileSize > maxMPQFileSize || block.compressedSize > maxMPQFileSize {
 		return nil, fmt.Errorf("MPQ file %s is too large", name)
 	}
-	key := hashString(normalizeMPQPath(name), hashTypeFileKey)
+	// MPQ file-data keys hash only the base name (Storm/MPQ tooling), not the full path.
+	keyName := normalizeMPQPath(name)
+	if i := strings.LastIndex(keyName, `\`); i >= 0 {
+		keyName = keyName[i+1:]
+	}
+	key := hashString(keyName, hashTypeFileKey)
 	if block.flags&mpqFlagFixKey != 0 {
 		key = (key + block.position) ^ block.fileSize
 	}

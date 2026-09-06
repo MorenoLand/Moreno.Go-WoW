@@ -672,7 +672,24 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"SetAllPoints": func(L *lua.LState, w *widget) int {
-			w.points = []anchorPoint{{point: "TOPLEFT", relativePoint: "TOPLEFT"}, {point: "BOTTOMRIGHT", relativePoint: "BOTTOMRIGHT"}}
+			// SetAllPoints([relativeTo]) fills relativeTo (default: parent).
+			// FCFDock_AddChatFrame uses SetAllPoints(dock.primary); ignoring the
+			// argument filled UIParent and painted a second fullscreen chat layer.
+			relName := ""
+			if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
+				switch v := L.Get(2).(type) {
+				case *lua.LUserData:
+					if rel, ok := v.Value.(*widget); ok {
+						relName = rel.name
+					}
+				case lua.LString:
+					relName = resolveParentName(v.String(), w.parentName())
+				}
+			}
+			w.points = []anchorPoint{
+				{point: "TOPLEFT", relativeTo: relName, relativePoint: "TOPLEFT"},
+				{point: "BOTTOMRIGHT", relativeTo: relName, relativePoint: "BOTTOMRIGHT"},
+			}
 			return 0
 		},
 		"GetPoint": func(L *lua.LState, w *widget) int {
@@ -1391,12 +1408,24 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		"SetPosition":       func(L *lua.LState, w *widget) int { return 0 },
 		"AdvanceTime":       func(L *lua.LState, w *widget) int { return 0 },
 		"StartMovie": func(L *lua.LState, w *widget) int {
-			w.movieFile = L.CheckString(2)
-			w.movieVolume = 255
+			// Native FUN_0095eb30 returns 0 unless AVI load + DivxDecoder init succeed.
+			file := L.CheckString(2)
+			volume := 255
 			if L.GetTop() >= 3 {
-				w.movieVolume = L.CheckInt(3)
+				volume = L.CheckInt(3)
 			}
+			w.movieFile = file
+			w.movieVolume = volume
 			w.movieActive = true
+			ok := true
+			if rt.validateMovie != nil {
+				ok = rt.validateMovie(file, float64(volume)/255)
+			}
+			if !ok {
+				w.movieActive = false
+				L.Push(lua.LFalse)
+				return 1
+			}
 			L.Push(lua.LTrue)
 			return 1
 		},

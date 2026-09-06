@@ -262,6 +262,15 @@ func registerGlueAPI(rt *Runtime) {
 		return 0
 	})
 	reg("GetChatWindowMessages", func(L *lua.LState) int {
+		// Fresh 3.3.5 defaults: only window 1 gets general message groups.
+		// Window 2 is Combat Log (Blizzard_CombatLog owns filters).
+		id := 1
+		if L.GetTop() >= 1 && L.Get(1).Type() == lua.LTNumber {
+			id = L.CheckInt(1)
+		}
+		if id != 1 {
+			return 0
+		}
 		for _, name := range []string{"SAY", "YELL", "PARTY", "RAID", "GUILD", "OFFICER", "WHISPER", "EMOTE", "TEXT_EMOTE", "CHANNEL", "SYSTEM"} {
 			L.Push(lua.LString(name))
 		}
@@ -298,8 +307,29 @@ func registerGlueAPI(rt *Runtime) {
 	reg("SetChatWindowSavedDimensions", func(L *lua.LState) int { return 0 })
 	reg("SetChatWindowSavedPosition", func(L *lua.LState) int { return 0 })
 	reg("ChatHistory_GetAccessID", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("IsCombatLog", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
-	reg("IsAddOnLoaded", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("IsCombatLog", func(L *lua.LState) int {
+		frame := L.Get(1)
+		chat2 := rt.widgets["ChatFrame2"]
+		ok := false
+		if chat2 != nil && frame.Type() == lua.LTUserData {
+			if ud, okUD := frame.(*lua.LUserData); okUD {
+				if w, okW := ud.Value.(*widget); okW && w == chat2 {
+					ok = true
+				}
+			}
+		}
+		L.Push(lua.LBool(ok))
+		return 1
+	})
+	reg("IsAddOnLoaded", func(L *lua.LState) int {
+		name := strings.ToLower(L.OptString(1, ""))
+		if name == "blizzard_combatlog" {
+			L.Push(lua.LTrue)
+			return 1
+		}
+		L.Push(lua.LFalse)
+		return 1
+	})
 	reg("sort", func(L *lua.LState) int {
 		table := L.GetGlobal("table")
 		if table.Type() != lua.LTTable {
@@ -1138,14 +1168,7 @@ func setCVarValue(rt *Runtime, name, value string) {
 	}
 }
 
-func defaultCVarValue(name string) (string, bool) {
-	switch strings.ToLower(name) {
-	case "sound_enableallsound", "sound_enablemusic", "sound_enablesfx", "sound_enableambience", "sound_mastervolume", "sound_musicvolume", "sound_sfxvolume", "sound_ambiencevolume":
-		return "1", true
-	default:
-		return "", false
-	}
-}
+// defaultCVarValue lives in cvars.go (Ghidra-backed options catalog).
 
 func localizedValue(L *lua.LState, key string) string {
 	if value := L.GetGlobal(key); value.Type() == lua.LTString {
