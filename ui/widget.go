@@ -1004,9 +1004,15 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			}
 			line := messageLine{text: L.CheckString(2), color: rgba{1, 1, 1, 1}, extraData: lua.LNil}
 			arg := 3
-			if L.GetTop() >= 7 && L.Get(3).Type() == lua.LTNumber && L.Get(4).Type() == lua.LTNumber && L.Get(5).Type() == lua.LTNumber {
-				line.color = rgba{float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), float64(L.CheckNumber(5)), 1}
-				arg = 6
+			// FrameXML uses AddMessage(text, r, g, b[, id...]) with r/g/b in 0..1.
+			// Require GetTop()>=5 (self+text+r+g+b) and treat channels >1 as the
+			// non-color metadata form used by tests (AddMessage(text, typeID, ...)).
+			if L.GetTop() >= 5 && L.Get(3).Type() == lua.LTNumber && L.Get(4).Type() == lua.LTNumber && L.Get(5).Type() == lua.LTNumber {
+				r, g, b := float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), float64(L.CheckNumber(5))
+				if r <= 1 && g <= 1 && b <= 1 {
+					line.color = rgba{r, g, b, 1}
+					arg = 6
+				}
 			}
 			if L.GetTop() >= arg && L.Get(arg).Type() == lua.LTNumber {
 				line.typeID = L.CheckInt(arg)

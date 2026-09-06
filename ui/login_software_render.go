@@ -417,6 +417,11 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 			}
 
 		case kindFontString:
+			// FrameXML places a FontString directly on ScrollingMessageFrame as
+			// the font attribute holder; messages are drawn only via drawMessageLines.
+			if w.parent != nil && w.parent.kind == kindScrollingMessageFrame {
+				break
+			}
 			text := eng.resolveText(w.text)
 			if w.parent != nil && (w.parent.kind == kindButton || w.parent.kind == kindCheckButton) && w.parent.buttonLabel == w && w.parent.text != "" {
 				text = eng.resolveText(w.parent.text)

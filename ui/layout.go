@@ -6,8 +6,8 @@ import "image"
 // interface system: each anchor attaches a named point of the widget to a
 // named point of another widget (default: the parent), with offsets.
 // Widgets with a size but no anchors center on their parent; widgets with
-// setAllPoints fill their parent; otherwise the rect is zero-size at the
-// parent's center.
+// setAllPoints (TOPLEFT+BOTTOMRIGHT with empty relativeTo) fill their parent;
+// relativeTo fill anchors resolve against the named region instead.
 
 // Rect is a resolved screen-space rectangle. Y grows downward to match the
 // interface coordinate system (BOTTOMLEFT is the origin of the client's UI
@@ -51,14 +51,15 @@ func ResolveRect(w *widget, parent Rect) Rect {
 }
 
 func resolveRect(w *widget, parent Rect, relative func(string) (Rect, bool)) Rect {
-	// setAllPoints or explicit fill anchors.
-	if len(w.points) == 0 || (len(w.points) == 2 && w.points[0].point == "TOPLEFT" && w.points[1].point == "BOTTOMRIGHT" && w.points[0].relativePoint == "TOPLEFT" && w.points[1].relativePoint == "BOTTOMRIGHT" && w.points[0].x == 0 && w.points[0].y == 0 && w.points[1].x == 0 && w.points[1].y == 0) {
-		if len(w.points) == 0 {
-			// No anchors: sized widgets center on the parent.
-			cx := (parent.X0 + parent.X1) / 2
-			cy := (parent.Y0 + parent.Y1) / 2
-			return scaleRect(Rect{cx - w.width/2, cy - w.height/2, cx + w.width/2, cy + w.height/2}, w.scale)
-		}
+	// setAllPoints or explicit fill anchors against the parent only.
+	// TOPLEFT+BOTTOMRIGHT with a relativeTo (e.g. ChatFrameTab SelectedMid
+	// stretching to TabMiddle) must resolve through the normal anchor path.
+	if len(w.points) == 0 {
+		cx := (parent.X0 + parent.X1) / 2
+		cy := (parent.Y0 + parent.Y1) / 2
+		return scaleRect(Rect{cx - w.width/2, cy - w.height/2, cx + w.width/2, cy + w.height/2}, w.scale)
+	}
+	if len(w.points) == 2 && w.points[0].point == "TOPLEFT" && w.points[1].point == "BOTTOMRIGHT" && w.points[0].relativePoint == "TOPLEFT" && w.points[1].relativePoint == "BOTTOMRIGHT" && w.points[0].x == 0 && w.points[0].y == 0 && w.points[1].x == 0 && w.points[1].y == 0 && w.points[0].relativeTo == "" && w.points[1].relativeTo == "" {
 		return scaleRect(parent, w.scale)
 	}
 

@@ -9,6 +9,13 @@ import (
 )
 
 func (eng *UIEngine) drawMessageLines(canvas *image.RGBA, w *widget, rect Rect, face, faceLarge font.Face, screenHeight float64) {
+	if eng == nil || w == nil || canvas == nil || len(w.messages) == 0 {
+		return
+	}
+	scale := eng.uiScale
+	if scale <= 0 {
+		scale = 1
+	}
 	fontWidget := w
 	for _, child := range w.children {
 		if child.kind == kindFontString {
@@ -25,7 +32,7 @@ func (eng *UIEngine) drawMessageLines(canvas *image.RGBA, w *widget, rect Rect, 
 	if textRect.W() <= 0 || textRect.H() <= 0 {
 		return
 	}
-	maxWidth := int(textRect.W() * eng.uiScale)
+	maxWidth := int(textRect.W() * scale)
 	lines := make([]messageLine, 0, len(w.messages))
 	for _, message := range w.messages {
 		text := cleanChatMarkup(message.text)
@@ -34,7 +41,7 @@ func (eng *UIEngine) drawMessageLines(canvas *image.RGBA, w *widget, rect Rect, 
 			lines = append(lines, message)
 		}
 	}
-	lineHeight := float64(messageFace.Metrics().Height.Ceil()) / eng.uiScale
+	lineHeight := float64(messageFace.Metrics().Height.Ceil()) / scale
 	if lineHeight <= 0 {
 		return
 	}
@@ -58,13 +65,38 @@ func (eng *UIEngine) drawMessageLines(canvas *image.RGBA, w *widget, rect Rect, 
 	} else {
 		lines = nil
 	}
+
+	// Clip message glyphs to the scrolling message frame so a wrong-scale
+	// draw cannot spill onto the world below the chat chrome.
+	clip := ScreenRect(screenScaledRect(rect, scale), screenHeight).Intersect(canvas.Bounds())
+	if clip.Empty() {
+		return
+	}
+	target := canvas.SubImage(clip).(*image.RGBA)
+
 	for index := len(lines) - 1; index >= 0; index-- {
 		line := lines[index]
 		bottom := textRect.Y0 + float64(len(lines)-1-index+1)*lineHeight
 		lineRect := Rect{X0: textRect.X0, Y0: bottom - lineHeight, X1: textRect.X1, Y1: bottom}
-		c := color.RGBA{R: uint8(line.color.r * 255), G: uint8(line.color.g * 255), B: uint8(line.color.b * 255), A: uint8(line.color.a * 255)}
-		eng.drawTextAlignedWidget(canvas, messageFace, line.text, screenScaledRect(lineRect, eng.uiScale), screenHeight, c, fontWidget)
+		c := color.RGBA{
+			R: clampColorByte(line.color.r),
+			G: clampColorByte(line.color.g),
+			B: clampColorByte(line.color.b),
+			A: clampColorByte(line.color.a),
+		}
+		// Pass a scaled rect once; faceFor already baked uiScale into glyph size.
+		eng.drawTextAlignedWidget(target, messageFace, line.text, screenScaledRect(lineRect, scale), screenHeight, c, fontWidget)
 	}
+}
+
+func clampColorByte(v float64) uint8 {
+	if v <= 0 {
+		return 0
+	}
+	if v >= 1 {
+		return 255
+	}
+	return uint8(v * 255)
 }
 
 func cleanChatMarkup(text string) string {
