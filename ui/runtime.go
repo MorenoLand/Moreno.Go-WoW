@@ -178,6 +178,12 @@ func (rt *Runtime) setText(w *widget, text string) {
 	w.text = text
 	if w.buttonLabel != nil {
 		w.buttonLabel.text = text
+		if rt.measureText != nil {
+			rt.measureText(w.buttonLabel)
+		}
+	}
+	if w.kind == kindFontString && rt.measureText != nil {
+		rt.measureText(w)
 	}
 	w.cursor = len([]rune(text))
 	w.selectionStart = w.cursor

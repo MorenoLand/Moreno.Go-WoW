@@ -55,6 +55,19 @@ if ChatFrame1 then
 end`, "@world-ui-init.lua") {
 		return fmt.Errorf("initialize world chat UI: %v", eng.Rt.ScriptErrors())
 	}
+	// ChatFrame1 waits for UPDATE_CHAT_WINDOWS before FloatingChatFrame_Update
+	// runs FCF_SetWindowName / PanelTemplates_TabResize. Fire the same event
+	// the original client emits after chat saved-variables load.
+	eng.Rt.FireEvent("UPDATE_CHAT_WINDOWS")
+	eng.Rt.FireEvent("UPDATE_FLOATING_CHAT_WINDOWS")
+	// FloatingChatFrame_Update calls FCF_UpdateButtonSide before layout has
+	// produced GetLeft/GetRight; re-assert the authored left button side.
+	if !eng.Rt.Execute(`
+if ChatFrame1 then
+    FCF_SetButtonSide(ChatFrame1, "left", true);
+end`, "@world-ui-button-side.lua") {
+		return fmt.Errorf("set world chat button side: %v", eng.Rt.ScriptErrors())
+	}
 	eng.worldUIReady = true
 	return nil
 }

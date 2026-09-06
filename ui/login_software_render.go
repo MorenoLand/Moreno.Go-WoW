@@ -330,7 +330,7 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 		eng.renderLoadingScreen(canvas)
 		return canvas
 	}
-	// ─── Step 1: Render background from BLP sky textures ───────────────
+	// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Step 1: Render background from BLP sky textures Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 	if drawBackground {
 		eng.renderBackground(canvas, screenWidth, screenHeight)
 	}
@@ -361,6 +361,9 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 		}
 		for _, child := range orderedChildren(w.children) {
 			if child.shown && !childDrawsBehindParent(child, w) && !(w.kind == kindEditBox && w.text != "" && child.kind == kindFontString && strings.HasSuffix(strings.ToLower(child.name), "fill")) {
+				if child.layerLevel == layerHighlight && !isHighlighted(w) {
+					continue
+				}
 				paint(target, child, rect)
 			}
 		}
@@ -383,7 +386,7 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 			}
 		}
 
-		// ─── Backdrop ────────────────────────────────────────────────────
+		// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Backdrop Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 		if w.backdrop != nil && (w.backdrop.bgFile != "" || w.backdrop.edgeFile != "") {
 			eng.drawBackdrop(target, w.backdrop, scaledRect)
 		}
@@ -400,8 +403,8 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 					if !w.vertexColor.isZero() {
 						img = eng.tintTextureImage(w.textureFile, img, w.vertexColor)
 					}
-					if (w.horizTile || w.vertTile) && !strings.EqualFold(w.alphaMode, "ADD") {
-						eng.drawTiledTexture(target, img, scaledRect, float64(screenHeight), tc, w.horizTile, w.vertTile)
+					if w.horizTile || w.vertTile {
+						eng.drawTiledTexture(target, img, scaledRect, float64(screenHeight), tc, w.horizTile, w.vertTile, strings.EqualFold(w.alphaMode, "ADD"))
 					} else {
 						drawSubModeFilter(target, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.alphaMode, "ADD"))
 					}
@@ -451,6 +454,10 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 			eng.paintButtonState(w, rect, func(child *widget, childRect Rect) { paint(target, child, childRect) })
 			for _, child := range children {
 				if child.shown && !childDrawsBehindParent(child, w) && child.layerLevel >= layerArtwork {
+					// HIGHLIGHT-layer regions only draw while the frame is hovered/locked.
+					if child.layerLevel == layerHighlight && !isHighlighted(w) {
+						continue
+					}
 					paint(target, child, rect)
 				}
 			}
@@ -729,7 +736,9 @@ func (eng *UIEngine) prepareText(w *widget, face, faceLg font.Face) {
 	for _, child := range w.children {
 		eng.prepareText(child, face, faceLg)
 	}
-	if w.buttonLabel != nil && w.buttonLabel.textWidth > 0 && w.width < w.buttonLabel.textWidth+50 {
+	// Three-piece tabs (ChatFrame*TabMiddle, etc.) are sized by
+	// PanelTemplates_TabResize; do not override their authored width.
+	if w.buttonLabel != nil && w.buttonLabel.textWidth > 0 && eng.Rt.lookup(w.name+"Middle") == nil && w.width < w.buttonLabel.textWidth+50 {
 		w.width = w.buttonLabel.textWidth + 50
 	}
 }
@@ -2066,7 +2075,7 @@ func (eng *UIEngine) drawTiled(canvas *image.RGBA, dst image.Rectangle, source i
 	}
 }
 
-func (eng *UIEngine) drawTiledTexture(canvas *image.RGBA, source image.Image, r Rect, screenHeight float64, tc [4]float64, horiz, vert bool) {
+func (eng *UIEngine) drawTiledTexture(canvas *image.RGBA, source image.Image, r Rect, screenHeight float64, tc [4]float64, horiz, vert bool, additive bool) {
 	dst := ScreenRect(r, screenHeight).Intersect(canvas.Bounds())
 	if dst.Empty() {
 		return
@@ -2090,7 +2099,24 @@ func (eng *UIEngine) drawTiledTexture(canvas *image.RGBA, source image.Image, r 
 	xdraw.NearestNeighbor.Scale(resized, resized.Bounds(), tile, tile.Bounds(), xdraw.Src, nil)
 	for y := dst.Min.Y; y < dst.Max.Y; y += tileHeight {
 		for x := dst.Min.X; x < dst.Max.X; x += tileWidth {
-			draw.Draw(canvas, image.Rect(x, y, x+tileWidth, y+tileHeight).Intersect(dst), resized, image.Point{}, draw.Over)
+			part := image.Rect(x, y, x+tileWidth, y+tileHeight).Intersect(dst)
+			if part.Empty() {
+				continue
+			}
+			if !additive {
+				draw.Draw(canvas, part, resized, image.Point{}, draw.Over)
+				continue
+			}
+			for py := part.Min.Y; py < part.Max.Y; py++ {
+				for px := part.Min.X; px < part.Max.X; px++ {
+					sr, sg, sb, sa := resized.At(px-x, py-y).RGBA()
+					if sa == 0 || (sr>>8 <= 2 && sg>>8 <= 2 && sb>>8 <= 8) {
+						continue
+					}
+					dr, dg, db, da := canvas.At(px, py).RGBA()
+					canvas.SetRGBA(px, py, color.RGBA{R: addChannel(dr, scaleChannel(sr, sa)), G: addChannel(dg, scaleChannel(sg, sa)), B: addChannel(db, scaleChannel(sb, sa)), A: maxChannel(da, sa)})
+				}
+			}
 		}
 	}
 }

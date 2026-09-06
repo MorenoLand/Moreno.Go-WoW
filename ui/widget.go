@@ -432,10 +432,22 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 1
 		},
 		"SetWidth": func(L *lua.LState, w *widget) int {
-			w.width = float64(L.CheckNumber(2))
+			width := float64(L.CheckNumber(2))
+			w.width = width
 			if w.kind == kindFontString {
-				w.explicitWidth = true
-				w.autoTextWidth = false
+				// FrameXML (PanelTemplates_TabResize) sets width 0 to mean
+				// "use the natural string width" on the next GetWidth.
+				if width <= 0 {
+					w.width = 0
+					w.explicitWidth = false
+					w.autoTextWidth = true
+					if rt.measureText != nil {
+						rt.measureText(w)
+					}
+				} else {
+					w.explicitWidth = true
+					w.autoTextWidth = false
+				}
 			}
 			return 0
 		},
@@ -1276,6 +1288,9 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		"SetSpacing":  func(L *lua.LState, w *widget) int { w.messageSpacing = float64(L.CheckNumber(2)); return 0 },
 		"SetWordWrap": func(L *lua.LState, w *widget) int { return 0 },
 		"GetStringWidth": func(L *lua.LState, w *widget) int {
+			if w.kind == kindFontString && rt.measureText != nil {
+				rt.measureText(w)
+			}
 			L.Push(lua.LNumber(w.textWidth))
 			return 1
 		},

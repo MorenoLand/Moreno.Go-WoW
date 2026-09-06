@@ -220,14 +220,27 @@ func registerGlueAPI(rt *Runtime) {
 		}
 		return 1
 	})
+	// Default chat-window saved-variable state for a fresh 3.3.5 client.
+	// Empty names let FloatingChatFrame.lua fill GENERAL / COMBAT_LOG /
+	// CHAT_NAME_TEMPLATE through FCF_SetWindowName.
+	chatWindowNames := map[int]string{}
 	reg("GetChatWindowInfo", func(L *lua.LState) int {
 		id := 1
 		if L.GetTop() >= 1 && L.Get(1).Type() == lua.LTNumber {
 			id = L.CheckInt(1)
 		}
-		shown := id == 1
-		docked := id == 1
-		L.Push(lua.LString("General"))
+		name := chatWindowNames[id]
+		shown := false
+		docked := 0
+		switch id {
+		case 1:
+			shown = true
+			docked = 1
+		case 2:
+			shown = true
+			docked = 2
+		}
+		L.Push(lua.LString(name))
 		L.Push(lua.LNumber(14))
 		L.Push(lua.LNumber(0))
 		L.Push(lua.LNumber(0))
@@ -235,13 +248,18 @@ func registerGlueAPI(rt *Runtime) {
 		L.Push(lua.LNumber(0.25))
 		L.Push(lua.LBool(shown))
 		L.Push(lua.LTrue)
-		if docked {
-			L.Push(lua.LNumber(1))
+		if docked != 0 {
+			L.Push(lua.LNumber(docked))
 		} else {
 			L.Push(lua.LNumber(0))
 		}
 		L.Push(lua.LFalse)
 		return 10
+	})
+	reg("SetChatWindowName", func(L *lua.LState) int {
+		id := L.CheckInt(1)
+		chatWindowNames[id] = L.OptString(2, "")
+		return 0
 	})
 	reg("GetChatWindowMessages", func(L *lua.LState) int {
 		for _, name := range []string{"SAY", "YELL", "PARTY", "RAID", "GUILD", "OFFICER", "WHISPER", "EMOTE", "TEXT_EMOTE", "CHANNEL", "SYSTEM"} {
@@ -272,6 +290,13 @@ func registerGlueAPI(rt *Runtime) {
 	reg("BNGetNumFriends", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 2 })
 	reg("SetChatWindowDocked", func(L *lua.LState) int { return 0 })
 	reg("SetChatWindowLocked", func(L *lua.LState) int { return 0 })
+	reg("SetChatWindowShown", func(L *lua.LState) int { return 0 })
+	reg("SetChatWindowUninteractable", func(L *lua.LState) int { return 0 })
+	reg("SetChatWindowSize", func(L *lua.LState) int { return 0 })
+	reg("GetChatWindowSavedDimensions", func(L *lua.LState) int { return 0 })
+	reg("GetChatWindowSavedPosition", func(L *lua.LState) int { return 0 })
+	reg("SetChatWindowSavedDimensions", func(L *lua.LState) int { return 0 })
+	reg("SetChatWindowSavedPosition", func(L *lua.LState) int { return 0 })
 	reg("ChatHistory_GetAccessID", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
 	reg("IsCombatLog", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("IsAddOnLoaded", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
