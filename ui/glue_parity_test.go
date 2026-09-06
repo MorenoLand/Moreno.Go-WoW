@@ -55,7 +55,7 @@ func TestLiveGlueInputGeometryMatchesMPQ(t *testing.T) {
 	outputDir := os.Getenv("WOW_TEST_LOGIN_RENDER_DIR")
 	for _, size := range [][2]int{{1024, 768}, {1280, 720}, {1920, 1080}, {2560, 1392}} {
 		frame := engine.Render(size[0], size[1])
-		if math.Abs((account.renderRect.Y0-password.renderRect.Y0)-70) > 0.01 {
+		if math.Abs((account.renderRect.Y0-password.renderRect.Y0)-40) > 0.01 {
 			t.Fatalf("authored vertical spacing at %dx%d account=%v password=%v", size[0], size[1], account.renderRect, password.renderRect)
 		}
 		t.Logf("input %dx%d account=%v screen=%v password=%v screen=%v", size[0], size[1], account.renderRect, ScreenRect(account.renderRect, float64(size[1])), password.renderRect, ScreenRect(password.renderRect, float64(size[1])))
@@ -70,6 +70,44 @@ func TestLiveGlueInputGeometryMatchesMPQ(t *testing.T) {
 			}
 			file.Close()
 		}
+	}
+}
+
+func TestLiveLoginVideoOptionsPanelsDoNotOverlap(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	engine, err := LoadUIEngineFromMPQ(dataPath, "enUS", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.SetInitialCredentials("", "", false)
+	before := len(engine.Rt.ScriptErrors())
+	if !engine.Rt.Execute("OptionsButton:Click(); OptionsSelectFrameBackgroundContainerVideoOptionsButton:Click()", "@login-video-options-test.lua") {
+		t.Fatalf("open video options failed: %v", engine.Rt.ScriptErrors()[before:])
+	}
+	video := engine.Rt.widgets["VideoOptionsFrame"]
+	resolution := engine.Rt.widgets["VideoOptionsResolutionPanel"]
+	effects := engine.Rt.widgets["VideoOptionsEffectsPanel"]
+	if video == nil || !video.shown || resolution == nil || !resolution.shown || effects == nil || effects.shown {
+		t.Fatalf("initial video panels video=%v resolution=%v effects=%v", video != nil && video.shown, resolution != nil && resolution.shown, effects != nil && effects.shown)
+	}
+	if !engine.Rt.Execute("VideoOptionsFrameCategoryFrameButton2:Click()", "@login-video-effects-test.lua") {
+		t.Fatalf("select effects failed: %v", engine.Rt.ScriptErrors()[before:])
+	}
+	if resolution.shown || !effects.shown {
+		t.Fatalf("effects selection overlap resolution=%v effects=%v", resolution.shown, effects.shown)
+	}
+	if !engine.Rt.Execute("VideoOptionsFrameCategoryFrameButton1:Click()", "@login-video-resolution-test.lua") {
+		t.Fatalf("select resolution failed: %v", engine.Rt.ScriptErrors()[before:])
+	}
+	if !resolution.shown || effects.shown {
+		t.Fatalf("resolution selection overlap resolution=%v effects=%v", resolution.shown, effects.shown)
+	}
+	if newErrors := engine.Rt.ScriptErrors()[before:]; len(newErrors) != 0 {
+		t.Fatalf("video options script errors=%v", newErrors)
 	}
 }
 
