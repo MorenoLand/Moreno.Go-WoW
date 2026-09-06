@@ -1979,15 +1979,21 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 		inB := int(bd.insetB * eng.uiScale)
 		inner := image.Rect(dst.Min.X+inL, dst.Min.Y+inT, dst.Max.X-inR, dst.Max.Y-inB)
 		if inner.Dx() > 0 && inner.Dy() > 0 {
-			if !bd.bgColor.isZero() {
-				bgCol := color.RGBA{R: uint8(bd.bgColor.r * 255), G: uint8(bd.bgColor.g * 255), B: uint8(bd.bgColor.b * 255), A: uint8(bd.bgColor.a * 255)}
-				draw.Draw(canvas, inner, &image.Uniform{C: bgCol}, image.Point{}, draw.Over)
-			}
 			if bd.tile {
 				eng.drawTiled(canvas, inner, bgImg, bd.tileSize)
 			} else {
 				xdraw.NearestNeighbor.Scale(canvas, inner, bgImg, bgImg.Bounds(), xdraw.Over, nil)
 			}
+		}
+	} else if !bd.bgColor.isZero() {
+		inL := int(bd.insetL * eng.uiScale)
+		inR := int(bd.insetR * eng.uiScale)
+		inT := int(bd.insetT * eng.uiScale)
+		inB := int(bd.insetB * eng.uiScale)
+		inner := image.Rect(dst.Min.X+inL, dst.Min.Y+inT, dst.Max.X-inR, dst.Max.Y-inB)
+		if inner.Dx() > 0 && inner.Dy() > 0 {
+			bgCol := color.RGBA{R: uint8(bd.bgColor.r * 255), G: uint8(bd.bgColor.g * 255), B: uint8(bd.bgColor.b * 255), A: uint8(bd.bgColor.a * 255)}
+			draw.Draw(canvas, inner, &image.Uniform{C: bgCol}, image.Point{}, draw.Over)
 		}
 	} else if bd.bgFile != "" {
 		// Fallback: solid very dark box

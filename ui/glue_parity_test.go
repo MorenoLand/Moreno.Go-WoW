@@ -73,6 +73,65 @@ func TestLiveGlueInputGeometryMatchesMPQ(t *testing.T) {
 	}
 }
 
+func TestLiveGlueAccountLoginPlaceholder(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	engine, err := LoadUIEngineFromMPQ(dataPath, "enUS", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	account := engine.Rt.widgets["AccountLoginAccountEdit"]
+	if account == nil {
+		t.Fatal("AccountLoginAccountEdit missing")
+	}
+	fill := engine.Rt.widgets["AccountLoginAccountEditFill"]
+	if fill == nil {
+		t.Fatal("AccountLoginAccountEditFill missing")
+	}
+	t.Logf("fill: kind=%s shown=%v text=%q resolved=%q parent=%v", fill.kind.objectType(), fill.shown, fill.text, engine.resolveText(fill.text), fill.parent != nil)
+	t.Logf("account: text=%q shown=%v", account.text, account.shown)
+	for _, ch := range account.children {
+		t.Logf("account child: name=%q kind=%s shown=%v text=%q", ch.name, ch.kind.objectType(), ch.shown, ch.text)
+	}
+	engine.SetSceneBackground(true)
+	frame := engine.Render(1024, 768)
+	t.Logf("rendered frame bounds=%v", frame.Bounds())
+	rect := account.renderRect
+	sr := ScreenRect(rect, 768)
+	midY := (sr.Min.Y + sr.Max.Y) / 2
+	fillrect := fill.renderRect
+	fsr := ScreenRect(fillrect, 768)
+	t.Logf("fill bounds = %v", fsr)
+	bgPointX := sr.Min.X + 15
+	bgPointY := midY
+	centerColor := frame.At(bgPointX, bgPointY)
+	t.Logf("account edit backdrop pixel at (%d,%d) = %v", bgPointX, bgPointY, centerColor)
+	_, _, _, a := centerColor.RGBA()
+	alpha8 := uint8(a >> 8)
+	if alpha8 == 255 {
+		t.Fatalf("edit box center is completely opaque (alpha 255), expected inner transparency")
+	}
+	if alpha8 == 0 {
+		t.Fatalf("edit box center is completely empty (alpha 0)")
+	}
+	t.Logf("edit box center has authentic inner transparency: alpha=%d (~%.1f%% opacity)", alpha8, float64(alpha8)/255.0*100.0)
+
+	// Verify placeholder hiding when text is entered
+	engine.Rt.setText(account, "testuser")
+	if fill.shown {
+		t.Fatalf("placeholder should be hidden after setting text")
+	}
+
+	// Verify placeholder showing when text is cleared
+	engine.Rt.setText(account, "")
+	if !fill.shown {
+		t.Fatalf("placeholder should be shown after clearing text")
+	}
+}
+
 func TestLiveOptionsCategoryButtonsAreClickable(t *testing.T) {
 	dataPath := os.Getenv("WOW_TEST_DATA")
 	if dataPath == "" {
