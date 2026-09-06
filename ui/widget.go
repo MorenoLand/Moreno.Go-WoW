@@ -408,10 +408,6 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			case lua.LString:
 				p = rt.widgets[value.String()]
 			}
-			if p == nil {
-				L.ArgError(2, "known frame userdata or name")
-				return 0
-			}
 			if w.parent != nil && w.parent != p {
 				children := w.parent.children[:0]
 				for _, child := range w.parent.children {
