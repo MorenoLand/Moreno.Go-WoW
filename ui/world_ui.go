@@ -49,6 +49,12 @@ var worldUIFiles = []string{
 	`Interface\FrameXML\ActionButtonTemplate.xml`,
 	`Interface\FrameXML\ActionBarFrame.xml`,
 	`Interface\FrameXML\Minimap.xml`,
+	`Interface\FrameXML\UnitFrame.xml`,
+	`Interface\FrameXML\UnitPopup.xml`,
+	`Interface\FrameXML\CombatFeedback.xml`,
+	`Interface\FrameXML\VoiceChat.xml`,
+	`Interface\FrameXML\ReadyCheck.xml`,
+	`Interface\FrameXML\PlayerFrame.xml`,
 }
 
 func (eng *UIEngine) LoadWorldUI() error {

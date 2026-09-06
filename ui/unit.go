@@ -489,6 +489,10 @@ func registerUnitAPI(rt *Runtime) {
 		L.Push(lua.LBool(false))
 		return 1
 	})
+	reg("UnitIsPVPFreeForAll", func(L *lua.LState) int {
+		L.Push(lua.LFalse)
+		return 1
+	})
 	reg("UnitIsTalking", func(L *lua.LState) int {
 		L.Push(lua.LBool(false))
 		return 1
