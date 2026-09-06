@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -342,6 +343,9 @@ func (l *Loader) loadUiChildren(ui *xmlNode, interfacePath string) error {
 				resolved := resolveRelative(interfacePath, file)
 				data, err := l.read(resolved)
 				if err != nil {
+					if errors.Is(err, fs.ErrNotExist) {
+						continue
+					}
 					return fmt.Errorf("open %s: %w", resolved, err)
 				}
 				l.rt.doFileBody(string(data), resolved)

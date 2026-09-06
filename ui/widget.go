@@ -200,6 +200,7 @@ type widget struct {
 
 	// Texture state.
 	textureFile                                string
+	portraitUnit                               string
 	texCoordL, texCoordR, texCoordT, texCoordB float64
 	vertexColor                                rgba
 	alphaMode                                  string

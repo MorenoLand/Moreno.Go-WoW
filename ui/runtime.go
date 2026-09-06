@@ -24,6 +24,7 @@ type Runtime struct {
 	widgets           map[string]*widget
 	virtuals          map[string]*xmlNode
 	fonts             map[string]*Font
+	units             map[string]*UnitInfo
 	events            map[string][]*widget
 	cvars             map[string]string
 	cvarDefaults      map[string]string
@@ -55,6 +56,9 @@ type Runtime struct {
 	// auto-sizing is enabled. The UI engine installs this so GetWidth/GetHeight
 	// match the original client's immediate post-SetText metrics.
 	measureText func(w *widget)
+
+	// validateMovie probes a cinematic path the way native StartMovie does.
+	validateMovie func(file string, volume float64) bool
 
 	traceInvocations []string
 
@@ -138,6 +142,7 @@ func NewRuntime(host Host) *Runtime {
 		widgets:           make(map[string]*widget),
 		virtuals:          make(map[string]*xmlNode),
 		fonts:             make(map[string]*Font),
+		units:             make(map[string]*UnitInfo),
 		events:            make(map[string][]*widget),
 		cvars:             make(map[string]string),
 		cvarDefaults:      make(map[string]string),
@@ -149,6 +154,7 @@ func NewRuntime(host Host) *Runtime {
 	}
 	registerWidgetMethods(rt.L, rt)
 	registerGlueAPI(rt)
+	registerUnitAPI(rt)
 	registerStringHelpers(rt.L)
 	return rt
 }

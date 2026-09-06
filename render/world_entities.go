@@ -11,10 +11,13 @@ import (
 )
 
 type worldCreatureDefinition struct {
-	path       string
-	variations [3]string
-	bake       string
-	scale      float32
+	path         string
+	variations   [3]string
+	bake         string
+	scale        float32
+	displayScale float32
+	modelScale   float32
+	extra        worldCreatureExtra
 }
 
 type worldCreatureTables struct {
@@ -78,18 +81,22 @@ func (tables *worldCreatureTables) definition(loader *ui.Loader, displayID, nati
 	if model < 0 || tables.models.fields < 3 {
 		return worldCreatureDefinition{}, fmt.Errorf("CreatureModelData.dbc has no model %d for display %d", modelID, resolvedDisplayID)
 	}
-	definition := worldCreatureDefinition{path: normalizeModelPath(tables.models.string(model, 2)), scale: tables.displays.valueFloat(display, 4) * tables.models.valueFloat(model, 4)}
+	displayScale, modelScale := worldCreatureDisplayScales(tables, display, model)
+	definition := worldCreatureDefinition{
+		path:         normalizeModelPath(tables.models.string(model, 2)),
+		scale:        displayScale * modelScale,
+		displayScale: displayScale,
+		modelScale:   modelScale,
+	}
 	for index := range definition.variations {
 		definition.variations[index] = tables.displays.string(display, 6+index)
 	}
 	if definition.scale <= 0 {
 		definition.scale = 1
 	}
-	if tables.extra.fields >= 21 {
-		extraID := tables.displays.value(display, 3)
-		if extra := characterDBCRecordByID(tables.extra, extraID); extra >= 0 {
-			definition.bake = tables.extra.string(extra, 20)
-		}
+	definition.extra = loadWorldCreatureExtra(tables, display)
+	if definition.extra.ok {
+		definition.bake = definition.extra.bake
 	}
 	if definition.path == "" {
 		return worldCreatureDefinition{}, fmt.Errorf("display %d has no model path", resolvedDisplayID)
@@ -120,54 +127,7 @@ func worldCreatureVariationPath(modelPath, variation string) string {
 }
 
 func buildWorldCreatureModel(loader *ui.Loader, definition worldCreatureDefinition) (*core.Node, error) {
-	modelData, err := loader.ReadFile(definition.path)
-	if err != nil {
-		return nil, fmt.Errorf("read creature model %s: %w", definition.path, err)
-	}
-	model, err := parseM2(modelData)
-	if err != nil {
-		return nil, err
-	}
-	loadM2AnimationTracks(loader, definition.path, &model)
-	skinData, err := loader.ReadFile(worldM2SkinPath(definition.path))
-	if err != nil {
-		return nil, fmt.Errorf("read creature skin %s: %w", worldM2SkinPath(definition.path), err)
-	}
-	skin, err := parseSkin(skinData)
-	if err != nil {
-		return nil, err
-	}
-	overrides := make(map[int]string)
-	bakePath := ""
-	if definition.bake != "" {
-		bakePath = `Textures\BakedNpcTextures\` + definition.bake
-		if !strings.Contains(strings.ToLower(bakePath), ".blp") {
-			bakePath += ".blp"
-		}
-	}
-	for index, textureType := range model.textureTypes {
-		path := ""
-		if textureType == 1 && bakePath != "" {
-			path = bakePath
-		} else {
-			slot := -1
-			switch textureType {
-			case 1, 2, 11:
-				slot = 0
-			case 12:
-				slot = 1
-			case 13:
-				slot = 2
-			}
-			if slot >= 0 {
-				path = worldCreatureVariationPath(definition.path, definition.variations[slot])
-			}
-		}
-		if path != "" {
-			overrides[index] = path
-		}
-	}
-	return buildGlueModel(loader, definition.path, model, skin, overrides, nil, nil)
+	return buildWorldCreatureModelFromParts(loader, definition.path, definition.variations, definition.bake, definition.extra)
 }
 
 func wrapWorldModel(model *core.Node, position world.WorldPosition, scale float32) *core.Node {
@@ -373,7 +333,7 @@ func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureT
 		if err != nil {
 			return err
 		}
-		entity.node = wrapWorldModel(model, entity.movement.Position, definition.scale)
+		entity.node = wrapWorldModel(model, entity.movement.Position, worldEntityScale(entity, definition.displayScale, definition.modelScale))
 		entity.displayID = modelID
 		scene.Add(entity.node)
 	}
@@ -381,6 +341,10 @@ func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureT
 		entity.movement.Position = worldGroundedPosition(entity.movement.Position, floor)
 		entity.node.SetPosition(entity.movement.Position.X, entity.movement.Position.Y, entity.movement.Position.Z)
 		entity.node.SetRotation(0, 0, entity.movement.Position.Orientation)
+		if definition, defErr := tables.definition(loader, displayID, nativeDisplayID); defErr == nil {
+			scale := worldEntityScale(entity, definition.displayScale, definition.modelScale)
+			entity.node.SetScale(scale, scale, scale)
+		}
 		if info, ok := entity.node.UserData().(glueModelInfo); ok && info.animation != nil {
 			motion := uint16(0)
 			if worldEntityMoving(entity) {
