@@ -41,6 +41,28 @@ func TestM2ParticleAppearanceHonorsAlphaTrack(t *testing.T) {
 	}
 }
 
+func TestM2ParticleEmissionRateFollowsModelAnimation(t *testing.T) {
+	emitter := m2ParticleEmitter{rate: 0, life: 1, rateTrack: m2TrackScalar{interpolation: 1, globalSequence: 0xffff, sequences: []m2ScalarKeys{{times: []uint32{0, 1000}, values: []float32{0, 10}}}}}
+	model := &parsedM2{animationSequence: 0, animationTime: 500}
+	if got := m2ParticleEmissionRate(model, emitter); got != 5 {
+		t.Fatalf("animated rate=%v want 5", got)
+	}
+	if got := m2ParticleCount(m2ParticleEmissionRate(model, emitter), emitter.life, 10); got != 5 {
+		t.Fatalf("active count=%d want 5", got)
+	}
+	model.animationTime = 1000
+	if got := m2ParticleEmissionRate(model, emitter); got != 10 {
+		t.Fatalf("end rate=%v want 10", got)
+	}
+}
+
+func TestM2ParticleMaxRateRetainsZeroStartEmitters(t *testing.T) {
+	emitter := m2ParticleEmitter{rate: 0, rateTrack: m2TrackScalar{sequences: []m2ScalarKeys{{values: []float32{0, 25, 0}}}}}
+	if got := m2ParticleMaxRate(nil, emitter); got != 25 {
+		t.Fatalf("max rate=%v want 25", got)
+	}
+}
+
 func TestLiveNorthrendSnowParticleParity(t *testing.T) {
 	dataPath := os.Getenv("WOW_TEST_DATA")
 	if dataPath == "" {

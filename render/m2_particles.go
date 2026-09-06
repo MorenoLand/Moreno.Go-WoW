@@ -27,6 +27,7 @@ type m2ParticleEmitter struct {
 	textureRotation int16
 	rate            float32
 	life            float32
+	rateTrack       m2TrackScalar
 	speed           float32
 	speedVariation  float32
 	verticalRange   float32
@@ -94,6 +95,7 @@ type m2ParticleGroup struct {
 	mesh        *graphic.Mesh
 	particleTex *texture.Texture2D
 	rootScale   float32
+	activeCount int
 }
 
 type m2ParticleSystem struct {
@@ -303,7 +305,8 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 	particleTextures := make(map[particleTextureKey]*texture.Texture2D)
 	system := &m2ParticleSystem{}
 	for index, emitter := range model.particles {
-		if emitter.rate <= 0 || emitter.life <= 0 || int(emitter.texture) >= len(model.textures) {
+		maxRate := m2ParticleMaxRate(model, emitter)
+		if maxRate <= 0 || emitter.life <= 0 || int(emitter.texture) >= len(model.textures) {
 			continue
 		}
 		path := model.textures[emitter.texture]
@@ -330,7 +333,7 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 			tex.SetOffset(0, 0)
 			particleTextures[key] = tex
 		}
-		count := int(math.Ceil(float64(emitter.rate * emitter.life)))
+		count := int(math.Ceil(float64(maxRate * emitter.life)))
 		if count < 1 {
 			count = 1
 		}
@@ -338,11 +341,16 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 			count = 64
 		}
 		base := modelVector(transformM2Point(int(emitter.bone), emitter.position, model.bones, 0))
+		activeCount := m2ParticleCount(m2ParticleEmissionRate(model, emitter), emitter.life, count)
 		vertexCount := count * 4
-		group := &m2ParticleGroup{emitter: emitter, model: model, bone: int(emitter.bone), base: base, right: right, up: up, particleTex: tex, rootScale: rootScale, particles: make([]m2Particle, count), positions: math32.NewArrayF32(0, vertexCount*3), colors: math32.NewArrayF32(0, vertexCount*3), params: math32.NewArrayF32(0, vertexCount*4), alphas: math32.NewArrayF32(0, vertexCount), rotations: math32.NewArrayF32(0, vertexCount), corners: math32.NewArrayF32(0, vertexCount*2)}
+		group := &m2ParticleGroup{emitter: emitter, model: model, bone: int(emitter.bone), base: base, right: right, up: up, particleTex: tex, rootScale: rootScale, activeCount: activeCount, particles: make([]m2Particle, count), positions: math32.NewArrayF32(0, vertexCount*3), colors: math32.NewArrayF32(0, vertexCount*3), params: math32.NewArrayF32(0, vertexCount*4), alphas: math32.NewArrayF32(0, vertexCount), rotations: math32.NewArrayF32(0, vertexCount), corners: math32.NewArrayF32(0, vertexCount*2)}
 		for particleIndex := range group.particles {
 			seed := uint32(index+1)*0x9e3779b9 + uint32(particleIndex+1)*0x85ebca6b
-			group.particles[particleIndex] = spawnM2Particle(group, seed, emitter.life*float32(particleIndex)/float32(count))
+			age := float32(0)
+			if particleIndex < activeCount {
+				age = emitter.life * float32(particleIndex) / float32(activeCount)
+			}
+			group.particles[particleIndex] = spawnM2Particle(group, seed, age)
 			position := particlePosition(group.particles[particleIndex])
 			color, size, alpha, cell := particleAppearance(group.emitter, group.particles[particleIndex])
 			modelColor, modelAlpha := m2ParticleColor(model, emitter.colorIndex)
@@ -350,6 +358,9 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 			color[1] *= modelColor[1]
 			color[2] *= modelColor[2]
 			alpha *= modelAlpha
+			if particleIndex >= activeCount {
+				alpha = 0
+			}
 			for _, corner := range particleCorners {
 				group.positions.Append(position[0], position[1], position[2])
 				group.colors.Append(color[0], color[1], color[2])
@@ -501,7 +512,21 @@ func (system *m2ParticleSystem) Update(elapsed float64) {
 		if group.model != nil {
 			group.base = modelVector(transformM2Point(group.bone, group.emitter.position, group.model.bones, 0))
 		}
+		activeCount := m2ParticleCount(m2ParticleEmissionRate(group.model, group.emitter), group.emitter.life, len(group.particles))
+		if activeCount > group.activeCount {
+			for index := group.activeCount; index < activeCount; index++ {
+				seed := uint32(index+1)*0x85ebca6b + uint32(len(group.particles))*0x9e3779b9
+				group.particles[index] = spawnM2Particle(group, seed, group.emitter.life*float32(index)/float32(activeCount))
+			}
+		}
+		group.activeCount = activeCount
 		for index := range group.particles {
+			if index >= activeCount {
+				for vertex := 0; vertex < 4; vertex++ {
+					group.alphas.Set(index*4+vertex, 0)
+				}
+				continue
+			}
 			particle := &group.particles[index]
 			particle.age += delta
 			particle.rotation += particle.spin * delta
@@ -547,6 +572,46 @@ func (system *m2ParticleSystem) Update(elapsed float64) {
 		// Corner attributes are static billboard offsets; re-uploading them
 		// every frame forced a useless GPU BufferData for every emitter.
 	}
+}
+
+func m2ParticleMaxRate(model *parsedM2, emitter m2ParticleEmitter) float32 {
+	maxRate := emitter.rate
+	for _, sequence := range emitter.rateTrack.sequences {
+		for _, value := range sequence.values {
+			if value > maxRate {
+				maxRate = value
+			}
+		}
+	}
+	if maxRate < 0 || math.IsNaN(float64(maxRate)) || math.IsInf(float64(maxRate), 0) {
+		return 0
+	}
+	return maxRate
+}
+
+func m2ParticleEmissionRate(model *parsedM2, emitter m2ParticleEmitter) float32 {
+	rate := emitter.rate
+	if model != nil && trackScalarHasKeys(emitter.rateTrack) {
+		rate = emitter.rateTrack.value(model.animationSequence, m2TrackTime(emitter.rateTrack.globalSequence, model.animationTime, model.animationGlobalTime), model.globalLoops, rate)
+	}
+	if rate < 0 || math.IsNaN(float64(rate)) || math.IsInf(float64(rate), 0) {
+		return 0
+	}
+	return rate
+}
+
+func m2ParticleCount(rate, life float32, capacity int) int {
+	if rate <= 0 || life <= 0 || capacity <= 0 {
+		return 0
+	}
+	count := int(math.Ceil(float64(rate * life)))
+	if count < 1 {
+		count = 1
+	}
+	if count > capacity {
+		count = capacity
+	}
+	return count
 }
 
 func m2ParticleColor(model *parsedM2, index uint16) ([3]float32, float32) {

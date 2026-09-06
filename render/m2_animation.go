@@ -38,7 +38,7 @@ type m2Animation struct {
 }
 
 func buildM2Animation(model *parsedM2, skin parsedSkin, meshes []*m2AnimatedMesh, modelPath string) *m2Animation {
-	if model == nil || len(model.sequences) == 0 || len(meshes) == 0 || (!modelHasAnimation(model) && !modelHasTextureAnimation(model) && !modelHasColorAnimation(model)) {
+	if model == nil || len(model.sequences) == 0 || len(meshes) == 0 || (!modelHasAnimation(model) && !modelHasTextureAnimation(model) && !modelHasColorAnimation(model) && !modelHasParticleAnimation(model)) {
 		return nil
 	}
 	sequence := defaultM2Sequence(model)
@@ -166,6 +166,18 @@ func modelHasColorAnimation(model *parsedM2) bool {
 	}
 	for _, weight := range model.textureWeights {
 		if trackScalarHasKeys(weight.weightTrack) {
+			return true
+		}
+	}
+	return false
+}
+
+func modelHasParticleAnimation(model *parsedM2) bool {
+	if model == nil {
+		return false
+	}
+	for _, emitter := range model.particles {
+		if trackScalarHasKeys(emitter.rateTrack) {
 			return true
 		}
 	}

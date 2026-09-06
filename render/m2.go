@@ -421,6 +421,9 @@ func buildGlueModel(loader *ui.Loader, modelPath string, model parsedM2, skin pa
 type parsedM2 struct {
 	data                   []byte
 	flags                  uint32
+	animationSequence      int
+	animationTime          uint32
+	animationGlobalTime    uint32
 	boneOffset             int
 	colorOffset            int
 	textureWeightOffset    int
@@ -603,7 +606,10 @@ func parseM2(data []byte) (parsedM2, error) {
 		result.attachments[index] = m2Attachment{id: binary.LittleEndian.Uint32(data[base : base+4]), bone: binary.LittleEndian.Uint16(data[base+4 : base+6]), position: [3]float32{readF32(data, base+8), readF32(data, base+12), readF32(data, base+16)}}
 	}
 	for index := range result.particles {
-		result.particles[index] = parseM2ParticleEmitter(data, particles.offset+index*m2ParticleSize)
+		base := particles.offset + index*m2ParticleSize
+		emitter := parseM2ParticleEmitter(data, base)
+		emitter.rateTrack = readM2TrackFloatTrack(data, base+0xb0, len(result.sequences), nil, inline)
+		result.particles[index] = emitter
 	}
 	result.events = readM2Events(data, events, len(result.sequences), nil, inline)
 	if cameras.count > 0 {
@@ -991,6 +997,31 @@ func readM2TrackScalar(data []byte, offset, sequenceCount int, external map[int]
 	return track
 }
 
+func readM2TrackFloatTrack(data []byte, offset, sequenceCount int, external map[int][]byte, inline []bool) m2TrackScalar {
+	interpolation, globalSequence, timesOuter, valuesOuter, ok := readM2TrackHeader(data, offset)
+	if !ok || sequenceCount < 0 {
+		return m2TrackScalar{}
+	}
+	track := m2TrackScalar{interpolation: interpolation, globalSequence: globalSequence, sequences: make([]m2ScalarKeys, sequenceCount)}
+	count := sequenceCount
+	if timesOuter.count < count {
+		count = timesOuter.count
+	}
+	if valuesOuter.count < count {
+		count = valuesOuter.count
+	}
+	for index := 0; index < count; index++ {
+		if !inline[index] {
+			if source, exists := external[index]; exists {
+				track.sequences[index] = readM2ScalarKeysFloat(data, timesOuter, valuesOuter, index, source)
+			}
+			continue
+		}
+		track.sequences[index] = readM2ScalarKeysFloat(data, timesOuter, valuesOuter, index, data)
+	}
+	return track
+}
+
 func readM2Vec3Keys(data []byte, timesOuter, valuesOuter m2Array, index int, source []byte) m2Vec3Keys {
 	times, timesOK := readM2TrackArray(data, timesOuter.offset+index*8)
 	values, valuesOK := readM2TrackArray(data, valuesOuter.offset+index*8)
@@ -1030,6 +1061,27 @@ func readM2ScalarKeys(data []byte, timesOuter, valuesOuter m2Array, index int, s
 	for key := 0; key < count; key++ {
 		keys.times[key] = binary.LittleEndian.Uint32(data[times.offset+key*4:])
 		keys.values[key] = float32(binary.LittleEndian.Uint16(source[values.offset+key*2:])) / 32767
+	}
+	return keys
+}
+
+func readM2ScalarKeysFloat(data []byte, timesOuter, valuesOuter m2Array, index int, source []byte) m2ScalarKeys {
+	times, timesOK := readM2TrackArray(data, timesOuter.offset+index*8)
+	values, valuesOK := readM2TrackArray(data, valuesOuter.offset+index*8)
+	if !timesOK || !valuesOK {
+		return m2ScalarKeys{}
+	}
+	count := times.count
+	if values.count < count {
+		count = values.count
+	}
+	if count <= 0 || times.offset < 0 || values.offset < 0 || times.offset > len(data) || values.offset > len(source) || count > (len(data)-times.offset)/4 || count > (len(source)-values.offset)/4 {
+		return m2ScalarKeys{}
+	}
+	keys := m2ScalarKeys{times: make([]uint32, count), values: make([]float32, count)}
+	for key := 0; key < count; key++ {
+		keys.times[key] = binary.LittleEndian.Uint32(data[times.offset+key*4:])
+		keys.values[key] = readF32(source, values.offset+key*4)
 	}
 	return keys
 }
@@ -1320,6 +1372,11 @@ func loadM2AnimationTracks(loader *ui.Loader, modelPath string, model *parsedM2)
 		base := model.textureWeightOffset + index*m2TextureWeightSize
 		model.textureWeights[index].weightTrack = readM2TrackScalar(model.data, base, len(model.sequences), external, inline)
 	}
+	particles, _ := readM2Array(model.data, 0x128, m2ParticleSize)
+	for index := range model.particles {
+		base := particles.offset + index*m2ParticleSize
+		model.particles[index].rateTrack = readM2TrackFloatTrack(model.data, base+0xb0, len(model.sequences), external, inline)
+	}
 	events, _ := readM2Array(model.data, 0x100, 36)
 	model.events = readM2Events(model.data, events, len(model.sequences), external, inline)
 	resolveM2TrackAliases(model)
@@ -1336,6 +1393,9 @@ func updateM2AnimatedValues(model *parsedM2, sequence int, timeMS, globalTimeMS 
 	if model == nil {
 		return
 	}
+	model.animationSequence = sequence
+	model.animationTime = timeMS
+	model.animationGlobalTime = globalTimeMS
 	for index := range model.colors {
 		color := &model.colors[index]
 		color.current = color.colorTrack.value(sequence, m2TrackTime(color.colorTrack.globalSequence, timeMS, globalTimeMS), model.globalLoops, [3]float32{1, 1, 1})
