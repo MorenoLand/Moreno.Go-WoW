@@ -221,6 +221,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	lastUIRefresh := time.Time{}
 	var sceneModel *core.Node
 	var sceneCharacterModel *core.Node
+	var scenePetModel *core.Node
 	sceneCharacterFacing := float32(0)
 	sceneModelPath := ""
 	sceneCharacterKey := ""
@@ -293,7 +294,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			} else if uiEngine.CharacterSelectVisible() && selectedIndex >= 0 && selectedIndex < len(glueCharacters) {
 				index := selectedIndex
 				selectedCharacter = glueCharacters[index]
-				characterKey = fmt.Sprintf("%d:%s", selectedCharacter.GUID, worldCharacterModelPath(selectedCharacter))
+				characterKey = fmt.Sprintf("%d:%s:%d", selectedCharacter.GUID, worldCharacterModelPath(selectedCharacter), selectedCharacter.PetDisplayID)
 			}
 			if path == sceneModelPath && characterKey == sceneCharacterKey {
 				return false
@@ -310,6 +311,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				scene.Remove(sceneCharacterModel)
 				sceneCharacterModel.Dispose()
 				sceneCharacterModel = nil
+			}
+			if scenePetModel != nil {
+				scene.Remove(scenePetModel)
+				scenePetModel.Dispose()
+				scenePetModel = nil
 			}
 			resetSceneCamera(cam)
 			sceneCameraDiagonalFOV = 0
@@ -358,6 +364,38 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					characterModel.SetRotation(0, sceneCharacterFacing*math.Pi/180, 0)
 					sceneCharacterModel = characterModel
 					scene.Add(sceneCharacterModel)
+					if selectedCharacter.PetDisplayID != 0 {
+						petDefinition, petDefinitionErr := worldCreatureCache.definition(uiEngine.AssetLoader, selectedCharacter.PetDisplayID, 0)
+						if petDefinitionErr != nil {
+							if debug {
+								log.Printf("character select pet display %d: %v", selectedCharacter.PetDisplayID, petDefinitionErr)
+							}
+						} else if petModel, petModelErr := buildWorldCreatureModel(uiEngine.AssetLoader, petDefinition); petModelErr != nil {
+							if debug {
+								log.Printf("character select pet model %d: %v", selectedCharacter.PetDisplayID, petModelErr)
+							}
+						} else {
+							petInfo, _ := petModel.UserData().(glueModelInfo)
+							petScale := float32(1)
+							if petDefinition.scale > 0 {
+								petScale = petDefinition.scale
+							}
+							if backgroundInfo, ok := sceneModel.UserData().(glueModelInfo); ok {
+								petScale *= backgroundInfo.modelScale
+								petFactor := petScale
+								if petInfo.modelScale > 0 {
+									petFactor /= petInfo.modelScale
+								}
+								petPosition := petModel.Position()
+								petPosition.X += 0.8 / petFactor
+								petModel.SetScale(petScale, petScale, petScale)
+								petModel.SetPosition(backgroundInfo.standPosition.X+petPosition.X*petFactor, backgroundInfo.standPosition.Y+(petPosition.Y-petInfo.modelBottom)*petFactor, backgroundInfo.standPosition.Z+petPosition.Z*petFactor)
+							}
+							petModel.SetRotation(0, sceneCharacterFacing*math.Pi/180, 0)
+							scenePetModel = petModel
+							scene.Add(scenePetModel)
+					}
+					}
 				}
 			}
 			uiEngine.SetSceneBackground(true)
@@ -1048,7 +1086,7 @@ func glueState(session *network.Session, loader *ui.Loader) ui.GlueState {
 	state.Realms = []ui.RealmInfo{{Name: session.Realm.Name, Address: session.Realm.Address, Population: population, RealmType: realmType(session.Realm.Kind), ID: int(session.Realm.ID), Characters: int(session.Realm.Characters), Down: session.Realm.IsOffline(), Current: true, Locked: session.Realm.Locked, Load: float64(session.Realm.Population)}}
 	state.Characters = make([]ui.CharacterEntry, 0, len(session.Characters))
 	for _, character := range session.Characters {
-		state.Characters = append(state.Characters, ui.CharacterEntry{Name: character.Name, Race: raceName(character.Race), RaceID: int(character.Race), Class: className(character.Class), ClassID: int(character.Class), Gender: int(character.Gender), Level: int(character.Level), Zone: areaNames[character.Zone], ZoneID: character.Zone, MapID: character.Map, Flags: character.Flags, CustomizeFlags: character.CustomizeFlags, BackgroundModel: backgroundModelName(character)})
+		state.Characters = append(state.Characters, ui.CharacterEntry{Name: character.Name, Race: raceName(character.Race), RaceID: int(character.Race), Class: className(character.Class), ClassID: int(character.Class), Gender: int(character.Gender), Level: int(character.Level), Zone: areaNames[character.Zone], ZoneID: character.Zone, MapID: character.Map, Flags: character.Flags, CustomizeFlags: character.CustomizeFlags, BackgroundModel: backgroundModelName(character), PetDisplayID: character.PetDisplayID, PetLevel: character.PetLevel, PetFamily: character.PetFamily})
 	}
 	return state
 }

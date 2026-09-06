@@ -103,6 +103,9 @@ type CharacterEntry struct {
 	PaidRaceChange    bool
 	PaidFactionChange bool
 	BackgroundModel   string
+	PetDisplayID      uint32
+	PetLevel          uint32
+	PetFamily         uint32
 }
 
 type CreatePreviewState struct {
