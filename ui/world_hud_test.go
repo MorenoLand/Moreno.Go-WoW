@@ -32,6 +32,11 @@ func TestLiveWorldMainMenuBarLoads(t *testing.T) {
 			t.Fatalf("%s missing", name)
 		}
 	}
+	for _, name := range []string{"CharacterFrame", "PaperDollFrame"} {
+		if engine.Rt.widgets[name] == nil {
+			t.Fatalf("%s missing", name)
+		}
+	}
 	bar := engine.Rt.widgets["MainMenuExpBar"]
 	if bar.kind != kindStatusBar || bar.statusBarTexture == nil || bar.statusBarTexture.textureFile == "" {
 		t.Fatalf("MainMenuExpBar status state=%#v", bar)
