@@ -137,6 +137,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	}
 	defer win.Destroy()
 	installAppIcon(win)
+	// Unlock the swap interval so menu/world FPS is not capped to display refresh.
+	win.SetSwapInterval(0)
 	gl := win.Gls()
 	gpuVendor := gl.GetString(gls.VENDOR)
 	gpuRenderer := gl.GetString(gls.RENDERER)
@@ -200,6 +202,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	host.quit = func() { win.SetShouldClose(true) }
 
 	var uiImage *gui.Image
+	var uiTex *texture.Texture2D
 	var eng *ui.UIEngine
 	var err error
 	lastUIRefresh := time.Time{}
@@ -352,7 +355,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		}
 		setSceneModel()
 		initialUI := eng.Render(960, 640)
-		uiImage = gui.NewImageFromRGBA(initialUI)
+		uiTex = texture.NewTexture2DFromRGBA(initialUI)
+		uiImage = gui.NewImageFromTex(uiTex)
 		uiImage.SetColor4(&math32.Color4{R: 1, G: 1, B: 1, A: 0})
 		uiImage.SetPosition(0, 0)
 		scene.Add(uiImage)
@@ -419,9 +423,13 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		if worldMode {
 			uiFrame = uiEngine.RenderWorld(width, height)
 		}
-		previous := uiImage.SetTexture(texture.NewTexture2DFromRGBA(uiFrame))
-		if previous != nil {
-			previous.Dispose()
+		// Reuse one GPU texture and upload pixels in place. Recreating a
+		// Texture2D every UI paint forced a full delete/alloc + material rebind.
+		if uiTex == nil {
+			uiTex = texture.NewTexture2DFromRGBA(uiFrame)
+			uiImage.SetTexture(uiTex)
+		} else {
+			uiTex.SetFromRGBA(uiFrame)
 		}
 		debugUIRenderMS = time.Since(uiStarted).Seconds() * 1000
 		uiImage.SetSize(float32(width), float32(height))
@@ -916,7 +924,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 							log.Printf("world entity: %v", modelErr)
 						}
 					}
-					refresh()
+					// Entity model changes live in the GL scene; avoid a full software UI repaint.
 				case world.MonsterMoveOpcode:
 					move, moveErr := world.ParseMonsterMove(event.Packet.Body)
 					if moveErr != nil {
@@ -945,7 +953,6 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 							entity.node.Dispose()
 						}
 						delete(worldEntities, guid)
-						refresh()
 					}
 				}
 			default:
