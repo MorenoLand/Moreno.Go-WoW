@@ -55,6 +55,8 @@ var worldUIFiles = []string{
 	`Interface\FrameXML\VoiceChat.xml`,
 	`Interface\FrameXML\ReadyCheck.xml`,
 	`Interface\FrameXML\PlayerFrame.xml`,
+	`Interface\FrameXML\CastingBarFrame.xml`,
+	`Interface\FrameXML\TargetFrame.xml`,
 }
 
 func (eng *UIEngine) LoadWorldUI() error {

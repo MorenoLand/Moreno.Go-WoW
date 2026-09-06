@@ -26,6 +26,9 @@ func TestLiveWorldMainMenuBarLoads(t *testing.T) {
 			t.Fatalf("%s missing or hidden: %#v", name, frame)
 		}
 	}
+	if engine.Rt.widgets["TargetFrame"] == nil {
+		t.Fatal("TargetFrame missing")
+	}
 	bar := engine.Rt.widgets["MainMenuExpBar"]
 	if bar.kind != kindStatusBar || bar.statusBarTexture == nil || bar.statusBarTexture.textureFile == "" {
 		t.Fatalf("MainMenuExpBar status state=%#v", bar)
