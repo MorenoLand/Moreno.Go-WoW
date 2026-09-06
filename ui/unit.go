@@ -449,6 +449,11 @@ func registerUnitAPI(rt *Runtime) {
 		L.Push(lua.LBool(info != nil && info.Dead))
 		return 1
 	})
+	reg("UnitIsGhost", func(L *lua.LState) int {
+		info := rt.unitInfo(L.OptString(1, ""))
+		L.Push(lua.LBool(info != nil && info.Dead))
+		return 1
+	})
 	reg("UnitIsVisible", func(L *lua.LState) int {
 		info := rt.unitInfo(L.OptString(1, ""))
 		L.Push(lua.LBool(info != nil && info.Exists && info.Visible))

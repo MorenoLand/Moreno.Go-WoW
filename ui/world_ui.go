@@ -60,6 +60,7 @@ var worldUIFiles = []string{
 	`Interface\FrameXML\PartyFrameTemplates.xml`,
 	`Interface\FrameXML\PetFrame.xml`,
 	`Interface\FrameXML\BuffFrame.xml`,
+	`Interface\FrameXML\PartyFrame.xml`,
 }
 
 func (eng *UIEngine) LoadWorldUI() error {
