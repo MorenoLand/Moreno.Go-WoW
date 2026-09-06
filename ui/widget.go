@@ -996,6 +996,8 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.layerLevel = layerOrder(L.CheckString(2))
 			return 0
 		},
+		"SetPlayerTextureHeight": func(L *lua.LState, w *widget) int { return 0 },
+		"SetPlayerTextureWidth": func(L *lua.LState, w *widget) int { return 0 },
 		"SetOrientation": func(L *lua.LState, w *widget) int {
 			w.orientation = L.CheckString(2)
 			return 0
@@ -1352,6 +1354,14 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 				w.vertexColor = rgba{float64(L.CheckNumber(2)), float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), float64(L.CheckNumber(5))}
 			}
 			return 0
+		},
+		"GetTexture": func(L *lua.LState, w *widget) int {
+			if w.textureFile == "" {
+				L.Push(lua.LNil)
+			} else {
+				L.Push(lua.LString(w.textureFile))
+			}
+			return 1
 		},
 		"SetBlendMode": func(L *lua.LState, w *widget) int {
 			w.blendMode = L.CheckString(2)

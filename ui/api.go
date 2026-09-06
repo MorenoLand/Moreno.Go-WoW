@@ -271,6 +271,13 @@ func registerGlueAPI(rt *Runtime) {
 	reg("GetPetActionCooldown", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 3 })
 	reg("CastPetAction", func(L *lua.LState) int { return 0 })
 	reg("GetCurrentMapAreaID", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("GetTrackingTexture", func(L *lua.LState) int { L.Push(lua.LNil); return 1 })
+	reg("GetNumTrackingTypes", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("GetTrackingInfo", func(L *lua.LState) int { return 4 })
+	reg("GetLFGProposal", func(L *lua.LState) int { return 10 })
+	reg("GetLFGInfoServer", func(L *lua.LState) int { return 7 })
+	reg("GetLFGRoleUpdate", func(L *lua.LState) int { return 3 })
+	reg("IsPartyLFG", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("GetMinimapZoneText", func(L *lua.LState) int {
 		if idx := rt.Glue.SelectedCharacter; idx >= 1 && idx <= len(rt.Glue.Characters) {
 			L.Push(lua.LString(rt.Glue.Characters[idx-1].Zone))
