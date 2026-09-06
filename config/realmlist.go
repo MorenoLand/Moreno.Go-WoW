@@ -10,6 +10,8 @@ import (
 
 // RealmlistPath returns the native loose-file path Data\<locale>\realmlist.wtf.
 // dataPath is the client's Data directory (as used by Moreno and WOW_TEST_DATA).
+// Native Wow.exe builds this as sprintf("data\\%s\\", locale) + "realmlist.wtf"
+// (FUN_006b0bf0 / "%srealmlist.wtf").
 func RealmlistPath(dataPath, locale string) string {
 	dataPath = strings.TrimSpace(dataPath)
 	locale = strings.TrimSpace(locale)
@@ -131,24 +133,60 @@ func unquoteWTFToken(value string) string {
 	return ""
 }
 
-// LoadRealmlistAuthAddress loads the auth host the way the original client does:
-// prefer the loose Data\<locale>\realmlist.wtf file (not an MPQ entry), else
-// fall back to install\WTF\Config.wtf SET realmList when present.
-// Returns ok=false when neither source yields a host (caller keeps prior auth).
+func readRealmlistFile(path string) (string, bool, error) {
+	if path == "" {
+		return "", false, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	host, found, parseErr := ParseRealmlistWTF(string(data))
+	if parseErr != nil {
+		return "", false, fmt.Errorf("%s: %w", path, parseErr)
+	}
+	return host, found, nil
+}
+
+// LoadRealmlistAuthAddress mirrors Wow.exe FUN_006b0bf0 + FUN_00766530:
+//  1. Data\<locale>\realmlist.wtf   ("%srealmlist.wtf" with prefix data\<locale>\)
+//  2. bare realmlist.wtf (install root / Data / cwd)
+//  3. WTF\realmlist.wtf             (FUN_00766530 second open path)
+//  4. WTF\Config.wtf SET realmList  (CVar store; file exec overrides when present)
+//
+// Returns ok=false when no source yields a host (caller keeps prior auth).
+// Loose files only — native does not read realmlist from locale MPQs.
 func LoadRealmlistAuthAddress(dataPath, locale string) (string, bool, error) {
-	path := RealmlistPath(dataPath, locale)
-	if path != "" {
-		data, err := os.ReadFile(path)
-		if err == nil {
-			host, found, parseErr := ParseRealmlistWTF(string(data))
-			if parseErr != nil {
-				return "", false, fmt.Errorf("%s: %w", path, parseErr)
-			}
-			if found {
-				return host, true, nil
-			}
-		} else if !os.IsNotExist(err) {
+	dataPath = strings.TrimSpace(dataPath)
+	if host, ok, err := readRealmlistFile(RealmlistPath(dataPath, locale)); err != nil || ok {
+		return host, ok, err
+	}
+	install := ""
+	if dataPath != "" {
+		install = filepath.Dir(dataPath)
+	}
+	candidates := make([]string, 0, 6)
+	if dataPath != "" {
+		candidates = append(candidates, filepath.Join(dataPath, "realmlist.wtf"))
+	}
+	if install != "" && install != "." {
+		candidates = append(candidates, filepath.Join(install, "realmlist.wtf"))
+	}
+	candidates = append(candidates, "realmlist.wtf")
+	if install != "" && install != "." {
+		candidates = append(candidates, filepath.Join(install, "WTF", "realmlist.wtf"))
+	}
+	candidates = append(candidates, filepath.Join("WTF", "realmlist.wtf"))
+	for _, path := range candidates {
+		host, ok, err := readRealmlistFile(path)
+		if err != nil {
 			return "", false, err
+		}
+		if ok {
+			return host, true, nil
 		}
 	}
 	cfgPath := ConfigWTFPath(dataPath)

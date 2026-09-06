@@ -118,3 +118,36 @@ func TestLoadRealmlistAuthAddressReadsNativeInstall(t *testing.T) {
 		t.Fatalf("round-trip parse=%q ok=%v err=%v host=%q", parsed, ok, err, host)
 	}
 }
+
+func TestLoadRealmlistAuthAddressFallsBackToBareFile(t *testing.T) {
+	root := t.TempDir()
+	data := filepath.Join(root, "Data")
+	if err := os.MkdirAll(filepath.Join(data, "enUS"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "realmlist.wtf"), []byte("set realmlist bare-host\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host, ok, err := LoadRealmlistAuthAddress(data, "enUS")
+	if err != nil || !ok || host != "bare-host" {
+		t.Fatalf("bare fallback: host=%q ok=%v err=%v", host, ok, err)
+	}
+}
+
+func TestLoadRealmlistAuthAddressFallsBackToWTFRealmlist(t *testing.T) {
+	root := t.TempDir()
+	data := filepath.Join(root, "Data")
+	if err := os.MkdirAll(filepath.Join(data, "enUS"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "WTF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "WTF", "realmlist.wtf"), []byte("set realmlist wtf-dir-host\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host, ok, err := LoadRealmlistAuthAddress(data, "enUS")
+	if err != nil || !ok || host != "wtf-dir-host" {
+		t.Fatalf("WTF\\realmlist fallback: host=%q ok=%v err=%v", host, ok, err)
+	}
+}
