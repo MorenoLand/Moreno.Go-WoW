@@ -350,14 +350,14 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 			}
 			eng.releaseLayer()
 			for _, child := range orderedChildren(w.children) {
-				if child.shown && child != w.scrollChild {
+				if child.shown && child != w.scrollChild && !childDrawsBehindParent(child, w) {
 					paint(target, child, rect)
 				}
 			}
 			return
 		}
 		for _, child := range orderedChildren(w.children) {
-			if child.shown && !(w.kind == kindEditBox && w.text != "" && child.kind == kindFontString && strings.HasSuffix(strings.ToLower(child.name), "fill")) {
+			if child.shown && !childDrawsBehindParent(child, w) && !(w.kind == kindEditBox && w.text != "" && child.kind == kindFontString && strings.HasSuffix(strings.ToLower(child.name), "fill")) {
 				paint(target, child, rect)
 			}
 		}
@@ -370,6 +370,14 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 			Y0: rect.Y0 * uiScale,
 			X1: rect.X1 * uiScale,
 			Y1: rect.Y1 * uiScale,
+		}
+
+		// Child frames with a lower strata/level (e.g. OptionsFrame $parentBackdrop at
+		// parent.frameLevel-1) draw behind this frame's backdrop and layers.
+		for _, child := range orderedChildren(w.children) {
+			if child.shown && childDrawsBehindParent(child, w) {
+				paint(target, child, rect)
+			}
 		}
 
 		// ─── Backdrop ────────────────────────────────────────────────────
@@ -433,13 +441,13 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 		if w.kind == kindButton || w.kind == kindCheckButton {
 			children := orderedChildren(w.children)
 			for _, child := range children {
-				if child.shown && child.layerLevel < layerArtwork {
+				if child.shown && !childDrawsBehindParent(child, w) && child.layerLevel < layerArtwork {
 					paint(target, child, rect)
 				}
 			}
 			eng.paintButtonState(w, rect, func(child *widget, childRect Rect) { paint(target, child, childRect) })
 			for _, child := range children {
-				if child.shown && child.layerLevel >= layerArtwork {
+				if child.shown && !childDrawsBehindParent(child, w) && child.layerLevel >= layerArtwork {
 					paint(target, child, rect)
 				}
 			}
@@ -1737,6 +1745,20 @@ func frameStrataName(value int) string {
 	default:
 		return "MEDIUM"
 	}
+}
+
+func childDrawsBehindParent(child, parent *widget) bool {
+	if child == nil || parent == nil {
+		return false
+	}
+	// Regions are painted with their parent, not as independent frames.
+	if child.kind == kindTexture || child.kind == kindFontString {
+		return false
+	}
+	if child.frameStrata != parent.frameStrata {
+		return child.frameStrata < parent.frameStrata
+	}
+	return child.frameLevel < parent.frameLevel
 }
 
 func orderedChildren(children []*widget) []*widget {

@@ -1023,6 +1023,9 @@ func registerGlueAPI(rt *Runtime) {
 			w.id = L.CheckInt(5)
 		}
 		w.parent = parent
+		if parent != nil {
+			w.frameStrata = parent.frameStrata
+		}
 		addWidgetChild(parent, w)
 		if template != "" && rt.instantiateTemplate != nil {
 			rt.instantiateTemplate(w, template)

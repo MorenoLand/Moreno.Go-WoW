@@ -244,7 +244,7 @@ func (w *widget) ensureFields(L *lua.LState) *lua.LTable {
 }
 
 func newWidget(kind widgetKind, name string) *widget {
-	return &widget{
+	w := &widget{
 		kind:        kind,
 		name:        name,
 		shown:       true,
@@ -259,6 +259,12 @@ func newWidget(kind widgetKind, name string) *widget {
 		events:      make(map[string]bool),
 		texCoordL:   0, texCoordR: 1, texCoordT: 0, texCoordB: 1,
 	}
+	// Buttons, sliders, and edit boxes receive mouse by default in the client.
+	switch kind {
+	case kindButton, kindCheckButton, kindEditBox, kindSlider:
+		w.enableMouse = true
+	}
+	return w
 }
 
 func addWidgetChild(parent, child *widget) {

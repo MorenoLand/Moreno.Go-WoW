@@ -482,6 +482,11 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 	w := newWidget(kind, name)
 	w.parent = parent
 	l.applyWidgetAttrs(w, merged)
+	if parent != nil {
+		if _, ok := merged.attr("frameStrata"); !ok {
+			w.frameStrata = parent.frameStrata
+		}
+	}
 	if parent != nil && parent.kind == kindScrollFrame {
 		parent.scrollChild = w
 	}
@@ -703,6 +708,9 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 	}
 	w := newWidget(kind, resolveParentName(merged.attrDefault("name", ""), parent.name))
 	w.parent = parent
+	if parent != nil {
+		w.frameStrata = parent.frameStrata
+	}
 	if kind == kindTexture {
 		w.textureFile = merged.attrDefault("file", "")
 		w.alphaMode = merged.attrDefault("alphaMode", "")

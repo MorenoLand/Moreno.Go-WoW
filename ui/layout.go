@@ -84,21 +84,38 @@ func resolveRect(w *widget, parent Rect, relative func(string) (Rect, bool)) Rec
 
 	rect := Rect{}
 	x0Set, x1Set, y0Set, y1Set := false, false, false, false
+	// Resolve corner anchors so an offset on one side is not overwritten by the
+	// opposite corner (OptionsFrameListTemplate spacer uses TOPLEFT y=7 /
+	// BOTTOMLEFT y=-2 while the other corner stays at 0).
 	if v, ok := anchorPos["TOPLEFT"]; ok {
 		rect.X0, rect.Y1 = v[0], v[1]
 		x0Set, y1Set = true, true
 	}
-	if v, ok := anchorPos["BOTTOMRIGHT"]; ok {
-		rect.X1, rect.Y0 = v[0], v[1]
-		x1Set, y0Set = true, true
+	if v, ok := anchorPos["BOTTOMLEFT"]; ok {
+		if !x0Set {
+			rect.X0 = v[0]
+			x0Set = true
+		}
+		rect.Y0 = v[1]
+		y0Set = true
 	}
 	if v, ok := anchorPos["TOPRIGHT"]; ok {
-		rect.X1, rect.Y1 = v[0], v[1]
-		x1Set, y1Set = true, true
+		rect.X1 = v[0]
+		x1Set = true
+		if !y1Set {
+			rect.Y1 = v[1]
+			y1Set = true
+		}
 	}
-	if v, ok := anchorPos["BOTTOMLEFT"]; ok {
-		rect.X0, rect.Y0 = v[0], v[1]
-		x0Set, y0Set = true, true
+	if v, ok := anchorPos["BOTTOMRIGHT"]; ok {
+		if !x1Set {
+			rect.X1 = v[0]
+			x1Set = true
+		}
+		if !y0Set {
+			rect.Y0 = v[1]
+			y0Set = true
+		}
 	}
 	if v, ok := anchorPos["LEFT"]; ok {
 		rect.X0 = v[0]
