@@ -20,8 +20,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("loading %s: %v", configPath, err)
 	}
-	if value := os.Getenv("WOW_AUTH"); value != "" {
-		options.AuthAddress = value
+	authFromEnv := os.Getenv("WOW_AUTH")
+	if authFromEnv != "" {
+		options.AuthAddress = authFromEnv
 	}
 	if value := os.Getenv("WOW_ACCOUNT"); value != "" {
 		options.Account = value
@@ -60,6 +61,21 @@ func main() {
 		flag.VisitAll(func(option *flag.Flag) { fmt.Fprintf(os.Stderr, "  --%s\t%s\n", option.Name, option.Usage) })
 	}
 	flag.Parse()
+	authFlagSet := false
+	flag.Visit(func(option *flag.Flag) {
+		if option.Name == "auth" {
+			authFlagSet = true
+		}
+	})
+	// Native Wow.exe reads Data\<locale>\realmlist.wtf (loose file, not MPQ).
+	// Explicit WOW_AUTH / --auth keep operator overrides above that file.
+	if authFromEnv == "" && !authFlagSet && options.DataPath != "" {
+		if host, ok, loadErr := config.LoadRealmlistAuthAddress(options.DataPath, options.Locale); loadErr != nil {
+			log.Printf("realmlist: %v", loadErr)
+		} else if ok {
+			options.AuthAddress = host
+		}
+	}
 	if password == "" && options.RememberMe {
 		if saved, err := config.LoadPassword(options.Account, options.AuthAddress); err == nil {
 			password = saved
