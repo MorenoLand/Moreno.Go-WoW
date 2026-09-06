@@ -60,6 +60,9 @@ type Runtime struct {
 	// validateMovie probes a cinematic path the way native StartMovie does.
 	validateMovie func(file string, volume float64) bool
 
+	loadAddOn    func(name string) (bool, string)
+	loadedAddOns map[string]bool
+
 	traceInvocations []string
 
 	// Host hooks supply client state that lives outside the interface
@@ -143,6 +146,7 @@ func NewRuntime(host Host) *Runtime {
 		virtuals:          make(map[string]*xmlNode),
 		fonts:             make(map[string]*Font),
 		units:             make(map[string]*UnitInfo),
+		loadedAddOns:      make(map[string]bool),
 		events:            make(map[string][]*widget),
 		cvars:             make(map[string]string),
 		cvarDefaults:      make(map[string]string),

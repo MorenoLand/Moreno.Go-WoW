@@ -277,6 +277,11 @@ func registerGlueAPI(rt *Runtime) {
 		return 11
 	})
 	reg("GetChatWindowChannels", func(L *lua.LState) int { return 0 })
+	reg("GetNumMacros", func(L *lua.LState) int {
+		L.Push(lua.LNumber(0))
+		L.Push(lua.LNumber(0))
+		return 2
+	})
 	reg("CombatLogResetFilter", func(L *lua.LState) int { return 0 })
 	reg("CombatLogAddFilter", func(L *lua.LState) int { return 0 })
 	reg("CombatLogGetNumEntries", func(L *lua.LState) int {
@@ -332,12 +337,24 @@ func registerGlueAPI(rt *Runtime) {
 	})
 	reg("IsAddOnLoaded", func(L *lua.LState) int {
 		name := strings.ToLower(L.OptString(1, ""))
-		if name == "blizzard_combatlog" {
-			L.Push(lua.LBool(rt.widgets["CombatLogQuickButtonFrame_Custom"] != nil))
-			return 1
-		}
-		L.Push(lua.LFalse)
+		L.Push(lua.LBool(rt.loadedAddOns[name]))
 		return 1
+	})
+	reg("LoadAddOn", func(L *lua.LState) int {
+		name := L.CheckString(1)
+		if rt.loadAddOn == nil {
+			L.Push(lua.LFalse)
+			L.Push(lua.LString("ADDON_NOT_FOUND"))
+			return 2
+		}
+		loaded, reason := rt.loadAddOn(name)
+		L.Push(lua.LBool(loaded))
+		if loaded {
+			L.Push(lua.LNil)
+		} else {
+			L.Push(lua.LString(reason))
+		}
+		return 2
 	})
 	reg("sort", func(L *lua.LState) int {
 		table := L.GetGlobal("table")
@@ -1375,10 +1392,13 @@ func registerStringHelpers(L *lua.LState) {
 	math := L.GetGlobal("math").(*lua.LTable)
 	for _, name := range []string{"floor", "ceil", "abs", "min", "max", "sqrt",
 		"sin", "cos", "tan", "asin", "acos", "atan", "deg", "rad", "exp",
-		"log", "log10", "fmod", "modf"} {
+		"log", "log10", "fmod", "mod", "modf"} {
 		if fn := math.RawGetString(name); fn.Type() == lua.LTFunction {
 			L.SetGlobal(name, fn)
 		}
+	}
+	if L.GetGlobal("mod").Type() != lua.LTFunction {
+		L.SetGlobal("mod", math.RawGetString("fmod"))
 	}
 
 	// Sound device enumeration.

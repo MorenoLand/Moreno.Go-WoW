@@ -197,6 +197,7 @@ func newUIEngine(rt *Runtime, loader *Loader, bgImagePath string) (*UIEngine, er
 		uiScale:      1,
 	}
 	rt.measureText = eng.measureFontString
+	rt.loadAddOn = eng.loadAddOn
 	return eng, nil
 }
 
@@ -308,6 +309,7 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 
 func (eng *UIEngine) RenderWorld(screenWidth, screenHeight int) *image.RGBA {
 	eng.worldActive = true
+	eng.syncCombatLogButtons()
 	return eng.render(screenWidth, screenHeight, eng.worldRoot, false)
 }
 

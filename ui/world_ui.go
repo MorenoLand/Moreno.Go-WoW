@@ -129,8 +129,20 @@ end
 	// Drop glue-screen keyboard focus (e.g. AccountLoginAccountEdit) so the
 	// first world ESC runs TOGGLEGAMEMENU instead of only clearing focus.
 	eng.Rt.setFocus(nil)
+	eng.syncCombatLogButtons()
 	eng.worldUIReady = true
 	return nil
+}
+
+func (eng *UIEngine) syncCombatLogButtons() {
+	if eng == nil || eng.Rt == nil {
+		return
+	}
+	buttons := eng.Rt.widgets["CombatLogButtons"]
+	combat := eng.Rt.widgets["ChatFrame2"]
+	if buttons != nil && combat != nil {
+		buttons.shown = combat.shown
+	}
 }
 
 func (eng *UIEngine) loadCombatLogBase() error {
@@ -148,14 +160,44 @@ func (eng *UIEngine) loadCombatLogBase() error {
 func (eng *UIEngine) loadCombatLogAddon() error {
 	combatLogTOC := `Interface\AddOns\Blizzard_CombatLog\Blizzard_CombatLog.toc`
 	if _, err := eng.AssetLoader.ReadFile(combatLogTOC); err == nil {
-		if err := eng.AssetLoader.LoadTOC(combatLogTOC, nil); err != nil {
-			return fmt.Errorf("load world UI %s: %w", combatLogTOC, err)
+		if loaded, reason := eng.loadAddOn("Blizzard_CombatLog"); !loaded {
+			return fmt.Errorf("load world UI %s: %s", combatLogTOC, reason)
 		}
-		eng.Rt.FireEvent("ADDON_LOADED", lua.LString("Blizzard_CombatLog"))
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("probe world UI %s: %w", combatLogTOC, err)
 	}
 	return nil
+}
+
+func (eng *UIEngine) loadAddOn(name string) (bool, string) {
+	if eng == nil || eng.AssetLoader == nil || eng.Rt == nil {
+		return false, "ADDON_NOT_FOUND"
+	}
+	key := strings.ToLower(strings.TrimSpace(name))
+	if eng.Rt.loadedAddOns[key] {
+		return true, ""
+	}
+	tocs := map[string]string{
+		"blizzard_bindingui": `Interface\AddOns\Blizzard_BindingUI\Blizzard_BindingUI.toc`,
+		"blizzard_combatlog": `Interface\AddOns\Blizzard_CombatLog\Blizzard_CombatLog.toc`,
+		"blizzard_macroui":   `Interface\AddOns\Blizzard_MacroUI\Blizzard_MacroUI.toc`,
+	}
+	toc, ok := tocs[key]
+	if !ok {
+		return false, "ADDON_NOT_FOUND"
+	}
+	if _, err := eng.AssetLoader.ReadFile(toc); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, "ADDON_NOT_FOUND"
+		}
+		return false, "ADDON_LOAD_FAILED"
+	}
+	if err := eng.AssetLoader.LoadTOC(toc, nil); err != nil {
+		return false, "ADDON_LOAD_FAILED"
+	}
+	eng.Rt.loadedAddOns[key] = true
+	eng.Rt.FireEvent("ADDON_LOADED", lua.LString(name))
+	return true, ""
 }
 
 func (eng *UIEngine) SetWorldLoading(loading bool) {
