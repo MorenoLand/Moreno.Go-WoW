@@ -69,6 +69,7 @@ var worldUIFiles = []string{
 	`Interface\FrameXML\HybridScrollFrame.xml`,
 	`Interface\FrameXML\PaperDollFrame.xml`,
 	`Interface\FrameXML\SpellBookFrame.xml`,
+	`Interface\FrameXML\QuestFrameTemplates.xml`,
 }
 
 func (eng *UIEngine) LoadWorldUI() error {
