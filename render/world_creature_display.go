@@ -93,6 +93,11 @@ func worldEntityScale(entity *worldEntity, displayScale, modelScale float32) flo
 }
 
 func resolveWorldCreatureExtraGeosets(loader *ui.Loader, extra worldCreatureExtra, skin parsedSkin) (map[uint16]bool, string) {
+	active, sections := resolveWorldCreatureExtraAppearance(loader, extra, skin)
+	return active, sections.cape
+}
+
+func resolveWorldCreatureExtraAppearance(loader *ui.Loader, extra worldCreatureExtra, skin parsedSkin) (map[uint16]bool, characterSectionTextures) {
 	character := world.Character{
 		Race:       extra.race,
 		Gender:     extra.gender,
@@ -114,17 +119,17 @@ func resolveWorldCreatureExtraGeosets(loader *ui.Loader, extra worldCreatureExtr
 		}
 		character.Equipment[slot] = world.Equipment{DisplayID: displayID, InventoryType: inv}
 	}
-	sections := characterSectionTextures{}
+	sections, _ := resolveCharacterSections(loader, character)
 	active, err := resolveCharacterEquipment(loader, character, &sections, skin)
 	if err != nil {
 		active = map[uint16]bool{0: true}
 	}
-	return active, sections.cape
+	return active, sections
 }
 
 // buildWorldUnitModel builds an M2 for world placement at native vertex scale.
 // Unlike buildGlueModel, it does not run the UI modelTransform fit (3/maxDimension).
-func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, skin parsedSkin, textureOverrides map[int]string, activeGeosets map[uint16]bool) (*core.Node, error) {
+func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, skin parsedSkin, textureOverrides map[int]string, activeGeosets map[uint16]bool, preloaded map[string]*texture.Texture2D) (*core.Node, error) {
 	parts := buildM2PartsWithFilters(model, skin, textureOverrides, activeGeosets)
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("%s: no renderable skin batches", modelPath)
@@ -198,7 +203,10 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 			mat.SetBlending(material.BlendNormal)
 		}
 		for textureIndex, texturePath := range part.texturePaths {
-			tex := textures[texturePath]
+			tex := preloaded[texturePath]
+			if tex == nil {
+				tex = textures[texturePath]
+			}
 			if tex == nil {
 				tex = loadModelTexture(loader, texturePath)
 				if tex != nil {
@@ -265,6 +273,7 @@ func buildWorldCreatureModelFromParts(loader *ui.Loader, path string, variations
 		return nil, err
 	}
 	overrides := make(map[int]string)
+	preloaded := make(map[string]*texture.Texture2D)
 	bakePath := ""
 	if bake != "" {
 		bakePath = `Textures\BakedNpcTextures\` + bake
@@ -274,16 +283,45 @@ func buildWorldCreatureModelFromParts(loader *ui.Loader, path string, variations
 	}
 	capePath := ""
 	var activeGeosets map[uint16]bool
+	sections := characterSectionTextures{}
 	if extra.ok {
-		activeGeosets, capePath = resolveWorldCreatureExtraGeosets(loader, extra, skin)
+		activeGeosets, sections = resolveWorldCreatureExtraAppearance(loader, extra, skin)
+		capePath = sections.cape
+	}
+	bodyPath := sections.bodySkin
+	if extra.ok && bakePath == "" && bodyPath != "" && (sections.faceLower != "" || sections.faceUpper != "" || sections.facialHairLower != "" || sections.facialHairUpper != "" || sections.scalpLower != "" || sections.scalpUpper != "" || len(sections.underwear) > 0 || len(sections.regions) > 0) {
+		composite, compositeErr := composeCharacterSkin(loader, sections)
+		if compositeErr == nil {
+			bodyPath = fmt.Sprintf("__world_character_skin_%d", extra.id)
+			preloaded[bodyPath] = composite
+		}
 	}
 	for index, textureType := range model.textureTypes {
 		texPath := ""
-		if textureType == 1 && bakePath != "" {
-			texPath = bakePath
-		} else if textureType == 2 && capePath != "" {
+		switch textureType {
+		case 1:
+			if bakePath != "" {
+				texPath = bakePath
+			} else {
+				texPath = bodyPath
+			}
+		case 2:
 			texPath = capePath
-		} else {
+		case 6:
+			texPath = sections.hair
+			if texPath == "" && extra.ok {
+				texPath = fmt.Sprintf(`Character\%s\Hair00_00.blp`, characterRaceFolder(extra.race))
+			}
+		case 8:
+			texPath = sections.skinExtra
+			if texPath == "" && len(sections.underwear) > 0 {
+				texPath = sections.underwear[0].path
+			}
+			if texPath == "" {
+				texPath = bodyPath
+			}
+		}
+		if texPath == "" {
 			slot := -1
 			switch textureType {
 			case 1, 2, 11:
@@ -301,5 +339,5 @@ func buildWorldCreatureModelFromParts(loader *ui.Loader, path string, variations
 			overrides[index] = texPath
 		}
 	}
-	return buildWorldUnitModel(loader, path, model, skin, overrides, activeGeosets)
+	return buildWorldUnitModel(loader, path, model, skin, overrides, activeGeosets, preloaded)
 }

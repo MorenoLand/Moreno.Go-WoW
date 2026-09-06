@@ -85,14 +85,21 @@ func TestLiveWorldCreatureKeepsNativeScaleAndExtraGeosets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	active, cape := resolveWorldCreatureExtraGeosets(loader, def.extra, skin)
+	active, appearance := resolveWorldCreatureExtraAppearance(loader, def.extra, skin)
+	cape := appearance.cape
 	if !active[0] {
 		t.Fatalf("extra geosets missing body: %v", active)
 	}
 	if def.extra.race == 4 && !active[702] {
 		t.Fatalf("night elf NPC missing ear geoset 702: %v", active)
 	}
-	t.Logf("display 2575 active=%v cape=%q displayScale=%v modelScale=%v", active, cape, def.displayScale, def.modelScale)
+	if appearance.hair == "" {
+		t.Fatalf("display 2575 missing resolved hair texture: %+v", appearance)
+	}
+	if len(appearance.regions) == 0 && def.bake == "" {
+		t.Fatalf("display 2575 missing resolved armor texture regions: %+v", appearance)
+	}
+	t.Logf("display 2575 active=%v hair=%q armorRegions=%d cape=%q displayScale=%v modelScale=%v", active, appearance.hair, len(appearance.regions), cape, def.displayScale, def.modelScale)
 }
 
 func TestLiveWorldCreatureStagUsesDisplayScaleWithoutNormalize(t *testing.T) {
