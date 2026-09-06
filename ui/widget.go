@@ -448,10 +448,16 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"GetWidth": func(L *lua.LState, w *widget) int {
+			if w.kind == kindFontString && w.autoTextWidth && rt.measureText != nil {
+				rt.measureText(w)
+			}
 			L.Push(lua.LNumber(w.width))
 			return 1
 		},
 		"GetHeight": func(L *lua.LState, w *widget) int {
+			if w.kind == kindFontString && w.autoTextHeight && rt.measureText != nil {
+				rt.measureText(w)
+			}
 			L.Push(lua.LNumber(w.height))
 			return 1
 		},
@@ -888,7 +894,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"SetThumbTexture": func(L *lua.LState, w *widget) int {
-			w.thumbTexture = rt.textureArg(L, 2)
+			w.thumbTexture = rt.buttonTextureArg(w, w.thumbTexture, L, 2)
 			return 0
 		},
 		"SetVerticalScroll": func(L *lua.LState, w *widget) int {
@@ -1163,7 +1169,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 1
 		},
 		"SetNormalTexture": func(L *lua.LState, w *widget) int {
-			w.normalTexture = rt.textureArg(L, 2)
+			w.normalTexture = rt.buttonTextureArg(w, w.normalTexture, L, 2)
 			return 0
 		},
 		"GetNormalTexture": func(L *lua.LState, w *widget) int {
@@ -1175,11 +1181,11 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 1
 		},
 		"SetPushedTexture": func(L *lua.LState, w *widget) int {
-			w.pushedTexture = rt.textureArg(L, 2)
+			w.pushedTexture = rt.buttonTextureArg(w, w.pushedTexture, L, 2)
 			return 0
 		},
 		"SetHighlightTexture": func(L *lua.LState, w *widget) int {
-			w.highlightTexture = rt.textureArg(L, 2)
+			w.highlightTexture = rt.buttonTextureArg(w, w.highlightTexture, L, 2)
 			return 0
 		},
 		"GetHighlightTexture": func(L *lua.LState, w *widget) int {
@@ -1516,7 +1522,8 @@ func tableNumber(t *lua.LTable, key string) lua.LNumber {
 }
 
 // textureArg resolves a texture argument that may be a path string or a
-// texture widget reference.
+// texture widget reference. Path strings create an unparented texture with no
+// layout; prefer buttonTextureArg for Button/Slider Set*Texture APIs.
 func (rt *Runtime) textureArg(L *lua.LState, idx int) *widget {
 	switch v := L.Get(idx).(type) {
 	case lua.LString:
@@ -1529,6 +1536,43 @@ func (rt *Runtime) textureArg(L *lua.LState, idx int) *widget {
 		}
 	}
 	return nil
+}
+
+// buttonTextureArg applies SetNormalTexture-style arguments the way the
+// original client does: a path updates the existing region (preserving
+// TexCoords/alphaMode/fill anchors) or creates a setAllPoints child texture.
+func (rt *Runtime) buttonTextureArg(button, existing *widget, L *lua.LState, idx int) *widget {
+	switch v := L.Get(idx).(type) {
+	case lua.LString:
+		path := v.String()
+		if existing != nil {
+			existing.textureFile = path
+			existing.shown = true
+			if existing.parent == nil {
+				existing.parent = button
+			}
+			if len(existing.points) == 0 && existing.width == 0 && existing.height == 0 {
+				existing.points = []anchorPoint{
+					{point: "TOPLEFT", relativePoint: "TOPLEFT"},
+					{point: "BOTTOMRIGHT", relativePoint: "BOTTOMRIGHT"},
+				}
+			}
+			return existing
+		}
+		tex := newWidget(kindTexture, "")
+		tex.parent = button
+		tex.textureFile = path
+		tex.points = []anchorPoint{
+			{point: "TOPLEFT", relativePoint: "TOPLEFT"},
+			{point: "BOTTOMRIGHT", relativePoint: "BOTTOMRIGHT"},
+		}
+		return tex
+	case *lua.LUserData:
+		if w, ok := v.Value.(*widget); ok {
+			return w
+		}
+	}
+	return existing
 }
 
 var _ = fmt.Sprintf

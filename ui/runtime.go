@@ -51,6 +51,11 @@ type Runtime struct {
 	// created through CreateFrame; the loader installs it.
 	instantiateTemplate func(w *widget, template string)
 
+	// measureText updates FontString width/height from the current text when
+	// auto-sizing is enabled. The UI engine installs this so GetWidth/GetHeight
+	// match the original client's immediate post-SetText metrics.
+	measureText func(w *widget)
+
 	traceInvocations []string
 
 	// Host hooks supply client state that lives outside the interface

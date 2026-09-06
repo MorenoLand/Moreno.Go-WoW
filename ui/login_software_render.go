@@ -172,7 +172,7 @@ func newUIEngine(rt *Runtime, loader *Loader, bgImagePath string) (*UIEngine, er
 
 	cache := map[string]image.Image{}
 
-	return &UIEngine{
+	eng := &UIEngine{
 		Rt:          rt,
 		FontObj:     fontObj,
 		FontObjSm:   fontObjSm,
@@ -180,7 +180,10 @@ func newUIEngine(rt *Runtime, loader *Loader, bgImagePath string) (*UIEngine, er
 		Cache:       cache,
 		textFaces:   make(map[string]font.Face),
 		BgImagePath: bgImagePath,
-	}, nil
+		uiScale:     1,
+	}
+	rt.measureText = eng.measureFontString
+	return eng, nil
 }
 
 func (eng *UIEngine) Close() {
@@ -717,45 +720,69 @@ func (eng *UIEngine) HandleScroll(delta float64) bool {
 }
 
 func (eng *UIEngine) prepareText(w *widget, face, faceLg font.Face) {
+	if w == nil {
+		return
+	}
 	if w.kind == kindFontString {
-		text := eng.resolveText(w.text)
-		if w.parent != nil && (w.parent.kind == kindButton || w.parent.kind == kindCheckButton) && w.parent.buttonLabel == w && w.parent.text != "" {
-			text = eng.resolveText(w.parent.text)
-		}
-		fontFace := eng.faceFor(w, face, faceLg)
-		lines := strings.Split(cleanText(text), "\n")
-		if w.autoTextWidth {
-			maxWidth := 0
-			for _, line := range lines {
-				if width := font.MeasureString(fontFace, line).Ceil(); width > maxWidth {
-					maxWidth = width
-				}
-			}
-			w.textWidth = float64(maxWidth) / eng.uiScale
-			if !w.explicitWidth {
-				if strings.EqualFold(eng.textJustify(w), "LEFT") || strings.EqualFold(eng.textJustify(w), "RIGHT") {
-					maxWidth += int(math.Ceil(8 * eng.uiScale))
-				}
-				w.width = float64(maxWidth) / eng.uiScale
-			}
-		} else {
-			maxWidth := 0
-			for _, line := range lines {
-				if width := font.MeasureString(fontFace, line).Ceil(); width > maxWidth {
-					maxWidth = width
-				}
-			}
-			w.textWidth = float64(maxWidth) / eng.uiScale
-		}
-		if w.autoTextHeight {
-			w.height = float64(fontFace.Metrics().Height.Ceil()*len(lines)) / eng.uiScale
-		}
+		eng.measureFontStringWithFaces(w, face, faceLg)
 	}
 	for _, child := range w.children {
 		eng.prepareText(child, face, faceLg)
 	}
 	if w.buttonLabel != nil && w.buttonLabel.textWidth > 0 && w.width < w.buttonLabel.textWidth+50 {
 		w.width = w.buttonLabel.textWidth + 50
+	}
+}
+
+// measureFontString updates auto-sized FontString metrics so Lua GetHeight /
+// GetWidth match the original client immediately after SetText.
+func (eng *UIEngine) measureFontString(w *widget) {
+	if eng == nil || w == nil || w.kind != kindFontString {
+		return
+	}
+	if eng.uiScale <= 0 {
+		eng.uiScale = 1
+	}
+	face := eng.cachedFace("__base13", eng.FontObj, 13*eng.uiScale)
+	faceLg := eng.cachedFace("__base16", eng.FontObj, 16*eng.uiScale)
+	eng.measureFontStringWithFaces(w, face, faceLg)
+}
+
+func (eng *UIEngine) measureFontStringWithFaces(w *widget, face, faceLg font.Face) {
+	text := eng.resolveText(w.text)
+	if w.parent != nil && (w.parent.kind == kindButton || w.parent.kind == kindCheckButton) && w.parent.buttonLabel == w && w.parent.text != "" {
+		text = eng.resolveText(w.parent.text)
+	}
+	fontFace := eng.faceFor(w, face, faceLg)
+	if fontFace == nil {
+		return
+	}
+	clean := cleanText(text)
+	var lines []string
+	if !w.autoTextWidth && w.width > 0 {
+		lines = wrapText(clean, fontFace, int(w.width*eng.uiScale))
+	} else {
+		lines = strings.Split(clean, "\n")
+	}
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	maxWidth := 0
+	for _, line := range lines {
+		if width := font.MeasureString(fontFace, line).Ceil(); width > maxWidth {
+			maxWidth = width
+		}
+	}
+	w.textWidth = float64(maxWidth) / eng.uiScale
+	if w.autoTextWidth && !w.explicitWidth {
+		width := maxWidth
+		if strings.EqualFold(eng.textJustify(w), "LEFT") || strings.EqualFold(eng.textJustify(w), "RIGHT") {
+			width += int(math.Ceil(8 * eng.uiScale))
+		}
+		w.width = float64(width) / eng.uiScale
+	}
+	if w.autoTextHeight {
+		w.height = float64(fontFace.Metrics().Height.Ceil()*len(lines)) / eng.uiScale
 	}
 }
 
