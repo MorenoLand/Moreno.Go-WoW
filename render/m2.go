@@ -31,6 +31,17 @@ const (
 	skinBatchSize          = 24
 )
 
+const (
+	m2CombinerOpaque uint16 = iota
+	m2CombinerMod
+	m2CombinerDecal
+	m2CombinerAdd
+	m2CombinerMod2X
+	m2CombinerFade
+	m2CombinerMod2XNA
+	m2CombinerAddNA
+)
+
 type m2Array struct {
 	count  int
 	offset int
@@ -177,6 +188,8 @@ type m2Part struct {
 	alpha                   float32
 	colors                  math32.ArrayF32
 	alphas                  math32.ArrayF32
+	textureCombiners        [2]float32
+	combiners               math32.ArrayF32
 	vertexRefs              []m2VertexRef
 	textureTransformIndices []int
 }
@@ -298,8 +311,10 @@ func buildGlueModel(loader *ui.Loader, modelPath string, model parsedM2, skin pa
 		}
 		colorVBO := gls.NewVBO(part.colors).AddAttrib(gls.VertexColor)
 		alphaVBO := gls.NewVBO(part.alphas).AddCustomAttrib("VertexM2Alpha", 1)
+		combinerVBO := gls.NewVBO(part.combiners).AddCustomAttrib("VertexM2Combiner", 2)
 		geom.AddVBO(colorVBO)
 		geom.AddVBO(alphaVBO)
+		geom.AddVBO(combinerVBO)
 		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
 		if part.material.blend == 1 {
 			mat.SetShader("morenowow_m2_alpha_key")
@@ -405,6 +420,7 @@ func buildGlueModel(loader *ui.Loader, modelPath string, model parsedM2, skin pa
 
 type parsedM2 struct {
 	data                   []byte
+	flags                  uint32
 	boneOffset             int
 	colorOffset            int
 	textureWeightOffset    int
@@ -418,6 +434,7 @@ type parsedM2 struct {
 	textures               []string
 	textureTypes           []uint32
 	textureCombos          []uint16
+	textureCombinerCombos  []uint16
 	textureFlags           []uint32
 	textureCoords          []uint16
 	textureWeightCombos    []uint16
@@ -478,6 +495,10 @@ func parseM2(data []byte) (parsedM2, error) {
 	if err != nil {
 		return parsedM2{}, err
 	}
+	textureCombinerCombos, err := readM2Array(data, 0x130, 2)
+	if err != nil {
+		return parsedM2{}, err
+	}
 	renderFlags, err := readM2Array(data, 0x70, m2RenderFlagSize)
 	if err != nil {
 		return parsedM2{}, err
@@ -510,7 +531,7 @@ func parseM2(data []byte) (parsedM2, error) {
 	if err != nil {
 		return parsedM2{}, err
 	}
-	result := parsedM2{data: data, boneOffset: bones.offset, colorOffset: colors.offset, textureWeightOffset: textureWeights.offset, textureTransformOffset: textureTransforms.offset, vertices: make([]m2Vertex, vertices.count), bones: make([]m2Bone, bones.count), colors: make([]m2Color, colors.count), sequences: make([]m2Sequence, sequences.count), globalLoops: make([]uint32, globalLoops.count), boneCombos: make([]uint16, boneCombos.count), textures: make([]string, textures.count), textureTypes: make([]uint32, textures.count), textureFlags: make([]uint32, textures.count), textureCombos: make([]uint16, combos.count), textureCoords: make([]uint16, textureCoords.count), textureWeightCombos: make([]uint16, textureWeightCombos.count), textureWeights: make([]m2TextureWeight, textureWeights.count), textureTransforms: make([]m2TextureTransform, textureTransforms.count), textureTransformCombos: make([]uint16, textureTransformCombos.count), renderFlags: make([]m2RenderFlag, renderFlags.count), attachments: make([]m2Attachment, attachments.count), particles: make([]m2ParticleEmitter, particles.count), events: make([]m2Event, events.count)}
+	result := parsedM2{data: data, flags: binary.LittleEndian.Uint32(data[0x10:0x14]), boneOffset: bones.offset, colorOffset: colors.offset, textureWeightOffset: textureWeights.offset, textureTransformOffset: textureTransforms.offset, vertices: make([]m2Vertex, vertices.count), bones: make([]m2Bone, bones.count), colors: make([]m2Color, colors.count), sequences: make([]m2Sequence, sequences.count), globalLoops: make([]uint32, globalLoops.count), boneCombos: make([]uint16, boneCombos.count), textures: make([]string, textures.count), textureTypes: make([]uint32, textures.count), textureFlags: make([]uint32, textures.count), textureCombos: make([]uint16, combos.count), textureCombinerCombos: make([]uint16, textureCombinerCombos.count), textureCoords: make([]uint16, textureCoords.count), textureWeightCombos: make([]uint16, textureWeightCombos.count), textureWeights: make([]m2TextureWeight, textureWeights.count), textureTransforms: make([]m2TextureTransform, textureTransforms.count), textureTransformCombos: make([]uint16, textureTransformCombos.count), renderFlags: make([]m2RenderFlag, renderFlags.count), attachments: make([]m2Attachment, attachments.count), particles: make([]m2ParticleEmitter, particles.count), events: make([]m2Event, events.count)}
 	for index := range result.globalLoops {
 		result.globalLoops[index] = binary.LittleEndian.Uint32(data[globalLoops.offset+index*4:])
 	}
@@ -560,6 +581,9 @@ func parseM2(data []byte) (parsedM2, error) {
 	}
 	for index := range result.textureCombos {
 		result.textureCombos[index] = binary.LittleEndian.Uint16(data[combos.offset+index*2:])
+	}
+	for index := range result.textureCombinerCombos {
+		result.textureCombinerCombos[index] = binary.LittleEndian.Uint16(data[textureCombinerCombos.offset+index*2:])
 	}
 	for index := range result.textureCoords {
 		result.textureCoords[index] = binary.LittleEndian.Uint16(data[textureCoords.offset+index*2:])
@@ -736,7 +760,8 @@ func buildM2PartsWithFilters(model parsedM2, skin parsedSkin, textureOverrides m
 				}
 			}
 			color, alpha := m2PartTintAt(&model, colorIndex, textureWeightIndex, 0, 0, 0)
-			part = &m2Part{texturePaths: texturePaths, textureFlags: textureFlags, uvSets: uvSets, renderOrder: batchIndex, priorityPlane: batch.priorityPlane, materialLayer: batch.materialLayer, submeshID: submesh.submeshID, uvSet: uvSet, material: materialInfo, colorIndex: colorIndex, textureWeightIndex: textureWeightIndex, color: color, alpha: alpha, textureTransformIndices: textureTransformIndices}
+			textureCombiners := m2TextureCombiners(model, batch, materialInfo, len(texturePaths))
+			part = &m2Part{texturePaths: texturePaths, textureFlags: textureFlags, uvSets: uvSets, renderOrder: batchIndex, priorityPlane: batch.priorityPlane, materialLayer: batch.materialLayer, submeshID: submesh.submeshID, uvSet: uvSet, material: materialInfo, colorIndex: colorIndex, textureWeightIndex: textureWeightIndex, color: color, alpha: alpha, textureCombiners: textureCombiners, textureTransformIndices: textureTransformIndices}
 			parts[key] = part
 		}
 		for index := start; index+2 < end; index += 3 {
@@ -762,6 +787,7 @@ func buildM2PartsWithFilters(model parsedM2, skin parsedSkin, textureOverrides m
 				part.normals.Append(normal[0], normal[1], normal[2])
 				part.colors.Append(part.color[0], part.color[1], part.color[2])
 				part.alphas.Append(part.alpha)
+				part.combiners.Append(part.textureCombiners[0], part.textureCombiners[1])
 				part.vertexRefs = append(part.vertexRefs, m2VertexRef{local: local, vertex: vertex, boneComboIndex: int(submesh.boneComboIndex)})
 				uv := vertex.uv
 				if part.uvSet == 1 {
@@ -918,6 +944,26 @@ func m2PartTintAt(model *parsedM2, colorIndex, textureWeightIndex int, sequence 
 		color[index] = clampM2Color(color[index])
 	}
 	return color, clampM2Color(alpha)
+}
+
+func m2TextureCombiners(model parsedM2, batch skinBatch, material m2RenderFlag, textureCount int) [2]float32 {
+	result := [2]float32{float32(m2CombinerMod), float32(m2CombinerMod)}
+	if textureCount > 2 {
+		textureCount = 2
+	}
+	for index := 0; index < textureCount; index++ {
+		combiner := m2CombinerMod
+		if model.flags&0x08 != 0 && int(batch.shader)+index < len(model.textureCombinerCombos) {
+			combiner = model.textureCombinerCombos[int(batch.shader)+index] & 0x07
+		} else if material.blend == 0 {
+			combiner = m2CombinerOpaque
+		}
+		if index == 0 && material.blend == 0 {
+			combiner = m2CombinerOpaque
+		}
+		result[index] = float32(combiner)
+	}
+	return result
 }
 
 func readM2TrackScalar(data []byte, offset, sequenceCount int, external map[int][]byte, inline []bool) m2TrackScalar {

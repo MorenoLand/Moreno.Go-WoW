@@ -164,8 +164,10 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 		}
 		colorVBO := gls.NewVBO(part.colors).AddAttrib(gls.VertexColor)
 		alphaVBO := gls.NewVBO(part.alphas).AddCustomAttrib("VertexM2Alpha", 1)
+		combinerVBO := gls.NewVBO(part.combiners).AddCustomAttrib("VertexM2Combiner", 2)
 		geom.AddVBO(colorVBO)
 		geom.AddVBO(alphaVBO)
+		geom.AddVBO(combinerVBO)
 		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
 		if part.material.blend == 1 {
 			mat.SetShader("morenowow_m2_alpha_key")

@@ -27,6 +27,21 @@ func TestM2PartTintHonorsColorAndWeightTracks(t *testing.T) {
 	}
 }
 
+func TestM2TextureCombinerModesFollowNativeBatchRules(t *testing.T) {
+	model := parsedM2{flags: 0x08, textureCombinerCombos: []uint16{m2CombinerMod, m2CombinerMod2X, m2CombinerMod, m2CombinerMod}}
+	batch := skinBatch{shader: 0, textureCount: 2}
+	if got := m2TextureCombiners(model, batch, m2RenderFlag{blend: 4}, 2); got != [2]float32{1, 4} {
+		t.Fatalf("additive combiner=%v", got)
+	}
+	if got := m2TextureCombiners(model, batch, m2RenderFlag{blend: 0}, 2); got != [2]float32{0, 4} {
+		t.Fatalf("opaque combiner=%v", got)
+	}
+	model.flags = 0
+	if got := m2TextureCombiners(model, batch, m2RenderFlag{blend: 2}, 1); got != [2]float32{1, 1} {
+		t.Fatalf("default combiner=%v", got)
+	}
+}
+
 func TestLiveMainMenuM2MaterialTracks(t *testing.T) {
 	dataPath := os.Getenv("WOW_TEST_DATA")
 	if dataPath == "" {
