@@ -322,10 +322,7 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 	if eng.paintCanvas == nil || !eng.paintCanvas.Bounds().Eq(bounds) {
 		eng.paintCanvas = image.NewRGBA(bounds)
 	} else {
-		clear := eng.paintCanvas.Pix
-		for i := range clear {
-			clear[i] = 0
-		}
+		clear(eng.paintCanvas.Pix)
 	}
 	canvas := eng.paintCanvas
 	if eng.rects == nil {
@@ -1843,23 +1840,40 @@ func childDrawsBehindParent(child, parent *widget) bool {
 	return child.frameLevel < parent.frameLevel
 }
 
+func childDrawOrderLess(first, second *widget) bool {
+	if isCharacterSelectButton(first) && isCharacterSelectButton(second) && isHighlighted(first) != isHighlighted(second) {
+		return isHighlighted(first) && !isHighlighted(second)
+	}
+	if first.frameStrata != second.frameStrata {
+		return first.frameStrata < second.frameStrata
+	}
+	if first.frameLevel != second.frameLevel {
+		return first.frameLevel < second.frameLevel
+	}
+	return first.layerLevel < second.layerLevel
+}
+
+func childrenAlreadyOrdered(children []*widget) bool {
+	for index := 1; index < len(children); index++ {
+		if childDrawOrderLess(children[index], children[index-1]) {
+			return false
+		}
+	}
+	return true
+}
+
 func orderedChildren(children []*widget) []*widget {
 	if len(children) < 2 {
 		return children
 	}
+	// Glue/FrameXML trees are usually already strata-ordered; avoid a
+	// per-paint alloc+sort when the existing order is valid.
+	if childrenAlreadyOrdered(children) {
+		return children
+	}
 	ordered := append([]*widget(nil), children...)
 	sort.SliceStable(ordered, func(left, right int) bool {
-		first, second := ordered[left], ordered[right]
-		if isCharacterSelectButton(first) && isCharacterSelectButton(second) && isHighlighted(first) != isHighlighted(second) {
-			return isHighlighted(first) && !isHighlighted(second)
-		}
-		if first.frameStrata != second.frameStrata {
-			return first.frameStrata < second.frameStrata
-		}
-		if first.frameLevel != second.frameLevel {
-			return first.frameLevel < second.frameLevel
-		}
-		return first.layerLevel < second.layerLevel
+		return childDrawOrderLess(ordered[left], ordered[right])
 	})
 	return ordered
 }
