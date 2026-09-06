@@ -481,7 +481,7 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 	kind := kindFromObjectType(node.name)
 	name := node.attrDefault("name", "")
 	if parent != nil {
-		name = resolveParentName(name, parent.name)
+		name = resolveParentName(name, parent.nameContext())
 	}
 	w := newWidget(kind, name)
 	w.parent = parent
@@ -706,7 +706,7 @@ func (l *Loader) buildButtonTexture(node *xmlNode, parent *widget, interfacePath
 			merged = mergeTemplate(l, tpl, node)
 		}
 	}
-	w := newWidget(kindTexture, resolveParentName(merged.attrDefault("name", ""), parent.name))
+	w := newWidget(kindTexture, resolveParentName(merged.attrDefault("name", ""), parent.nameContext()))
 	w.parent = parent
 	w.textureFile = merged.attrDefault("file", "")
 	w.alphaMode = merged.attrDefault("alphaMode", "")
@@ -722,7 +722,7 @@ func (l *Loader) buildButtonTexture(node *xmlNode, parent *widget, interfacePath
 		w.texCoordB = attrFloat(tc, "bottom", 1)
 	}
 	if a := merged.child("Anchors"); a != nil {
-		w.points = parseAnchors(a, parent.name)
+		w.points = parseAnchors(a, parent.nameContext())
 	}
 	if s := merged.child("Size"); s != nil {
 		w.width = attrFloat(s, "x", w.width)
@@ -753,7 +753,7 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 	if strings.EqualFold(merged.name, "FontString") {
 		kind = kindFontString
 	}
-	w := newWidget(kind, resolveParentName(merged.attrDefault("name", ""), parent.name))
+	w := newWidget(kind, resolveParentName(merged.attrDefault("name", ""), parent.nameContext()))
 	w.parent = parent
 	if parent != nil {
 		w.frameStrata = parent.frameStrata
@@ -816,7 +816,7 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 		}
 	}
 	if a := merged.child("Anchors"); a != nil {
-		w.points = parseAnchors(a, parent.name)
+		w.points = parseAnchors(a, parent.nameContext())
 	}
 	if v, ok := merged.attr("setAllPoints"); (ok && parseBool(v, false)) || (w.width == 0 && w.height == 0 && len(w.points) == 0 && kind == kindTexture) {
 		w.points = []anchorPoint{

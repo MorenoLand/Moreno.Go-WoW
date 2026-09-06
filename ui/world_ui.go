@@ -65,6 +65,10 @@ var worldUIFiles = []string{
 	`Interface\FrameXML\WorldStateFrame.xml`,
 	`Interface\FrameXML\CharacterFrameTemplates.xml`,
 	`Interface\FrameXML\CharacterFrame.xml`,
+	`Interface\FrameXML\HybridScrollFrame.lua`,
+	`Interface\FrameXML\HybridScrollFrame.xml`,
+	`Interface\FrameXML\PaperDollFrame.xml`,
+	`Interface\FrameXML\SpellBookFrame.xml`,
 }
 
 func (eng *UIEngine) LoadWorldUI() error {

@@ -298,7 +298,16 @@ func (w *widget) parentName() string {
 	if w == nil || w.parent == nil {
 		return ""
 	}
-	return w.parent.name
+	return w.parent.nameContext()
+}
+
+func (w *widget) nameContext() string {
+	for current := w; current != nil; current = current.parent {
+		if current.name != "" {
+			return current.name
+		}
+	}
+	return ""
 }
 
 func (w *widget) objectTypeMatches(name string) bool {
@@ -1029,6 +1038,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			rt.fire(w, "OnVerticalScroll", []lua.LValue{w.luaValue(L), lua.LNumber(value)})
 			return 0
 		},
+		"UpdateScrollChildRect": func(L *lua.LState, w *widget) int { return 0 },
 		"GetVerticalScroll": func(L *lua.LState, w *widget) int {
 			L.Push(lua.LNumber(w.verticalScroll))
 			return 1

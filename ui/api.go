@@ -291,6 +291,10 @@ func registerGlueAPI(rt *Runtime) {
 	reg("HasPetUI", func(L *lua.LState) int { L.Push(lua.LFalse); L.Push(lua.LFalse); return 2 })
 	reg("CastPetAction", func(L *lua.LState) int { return 0 })
 	reg("GetCurrentMapAreaID", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("GetInventorySlotInfo", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LString("")); L.Push(lua.LFalse); return 3 })
+	reg("GetSpellTabInfo", func(L *lua.LState) int { L.Push(lua.LString("General")); L.Push(lua.LString("")); L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 6 })
+	reg("HasPetSpells", func(L *lua.LState) int { L.Push(lua.LFalse); L.Push(lua.LNil); return 2 })
+	reg("GetNumSpellTabs", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
 	reg("GetTrackingTexture", func(L *lua.LState) int { L.Push(lua.LNil); return 1 })
 	reg("GetNumTrackingTypes", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
 	reg("GetTrackingInfo", func(L *lua.LState) int { return 4 })
@@ -1456,6 +1460,10 @@ func addonIndexArg(L *lua.LState) int {
 // scripts use; the original client provides these from its extended string
 // library.
 func registerStringHelpers(L *lua.LState) {
+	L.SetGlobal("getn", L.NewFunction(func(L *lua.LState) int {
+		L.Push(lua.LNumber(L.CheckTable(1).Len()))
+		return 1
+	}))
 	L.SetGlobal("strupper", L.NewFunction(func(L *lua.LState) int {
 		L.Push(lua.LString(strings.ToUpper(L.CheckString(1))))
 		return 1
