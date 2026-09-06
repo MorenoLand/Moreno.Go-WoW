@@ -111,6 +111,40 @@ func TestLiveLoginVideoOptionsPanelsDoNotOverlap(t *testing.T) {
 	}
 }
 
+func TestLiveLoginSceneAdvancesFromPatch4FrameXML(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	engine, err := LoadUIEngineFromMPQ(dataPath, "enUS", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.SetInitialCredentials("denveous", "", false)
+	for index := 0; index < 5; index++ {
+		engine.Update(1.0 / 60)
+	}
+	scene := engine.Rt.widgets["LoginScene"]
+	background := engine.Rt.widgets["LoginScreenBackground"]
+	if scene == nil || !scene.shown || background == nil || background.textureFile == "" {
+		t.Fatalf("login scene state scene=%v/%v background=%v/%q", scene != nil, scene != nil && scene.shown, background != nil, loginTextureFile(background))
+	}
+	if engine.CurrentModelPath() == "" {
+		t.Fatal("patch-4 LoginScene did not expose an active model")
+	}
+	if errors := engine.Rt.ScriptErrors(); len(errors) != 0 {
+		t.Fatalf("login scene script errors=%v", errors)
+	}
+}
+
+func loginTextureFile(widget *widget) string {
+	if widget == nil {
+		return ""
+	}
+	return widget.textureFile
+}
+
 func TestLiveGlueAccountLoginPlaceholder(t *testing.T) {
 	dataPath := os.Getenv("WOW_TEST_DATA")
 	if dataPath == "" {

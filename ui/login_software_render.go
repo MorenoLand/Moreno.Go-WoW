@@ -440,9 +440,9 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 						img = eng.tintTextureImage(w.textureFile, img, w.vertexColor)
 					}
 					if w.horizTile || w.vertTile {
-						eng.drawTiledTexture(target, img, scaledRect, float64(screenHeight), tc, w.horizTile, w.vertTile, strings.EqualFold(w.alphaMode, "ADD"))
+						eng.drawTiledTexture(target, img, scaledRect, float64(screenHeight), tc, w.horizTile, w.vertTile, strings.EqualFold(w.blendMode, "ADD") || strings.EqualFold(w.alphaMode, "ADD"))
 					} else {
-						drawSubModeFilter(target, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.alphaMode, "ADD"))
+						drawSubModeFilter(target, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.blendMode, "ADD") || strings.EqualFold(w.alphaMode, "ADD"))
 					}
 				}
 			} else if !w.vertexColor.isZero() {
@@ -1172,6 +1172,9 @@ func (eng *UIEngine) CurrentModelPath() string {
 		for _, child := range root.children {
 			visit(child)
 		}
+	}
+	if scene := eng.Rt.widgets["LoginScene"]; scene != nil {
+		visit(scene)
 	}
 	return path
 }

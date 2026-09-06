@@ -189,6 +189,8 @@ type widget struct {
 	sequenceTime    int
 	camera          int
 	modelScale      float64
+	modelPosition   [3]float64
+	modelFacing     float64
 	fogNear, fogFar float64
 	hasFog          bool
 
@@ -204,6 +206,7 @@ type widget struct {
 	texCoordL, texCoordR, texCoordT, texCoordB float64
 	vertexColor                                rgba
 	alphaMode                                  string
+	blendMode                                  string
 	horizTile, vertTile                        bool
 
 	// FontString state.
@@ -1290,7 +1293,14 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		"SetTexture": func(L *lua.LState, w *widget) int {
 			if L.Get(2).Type() == lua.LTString {
 				w.textureFile = L.CheckString(2)
+			} else if L.Get(2).Type() == lua.LTNumber && L.GetTop() >= 5 {
+				w.textureFile = ""
+				w.vertexColor = rgba{float64(L.CheckNumber(2)), float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), float64(L.CheckNumber(5))}
 			}
+			return 0
+		},
+		"SetBlendMode": func(L *lua.LState, w *widget) int {
+			w.blendMode = L.CheckString(2)
 			return 0
 		},
 		"SetTexCoord": func(L *lua.LState, w *widget) int {
@@ -1415,6 +1425,10 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.modelScale = float64(L.CheckNumber(2))
 			return 0
 		},
+		"SetFacing": func(L *lua.LState, w *widget) int {
+			w.modelFacing = float64(L.CheckNumber(2))
+			return 0
+		},
 		"SetFogNear": func(L *lua.LState, w *widget) int {
 			w.fogNear = float64(L.CheckNumber(2))
 			w.hasFog = true
@@ -1438,8 +1452,13 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		"AddCharacterLight": func(L *lua.LState, w *widget) int { return 0 },
 		"AddLight":          func(L *lua.LState, w *widget) int { return 0 },
 		"AddPetLight":       func(L *lua.LState, w *widget) int { return 0 },
-		"SetPosition":       func(L *lua.LState, w *widget) int { return 0 },
-		"AdvanceTime":       func(L *lua.LState, w *widget) int { return 0 },
+		"SetPosition": func(L *lua.LState, w *widget) int {
+			w.modelPosition[0] = float64(L.CheckNumber(2))
+			w.modelPosition[1] = float64(L.CheckNumber(3))
+			w.modelPosition[2] = float64(L.CheckNumber(4))
+			return 0
+		},
+		"AdvanceTime": func(L *lua.LState, w *widget) int { return 0 },
 		"StartMovie": func(L *lua.LState, w *widget) int {
 			// Native FUN_0095eb30 returns 0 unless AVI load + DivxDecoder init succeed.
 			file := L.CheckString(2)
