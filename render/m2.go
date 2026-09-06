@@ -498,9 +498,13 @@ func parseM2(data []byte) (parsedM2, error) {
 	if err != nil {
 		return parsedM2{}, err
 	}
-	textureCombinerCombos, err := readM2Array(data, 0x130, 2)
-	if err != nil {
-		return parsedM2{}, err
+	flags := binary.LittleEndian.Uint32(data[0x10:0x14])
+	textureCombinerCombos := m2Array{}
+	if flags&0x08 != 0 {
+		textureCombinerCombos, err = readM2Array(data, 0x130, 2)
+		if err != nil {
+			return parsedM2{}, err
+		}
 	}
 	renderFlags, err := readM2Array(data, 0x70, m2RenderFlagSize)
 	if err != nil {
@@ -534,7 +538,7 @@ func parseM2(data []byte) (parsedM2, error) {
 	if err != nil {
 		return parsedM2{}, err
 	}
-	result := parsedM2{data: data, flags: binary.LittleEndian.Uint32(data[0x10:0x14]), boneOffset: bones.offset, colorOffset: colors.offset, textureWeightOffset: textureWeights.offset, textureTransformOffset: textureTransforms.offset, vertices: make([]m2Vertex, vertices.count), bones: make([]m2Bone, bones.count), colors: make([]m2Color, colors.count), sequences: make([]m2Sequence, sequences.count), globalLoops: make([]uint32, globalLoops.count), boneCombos: make([]uint16, boneCombos.count), textures: make([]string, textures.count), textureTypes: make([]uint32, textures.count), textureFlags: make([]uint32, textures.count), textureCombos: make([]uint16, combos.count), textureCombinerCombos: make([]uint16, textureCombinerCombos.count), textureCoords: make([]uint16, textureCoords.count), textureWeightCombos: make([]uint16, textureWeightCombos.count), textureWeights: make([]m2TextureWeight, textureWeights.count), textureTransforms: make([]m2TextureTransform, textureTransforms.count), textureTransformCombos: make([]uint16, textureTransformCombos.count), renderFlags: make([]m2RenderFlag, renderFlags.count), attachments: make([]m2Attachment, attachments.count), particles: make([]m2ParticleEmitter, particles.count), events: make([]m2Event, events.count)}
+	result := parsedM2{data: data, flags: flags, boneOffset: bones.offset, colorOffset: colors.offset, textureWeightOffset: textureWeights.offset, textureTransformOffset: textureTransforms.offset, vertices: make([]m2Vertex, vertices.count), bones: make([]m2Bone, bones.count), colors: make([]m2Color, colors.count), sequences: make([]m2Sequence, sequences.count), globalLoops: make([]uint32, globalLoops.count), boneCombos: make([]uint16, boneCombos.count), textures: make([]string, textures.count), textureTypes: make([]uint32, textures.count), textureFlags: make([]uint32, textures.count), textureCombos: make([]uint16, combos.count), textureCombinerCombos: make([]uint16, textureCombinerCombos.count), textureCoords: make([]uint16, textureCoords.count), textureWeightCombos: make([]uint16, textureWeightCombos.count), textureWeights: make([]m2TextureWeight, textureWeights.count), textureTransforms: make([]m2TextureTransform, textureTransforms.count), textureTransformCombos: make([]uint16, textureTransformCombos.count), renderFlags: make([]m2RenderFlag, renderFlags.count), attachments: make([]m2Attachment, attachments.count), particles: make([]m2ParticleEmitter, particles.count), events: make([]m2Event, events.count)}
 	for index := range result.globalLoops {
 		result.globalLoops[index] = binary.LittleEndian.Uint32(data[globalLoops.offset+index*4:])
 	}

@@ -72,3 +72,28 @@ func TestLiveMainMenuM2MaterialTracks(t *testing.T) {
 		t.Fatalf("color13=%v alpha=%v", color, alpha)
 	}
 }
+
+func TestLiveCharacterSelectM2UsesNativeHeaderVariant(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	rt := ui.NewRuntime(nil)
+	defer rt.Close()
+	loader, err := ui.NewMPQLoader(dataPath, "enUS", rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loader.Close()
+	data, err := loader.ReadFile(`Interface\Glues\Models\UI_CharacterSelect\UI_CharacterSelect.m2`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := parseM2(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.flags&0x08 != 0 || len(model.textureCombinerCombos) != 0 {
+		t.Fatalf("character select flags=%#x combinerCombos=%d", model.flags, len(model.textureCombinerCombos))
+	}
+}
