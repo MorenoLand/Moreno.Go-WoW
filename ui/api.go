@@ -277,6 +277,19 @@ func registerGlueAPI(rt *Runtime) {
 		return 11
 	})
 	reg("GetChatWindowChannels", func(L *lua.LState) int { return 0 })
+	reg("GetMoney", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("GetCursorMoney", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("GetPlayerTradeMoney", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("PickupPlayerMoney", func(L *lua.LState) int { return 0 })
+	reg("GetNumBindings", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("GetCurrentBindingSet", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
+	reg("GetBinding", func(L *lua.LState) int { return 0 })
+	reg("GetBindingKey", func(L *lua.LState) int { return 0 })
+	reg("SetBinding", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("SaveBindings", func(L *lua.LState) int { L.Push(lua.LTrue); return 1 })
+	reg("LoadBindings", func(L *lua.LState) int { return 0 })
+	reg("GetModifiedClick", func(L *lua.LState) int { L.Push(lua.LString("SHIFT")); return 1 })
+	reg("InCinematic", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("GetNumMacros", func(L *lua.LState) int {
 		L.Push(lua.LNumber(0))
 		L.Push(lua.LNumber(0))
@@ -311,6 +324,10 @@ func registerGlueAPI(rt *Runtime) {
 	reg("GetPlayerInfoByGUID", func(L *lua.LState) int { return 5 })
 	reg("GetNumFriends", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 2 })
 	reg("BNGetNumFriends", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 2 })
+	reg("BNFeaturesEnabled", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("BNConnected", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("BNFeaturesEnabledAndConnected", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("GetExistingLocales", func(L *lua.LState) int { L.Push(lua.LString("enUS")); return 1 })
 	reg("SetChatWindowDocked", func(L *lua.LState) int { return 0 })
 	reg("SetChatWindowLocked", func(L *lua.LState) int { return 0 })
 	reg("SetChatWindowShown", func(L *lua.LState) int { return 0 })
@@ -1390,7 +1407,7 @@ func registerStringHelpers(L *lua.LState) {
 	}))
 	// Math library aliases, the set the embedded compat layer provides.
 	math := L.GetGlobal("math").(*lua.LTable)
-	for _, name := range []string{"floor", "ceil", "abs", "min", "max", "sqrt",
+	for _, name := range []string{"floor", "ceil", "abs", "min", "max", "sqrt", "random",
 		"sin", "cos", "tan", "asin", "acos", "atan", "deg", "rad", "exp",
 		"log", "log10", "fmod", "mod", "modf"} {
 		if fn := math.RawGetString(name); fn.Type() == lua.LTFunction {

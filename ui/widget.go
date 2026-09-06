@@ -468,6 +468,17 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			}
 			return 0
 		},
+		"SetSize": func(L *lua.LState, w *widget) int {
+			w.width = float64(L.CheckNumber(2))
+			w.height = float64(L.CheckNumber(3))
+			if w.kind == kindFontString {
+				w.explicitWidth = true
+				w.autoTextWidth = false
+				w.explicitHeight = true
+				w.autoTextHeight = false
+			}
+			return 0
+		},
 		"GetWidth": func(L *lua.LState, w *widget) int {
 			if w.kind == kindFontString && w.autoTextWidth && rt.measureText != nil {
 				rt.measureText(w)
@@ -481,6 +492,11 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			}
 			L.Push(lua.LNumber(w.height))
 			return 1
+		},
+		"GetSize": func(L *lua.LState, w *widget) int {
+			L.Push(lua.LNumber(w.width))
+			L.Push(lua.LNumber(w.height))
+			return 2
 		},
 		"GetTop": func(L *lua.LState, w *widget) int {
 			if w.hasRenderRect {
@@ -1461,6 +1477,16 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 				}
 			}
 			return 0
+		},
+		"IsOwned": func(L *lua.LState, w *widget) int {
+			owner, ok := L.Get(2).(*lua.LUserData)
+			if !ok {
+				L.Push(lua.LFalse)
+				return 1
+			}
+			ownerWidget, ok := owner.Value.(*widget)
+			L.Push(lua.LBool(ok && w.parent == ownerWidget))
+			return 1
 		},
 		"AddLine": func(L *lua.LState, w *widget) int {
 			w.lines = append(w.lines, L.CheckString(2))

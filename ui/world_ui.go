@@ -24,6 +24,21 @@ var worldUIFiles = []string{
 	`Interface\FrameXML\UIParent.xml`,
 	`Interface\FrameXML\ChatFrame.xml`,
 	`Interface\FrameXML\FloatingChatFrame.xml`,
+	`Interface\FrameXML\GameTooltip.xml`,
+	`Interface\FrameXML\AutoComplete.xml`,
+	`Interface\FrameXML\MoneyFrame.lua`,
+	`Interface\FrameXML\MoneyFrame.xml`,
+	`Interface\FrameXML\MoneyInputFrame.lua`,
+	`Interface\FrameXML\MoneyInputFrame.xml`,
+	`Interface\FrameXML\ItemButtonTemplate.xml`,
+	`Interface\FrameXML\ClassTrainerFrameTemplates.xml`,
+	`Interface\FrameXML\StaticPopup.lua`,
+	`Interface\FrameXML\StaticPopup.xml`,
+	`Interface\FrameXML\VideoOptionsFrame.xml`,
+	`Interface\FrameXML\AudioOptionsFrame.xml`,
+	`Interface\FrameXML\InterfaceOptionsFrame.xml`,
+	`Interface\FrameXML\InterfaceOptionsPanels.lua`,
+	`Interface\FrameXML\InterfaceOptionsPanels.xml`,
 	`Interface\FrameXML\GameMenuFrame.xml`,
 }
 
@@ -40,9 +55,17 @@ func (eng *UIEngine) LoadWorldUI() error {
 		}
 	}
 	for _, path := range worldUIFiles {
+		if (path == `Interface\FrameXML\VideoOptionsFrame.xml` && eng.Rt.widgets["VideoOptionsFrame"] != nil) || (path == `Interface\FrameXML\AudioOptionsFrame.xml` && eng.Rt.widgets["AudioOptionsFrame"] != nil) {
+			continue
+		}
 		if path == `Interface\FrameXML\FloatingChatFrame.xml` {
 			if err := eng.loadCombatLogBase(); err != nil {
 				return err
+			}
+		}
+		if path == `Interface\FrameXML\GameTooltip.xml` && eng.Rt.L.GetGlobal("GameTooltip") == lua.LNil {
+			if !eng.Rt.Execute(`GameTooltip = CreateFrame("Frame", "GameTooltip", UIParent); GameTooltip:Hide();`, "@world-ui-tooltip.lua") {
+				return fmt.Errorf("initialize GameTooltip: %v", eng.Rt.ScriptErrors())
 			}
 		}
 		if err := eng.AssetLoader.LoadInterfaceFile(path); err != nil {
@@ -111,6 +134,9 @@ if not VoiceChat_Toggle then
     end
 end
 for _, name in ipairs({
+    "GameTooltip",
+    "Minimap",
+    "MinimapCluster",
     "HelpFrame",
     "VideoOptionsFrame",
     "AudioOptionsFrame",
@@ -125,6 +151,16 @@ for _, name in ipairs({
 end
 `, "@world-ui-game-menu-stubs.lua") {
 		return fmt.Errorf("initialize game menu stubs: %v", eng.Rt.ScriptErrors())
+	}
+	for _, addon := range []string{"Blizzard_BindingUI", "Blizzard_MacroUI"} {
+		path := `Interface\AddOns\` + addon + `\` + addon + `.toc`
+		if _, err := eng.AssetLoader.ReadFile(path); err == nil {
+			if loaded, reason := eng.loadAddOn(addon); !loaded {
+				return fmt.Errorf("load world UI %s: %s", path, reason)
+			}
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("probe world UI %s: %w", path, err)
+		}
 	}
 	// Drop glue-screen keyboard focus (e.g. AccountLoginAccountEdit) so the
 	// first world ESC runs TOGGLEGAMEMENU instead of only clearing focus.
@@ -263,6 +299,7 @@ func (rt *Runtime) completeLogout() {
 	rt.logoutPending = false
 	rt.quitPending = false
 	rt.logoutRemaining = 0
+	rt.hideLogoutPopup("CAMP")
 	if host, ok := rt.Host.(LogoutHost); ok {
 		host.Logout()
 	}
@@ -275,8 +312,26 @@ func (rt *Runtime) completeQuit() {
 	rt.logoutPending = false
 	rt.quitPending = false
 	rt.logoutRemaining = 0
+	rt.hideLogoutPopup("QUIT")
 	if rt.Host != nil {
 		rt.Host.Quit(false)
+	}
+}
+
+func (rt *Runtime) hideLogoutPopup(which string) {
+	if rt == nil || rt.L == nil {
+		return
+	}
+	fn := rt.L.GetGlobal("StaticPopup_Hide")
+	if fn.Type() != lua.LTFunction {
+		return
+	}
+	top := rt.L.GetTop()
+	defer rt.L.SetTop(top)
+	rt.L.Push(fn)
+	rt.L.Push(lua.LString(which))
+	if err := rt.L.PCall(1, 0, nil); err != nil {
+		rt.recordScriptError("@logout-popup-hide.lua", err.Error())
 	}
 }
 

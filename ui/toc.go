@@ -500,6 +500,10 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 			addWidgetChild(root, w)
 		}
 	}
+	if w.name != "" {
+		l.rt.register(w)
+		l.bindParentKey(parent, w, merged)
+	}
 
 	for _, group := range merged.children {
 		switch group.name {
@@ -667,8 +671,6 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 			w.buttonLabel.height = w.height
 		}
 	}
-	l.rt.register(w)
-	l.bindParentKey(parent, w, merged)
 	l.rt.fireHandler(w, "OnLoad")
 	return w, nil
 }

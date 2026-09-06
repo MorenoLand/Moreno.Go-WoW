@@ -17,6 +17,10 @@ func TestLiveGlueAccountLoginOpens(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer set.Close()
+	dataRoot, err := findMPQDataRoot(dataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{`Interface\GlueXML\GlueXML.toc`, `Interface\GlueXML\AccountLogin.xml`} {
 		data, err := set.ReadFile(name)
 		if err != nil {
@@ -28,9 +32,10 @@ func TestLiveGlueAccountLoginOpens(t *testing.T) {
 		src := filepath.Base(set.files[normalizeMPQPath(name)].archive.path)
 		t.Logf("%s ok len=%d from=%s", name, len(data), src)
 	}
-	loginSrc := filepath.Base(set.files[normalizeMPQPath(`Interface\GlueXML\AccountLogin.xml`)].archive.path)
-	if strings.EqualFold(loginSrc, "patch-4.MPQ") {
-		t.Fatalf("AccountLogin.xml incorrectly came from install-root patch-4.MPQ")
+	loginPath := set.files[normalizeMPQPath(`Interface\GlueXML\AccountLogin.xml`)].archive.path
+	relative, err := filepath.Rel(dataRoot, loginPath)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		t.Fatalf("AccountLogin.xml came from outside Data: %s", loginPath)
 	}
 }
 
