@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"math"
 	"os"
 	"testing"
 
@@ -102,6 +103,42 @@ func TestEnterActivatesWorldChatWithoutPriorFocus(t *testing.T) {
 	}
 	if engine.Rt.focused != edit || !edit.shown {
 		t.Fatalf("chat activation focus=%v shown=%v", engine.Rt.focused, edit.shown)
+	}
+}
+
+func TestCombatLogTabSwitchKeepsFiniteGeometry(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	engine, err := LoadUIEngineFromMPQ(dataPath, "enUS", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if err := engine.LoadWorldUI(); err != nil {
+		t.Fatal(err)
+	}
+	if !engine.Rt.Execute(`ChatFrame2Tab:Click()`, "@combat-tab-geometry.lua") {
+		t.Fatalf("combat tab click failed: %v", engine.Rt.ScriptErrors())
+	}
+	engine.RenderWorld(960, 640)
+	combat := engine.Rt.widgets["ChatFrame2"]
+	quick := engine.Rt.widgets["CombatLogQuickButtonFrame_Custom"]
+	if combat == nil || !combat.shown || quick == nil || !quick.shown {
+		t.Fatalf("combat frame=%v quick=%v", combat, quick)
+	}
+	for _, value := range []float64{combat.renderRect.X0, combat.renderRect.Y0, combat.renderRect.X1, combat.renderRect.Y1, quick.renderRect.X0, quick.renderRect.Y0, quick.renderRect.X1, quick.renderRect.Y1} {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			t.Fatalf("non-finite combat geometry: combat=%v quick=%v", combat.renderRect, quick.renderRect)
+		}
+	}
+	if !engine.Rt.Execute(`ChatFrame1Tab:Click()`, "@general-tab-geometry.lua") {
+		t.Fatalf("general tab click failed: %v", engine.Rt.ScriptErrors())
+	}
+	engine.RenderWorld(960, 640)
+	if !engine.Rt.widgets["ChatFrame1"].shown || engine.Rt.widgets["ChatFrame2"].shown {
+		t.Fatal("general/combat tab visibility did not switch back")
 	}
 }
 

@@ -338,6 +338,7 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 
 	uiScale := float64(screenHeight) / 768.0
 	eng.uiScale = uiScale
+	eng.Rt.SetCVar("uiScale", fmt.Sprintf("%.6f", uiScale))
 	eng.screenWidth = screenWidth
 	eng.screenHeight = screenHeight
 	eng.layerDepth = 0
@@ -2389,7 +2390,7 @@ func drawSubModeFilter(canvas *image.RGBA, img image.Image, r Rect, screenHeight
 			sa8 := blend.Pix[srcOff+3]
 			// Preserve additive keying used by Glue textures: near-black
 			// source texels do not brighten the destination.
-			if sa8 != 0 && !(sr8 <= 2 && sg8 <= 2 && sb8 <= 8) {
+			if sa8 != 0 && !isAdditiveKeyColor(sr8, sg8, sb8) {
 				sa := uint32(sa8) * 0x101
 				sr := uint32(sr8) * 0x101
 				sg := uint32(sg8) * 0x101
@@ -2504,6 +2505,11 @@ func maxChannel(left, right uint32) uint8 {
 		return uint8(right >> 8)
 	}
 	return uint8(left >> 8)
+}
+
+func isAdditiveKeyColor(r, g, b uint8) bool {
+	const threshold = 24
+	return r <= threshold && g <= threshold && b <= threshold
 }
 
 func drawText(canvas *image.RGBA, face font.Face, text string, r Rect, screenHeight float64, c color.Color) {

@@ -17,7 +17,7 @@ func TestAdditiveTextureKeysBlackBackground(t *testing.T) {
 	for y := 0; y < 4; y++ {
 		for x := 0; x < 4; x++ {
 			if x == 0 || y == 0 || x == 3 || y == 3 {
-				source.SetRGBA(x, y, color.RGBA{A: 255})
+				source.SetRGBA(x, y, color.RGBA{R: 16, G: 16, B: 16, A: 255})
 			} else {
 				source.SetRGBA(x, y, color.RGBA{R: 0, G: 64, B: 192, A: 255})
 			}
@@ -25,7 +25,7 @@ func TestAdditiveTextureKeysBlackBackground(t *testing.T) {
 	}
 	drawSubMode(canvas, source, Rect{X0: 0, Y0: 0, X1: 4, Y1: 4}, 4, [4]float64{0, 1, 0, 1}, true)
 	if got := canvas.RGBAAt(0, 0); got != (color.RGBA{R: 20, G: 20, B: 20, A: 255}) {
-		t.Fatalf("black additive pixel changed background: %+v", got)
+		t.Fatalf("near-black additive pixel changed background: %+v", got)
 	}
 	if got := canvas.RGBAAt(2, 2); got.B <= 20 {
 		t.Fatalf("blue additive pixel did not brighten background: %+v", got)
