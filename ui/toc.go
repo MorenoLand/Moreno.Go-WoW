@@ -545,6 +545,10 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 				w.statusBarTexture = texture
 				texture.shown = false
 			}
+		case "BarColor":
+			if w.kind == kindStatusBar {
+				w.statusBarColor = rgba{attrFloat(group, "r", 0), attrFloat(group, "g", 0), attrFloat(group, "b", 0), 1}
+			}
 		case "Frames":
 			for _, frameEl := range group.children {
 				if isWidgetElement(frameEl.name) {

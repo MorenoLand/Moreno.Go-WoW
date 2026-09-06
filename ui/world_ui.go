@@ -40,6 +40,9 @@ var worldUIFiles = []string{
 	`Interface\FrameXML\InterfaceOptionsPanels.lua`,
 	`Interface\FrameXML\InterfaceOptionsPanels.xml`,
 	`Interface\FrameXML\GameMenuFrame.xml`,
+	`Interface\FrameXML\TextStatusBar.lua`,
+	`Interface\FrameXML\TextStatusBar.xml`,
+	`Interface\FrameXML\MainMenuBar.xml`,
 }
 
 func (eng *UIEngine) LoadWorldUI() error {

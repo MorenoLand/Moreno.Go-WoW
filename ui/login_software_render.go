@@ -449,6 +449,37 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 				eng.drawTextureColor(target, scaledRect, w.vertexColor)
 			}
 
+		case kindStatusBar:
+			fraction := 1.0
+			if w.maxValue > w.minValue {
+				fraction = (w.value - w.minValue) / (w.maxValue - w.minValue)
+			}
+			if fraction < 0 {
+				fraction = 0
+			}
+			if fraction > 1 {
+				fraction = 1
+			}
+			fill := scaledRect
+			if strings.EqualFold(w.orientation, "VERTICAL") {
+				fill.Y0 = scaledRect.Y1 - scaledRect.H()*fraction
+			} else {
+				fill.X1 = scaledRect.X0 + scaledRect.W()*fraction
+			}
+			if fill.W() > 0 && fill.H() > 0 && w.statusBarTexture != nil && w.statusBarTexture.textureFile != "" {
+				if img := eng.loadBLP(w.statusBarTexture.textureFile); img != nil {
+					tc := [4]float64{w.statusBarTexture.texCoordL, w.statusBarTexture.texCoordR, w.statusBarTexture.texCoordT, w.statusBarTexture.texCoordB}
+					if tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0 {
+						tc = [4]float64{0, 1, 0, 1}
+					}
+					drawSubModeFilter(target, img, fill, float64(screenHeight), tc, strings.EqualFold(w.statusBarTexture.blendMode, "ADD") || strings.EqualFold(w.statusBarTexture.alphaMode, "ADD"))
+				} else if !w.statusBarColor.isZero() {
+					eng.drawTextureColor(target, fill, w.statusBarColor)
+				}
+			} else if fill.W() > 0 && fill.H() > 0 && !w.statusBarColor.isZero() {
+				eng.drawTextureColor(target, fill, w.statusBarColor)
+			}
+
 		case kindFontString:
 			// FrameXML places a FontString directly on ScrollingMessageFrame as
 			// the font attribute holder; messages are drawn only via drawMessageLines.
