@@ -306,6 +306,15 @@ func registerUnitAPI(rt *Runtime) {
 		}
 		return 2
 	})
+	reg("GetUnitName", func(L *lua.LState) int {
+		info := rt.unitInfo(L.OptString(1, ""))
+		if info == nil || !info.Exists {
+			L.Push(lua.LNil)
+			return 1
+		}
+		L.Push(lua.LString(info.Name))
+		return 1
+	})
 	reg("UnitLevel", func(L *lua.LState) int {
 		info := rt.unitInfo(L.OptString(1, ""))
 		if info == nil || !info.Exists {
@@ -313,6 +322,14 @@ func registerUnitAPI(rt *Runtime) {
 			return 1
 		}
 		L.Push(lua.LNumber(info.Level))
+		return 1
+	})
+	reg("UnitXP", func(L *lua.LState) int {
+		L.Push(lua.LNumber(0))
+		return 1
+	})
+	reg("UnitXPMax", func(L *lua.LState) int {
+		L.Push(lua.LNumber(1))
 		return 1
 	})
 	reg("UnitHealth", func(L *lua.LState) int {

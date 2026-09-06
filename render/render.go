@@ -743,6 +743,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					break
 				}
 				worldCharacter = entry.character
+				seedWorldUnits(uiEngine.Rt, worldCharacter)
 				loadingPath := worldLoadingScreenPath(uiEngine.AssetLoader, entry.position.Map)
 				uiEngine.SetLoadingScreen(loadingPath, 0)
 				if worldUIErr := uiEngine.LoadWorldUI(); worldUIErr != nil && debug {
@@ -1037,6 +1038,22 @@ func glueState(session *network.Session, loader *ui.Loader) ui.GlueState {
 		state.Characters = append(state.Characters, ui.CharacterEntry{Name: character.Name, Race: raceName(character.Race), RaceID: int(character.Race), Class: className(character.Class), ClassID: int(character.Class), Gender: int(character.Gender), Level: int(character.Level), Zone: areaNames[character.Zone], ZoneID: character.Zone, MapID: character.Map, Flags: character.Flags, CustomizeFlags: character.CustomizeFlags, BackgroundModel: backgroundModelName(character)})
 	}
 	return state
+}
+
+func seedWorldUnits(rt *ui.Runtime, character world.Character) {
+	if rt == nil {
+		return
+	}
+	sex := 2
+	if character.Gender == 1 {
+		sex = 3
+	}
+	rt.SetUnit("player", ui.UnitInfo{Exists: true, Name: character.Name, Level: int(character.Level), RaceID: int(character.Race), RaceFile: raceModelName(character.Race), RaceName: raceName(character.Race), ClassID: int(character.Class), ClassFile: className(character.Class), ClassName: className(character.Class), Sex: sex, Health: 1, HealthMax: 1, Power: 1, PowerMax: 1, PowerToken: "MANA", Connected: true, Player: true, Visible: true})
+	if character.PetDisplayID != 0 {
+		rt.SetUnit("pet", ui.UnitInfo{Exists: true, Name: "", Level: int(character.PetLevel), Health: 1, HealthMax: 1, Power: 1, PowerMax: 1, PowerToken: "MANA", Connected: true, Visible: true})
+	} else {
+		rt.ClearUnit("pet")
+	}
 }
 
 func realmType(kind uint8) string {

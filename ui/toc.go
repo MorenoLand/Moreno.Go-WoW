@@ -446,7 +446,7 @@ func (l *Loader) instantiateTopLevel(node *xmlNode, interfacePath string) error 
 func isWidgetElement(name string) bool {
 	switch name {
 	case "Frame", "Button", "CheckButton", "EditBox", "Slider", "ScrollFrame", "ScrollingMessageFrame",
-		"SimpleHTML", "Model", "ModelFFX", "MovieFrame", "StatusBar", "Texture", "FontString":
+		"SimpleHTML", "Model", "ModelFFX", "MovieFrame", "StatusBar", "Minimap", "Cooldown", "Texture", "FontString":
 		return true
 	}
 	return false
@@ -536,6 +536,15 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 				return nil, err
 			}
 			child.layerLevel = layerArtwork
+		case "BarTexture":
+			if w.kind == kindStatusBar {
+				texture, err := l.buildRegion(group, w, interfacePath)
+				if err != nil {
+					return nil, err
+				}
+				w.statusBarTexture = texture
+				texture.shown = false
+			}
 		case "Frames":
 			for _, frameEl := range group.children {
 				if isWidgetElement(frameEl.name) {
