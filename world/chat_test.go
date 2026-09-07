@@ -40,3 +40,34 @@ func TestParseMessageChatRejectsTrailingBytes(t *testing.T) {
 		t.Fatal("trailing chat data was accepted")
 	}
 }
+
+func TestBuildMessageChatSayAndWhisper(t *testing.T) {
+	say, err := BuildMessageChat(ChatSay, 7, "", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedSay := []byte{1, 0, 0, 0, 7, 0, 0, 0, 'h', 'e', 'l', 'l', 'o', 0}
+	if string(say) != string(expectedSay) {
+		t.Fatalf("say=%v expected=%v", say, expectedSay)
+	}
+	whisper, err := BuildMessageChat(ChatWhisper, 7, "Alice", "Hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedWhisper := []byte{7, 0, 0, 0, 7, 0, 0, 0, 'A', 'l', 'i', 'c', 'e', 0, 'H', 'i', 0}
+	if string(whisper) != string(expectedWhisper) {
+		t.Fatalf("whisper=%v expected=%v", whisper, expectedWhisper)
+	}
+}
+
+func TestBuildMessageChatRejectsInvalidInputs(t *testing.T) {
+	if _, err := BuildMessageChat(ChatSystem, 7, "", "hello"); err == nil {
+		t.Fatal("system chat was accepted for sending")
+	}
+	if _, err := BuildMessageChat(ChatWhisper, 7, "", "hello"); err == nil {
+		t.Fatal("whisper without target was accepted")
+	}
+	if _, err := BuildMessageChat(ChatSay, 5, "", "hello"); err == nil {
+		t.Fatal("invalid language was accepted")
+	}
+}

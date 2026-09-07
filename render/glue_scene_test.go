@@ -41,6 +41,13 @@ func TestLivePatch4LoginSceneLoadsCompositeModels(t *testing.T) {
 	if !referenceOK || info.position != reference.position || info.target != reference.target || info.fov != reference.fov {
 		t.Fatalf("composite camera=%+v reference=%+v available=%v", info, reference, referenceOK)
 	}
+	for index, child := range scene.Children() {
+		if index >= 5 {
+			break
+		}
+		node := child.GetNode()
+		t.Logf("scene model %d position=%v scale=%v bounds=%v", index, node.Position(), node.Scale(), node.BoundingBox())
+	}
 }
 
 func TestGlueScenePositionUsesNativeModelAxes(t *testing.T) {
