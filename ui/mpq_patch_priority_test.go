@@ -33,9 +33,38 @@ func TestLiveGlueAccountLoginOpens(t *testing.T) {
 		t.Logf("%s ok len=%d from=%s", name, len(data), src)
 	}
 	loginPath := set.files[normalizeMPQPath(`Interface\GlueXML\AccountLogin.xml`)].archive.path
-	relative, err := filepath.Rel(dataRoot, loginPath)
+	relative, err := filepath.Rel(filepath.Dir(dataRoot), loginPath)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		t.Fatalf("AccountLogin.xml came from outside Data: %s", loginPath)
+		t.Fatalf("AccountLogin.xml came from outside install root: %s", loginPath)
+	}
+}
+
+func TestDiscoverMPQIncludesInstallRootPatch(t *testing.T) {
+	root := t.TempDir()
+	data := filepath.Join(root, "Data")
+	if err := os.MkdirAll(data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(data, "common.MPQ"), filepath.Join(data, "patch-3.MPQ"), filepath.Join(root, "patch-4.MPQ")} {
+		if err := os.WriteFile(path, []byte("MPQ"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths, err := discoverMPQArchives(data, "enUS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootPatch, dataPatch := -1, -1
+	for index, path := range paths {
+		if strings.EqualFold(filepath.Base(path), "patch-4.MPQ") && strings.EqualFold(filepath.Dir(path), root) {
+			rootPatch = index
+		}
+		if strings.EqualFold(filepath.Base(path), "patch-3.MPQ") {
+			dataPatch = index
+		}
+	}
+	if rootPatch < 0 || dataPatch < 0 || rootPatch <= dataPatch {
+		t.Fatalf("patch order root=%d data=%d paths=%v", rootPatch, dataPatch, paths)
 	}
 }
 

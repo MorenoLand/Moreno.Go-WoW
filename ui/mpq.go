@@ -261,6 +261,10 @@ func discoverMPQArchives(root, locale string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	installEntries, err := mpqDirectoryImmediate(filepath.Dir(root))
+	if err != nil {
+		return nil, err
+	}
 	localeDir := findLocaleDirectory(root, locale)
 	localeEntries := map[string]string{}
 	if localeDir != "" {
@@ -294,6 +298,7 @@ func discoverMPQArchives(root, locale string) ([]string, error) {
 	}
 	addPatches(rootEntries)
 	addPatches(localeEntries)
+	addPatches(installEntries)
 	sort.SliceStable(patches, func(i, j int) bool {
 		if patches[i].number != patches[j].number {
 			return patches[i].number < patches[j].number
@@ -320,6 +325,24 @@ type mpqPatchPath struct {
 
 func mpqDirectory(root string) (map[string]string, error) {
 	return mpqDirectoryRecursive(root, "")
+}
+
+func mpqDirectoryImmediate(root string) (map[string]string, error) {
+	result := make(map[string]string)
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return result, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".mpq") {
+			continue
+		}
+		result[strings.ToLower(entry.Name())] = filepath.Join(root, entry.Name())
+	}
+	return result, nil
 }
 
 func mpqDirectoryRecursive(root, excludedDir string) (map[string]string, error) {
