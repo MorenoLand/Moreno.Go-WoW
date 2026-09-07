@@ -25,7 +25,7 @@ func TestM2ParticleBlendModes(t *testing.T) {
 }
 
 func TestM2MaterialBlendModes(t *testing.T) {
-	for raw, want := range map[uint16]material.Blending{0: material.BlendNone, 1: material.BlendNone, 2: material.BlendNormal, 3: material.BlendAdditive, 4: material.BlendMultiply, 5: material.BlendMultiply, 6: material.BlendAdditive} {
+	for raw, want := range map[uint16]material.Blending{0: material.BlendNone, 1: material.BlendNone, 2: material.BlendNormal, 3: material.BlendAdditive, 4: material.BlendAdditive, 5: material.BlendMultiply, 6: material.BlendMultiply} {
 		if got := m2MaterialBlending(raw); got != want {
 			t.Fatalf("material blend %d=%v want %v", raw, got, want)
 		}

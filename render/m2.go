@@ -907,9 +907,9 @@ func m2MaterialBlending(raw uint16) material.Blending {
 	switch raw {
 	case 0, 1:
 		return material.BlendNone
-	case 3, 6:
+	case 3, 4:
 		return material.BlendAdditive
-	case 4, 5:
+	case 5, 6:
 		return material.BlendMultiply
 	default:
 		return material.BlendNormal
