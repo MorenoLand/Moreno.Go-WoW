@@ -22,8 +22,9 @@ func loadGlueScene(loader *ui.Loader, models []ui.GlueSceneModel) (*core.Node, e
 		}
 		modelScale := model.Scale().X * float32(state.Scale)
 		model.SetScale(modelScale, modelScale, modelScale)
-		model.SetPosition(float32(state.Position[0]), float32(state.Position[1]), float32(state.Position[2]))
-		model.SetRotation(0, 0, float32(state.Facing))
+		position := glueScenePosition(state.Position)
+		model.SetPosition(position[0], position[1], position[2])
+		model.SetRotation(0, float32(state.Facing), 0)
 		if info, ok := model.UserData().(glueModelInfo); ok {
 			if info.animation != nil {
 				info.animation.SetSequence(state.Sequence)
@@ -54,6 +55,10 @@ func loadGlueScene(loader *ui.Loader, models []ui.GlueSceneModel) (*core.Node, e
 	}
 	root.SetUserData(aggregate)
 	return root, nil
+}
+
+func glueScenePosition(position [3]float64) [3]float32 {
+	return [3]float32{float32(position[1]), float32(position[2]), -float32(position[0])}
 }
 
 func updateGlueSceneNode(node *core.Node, elapsed float64) []uint32 {

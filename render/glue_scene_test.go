@@ -38,3 +38,9 @@ func TestLivePatch4LoginSceneLoadsCompositeModels(t *testing.T) {
 		t.Fatalf("composite scene metadata=%v parts=%d", ok, info.stats.parts)
 	}
 }
+
+func TestGlueScenePositionUsesNativeModelAxes(t *testing.T) {
+	if got, want := glueScenePosition([3]float64{3, 5, 7}), [3]float32{5, 7, -3}; got != want {
+		t.Fatalf("scene position=%v want %v", got, want)
+	}
+}
