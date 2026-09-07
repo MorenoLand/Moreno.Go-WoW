@@ -34,6 +34,21 @@ type UnitInfo struct {
 	Player     bool
 	Dead       bool
 	Visible    bool
+	Auras      []AuraInfo
+}
+
+type AuraInfo struct {
+	Name              string
+	Rank              string
+	Texture           string
+	Count             int
+	DebuffType        string
+	Duration          float64
+	ExpirationTime    float64
+	Caster            string
+	CanStealOrPurge   bool
+	ShouldConsolidate bool
+	Harmful           bool
 }
 
 func (rt *Runtime) ensureUnits() {
@@ -49,7 +64,11 @@ func (rt *Runtime) SetUnit(unit string, info UnitInfo) {
 	rt.ensureUnits()
 	unit = strings.ToLower(strings.TrimSpace(unit))
 	cp := info
+	cp.Auras = append([]AuraInfo(nil), info.Auras...)
 	rt.units[unit] = &cp
+	if rt.widgets["BuffFrame"] != nil {
+		rt.FireEvent("UNIT_AURA", lua.LString(unit))
+	}
 }
 
 func (rt *Runtime) ClearUnit(unit string) {
@@ -582,11 +601,14 @@ func registerUnitAPI(rt *Runtime) {
 		L.Push(lua.LNumber(0))
 		return 1
 	})
+	reg("UnitAura", func(L *lua.LState) int {
+		return rt.pushAura(L, L.OptString(1, ""), L.OptInt(2, 0), L.OptString(3, ""))
+	})
 	reg("UnitBuff", func(L *lua.LState) int {
-		return 0
+		return rt.pushAura(L, L.OptString(1, ""), L.OptInt(2, 0), "HELPFUL")
 	})
 	reg("UnitDebuff", func(L *lua.LState) int {
-		return 0
+		return rt.pushAura(L, L.OptString(1, ""), L.OptInt(2, 0), "HARMFUL")
 	})
 	reg("SetPortraitTexture", func(L *lua.LState) int {
 		tex := rt.resolveTextureArg(L, 1)
@@ -600,4 +622,44 @@ func registerUnitAPI(rt *Runtime) {
 		rt.applyPortraitToTexture(tex, path)
 		return 0
 	})
+}
+
+func (rt *Runtime) pushAura(L *lua.LState, unit string, index int, filter string) int {
+	info := rt.unitInfo(unit)
+	if info == nil || !info.Exists || index < 1 {
+		return 0
+	}
+	wantHarmful := strings.Contains(strings.ToUpper(filter), "HARMFUL")
+	wantHelpful := strings.Contains(strings.ToUpper(filter), "HELPFUL") || !wantHarmful
+	position := 0
+	for _, aura := range info.Auras {
+		harmful := aura.Harmful || aura.DebuffType != ""
+		if (wantHarmful && !harmful) || (wantHelpful && harmful) {
+			continue
+		}
+		position++
+		if position != index {
+			continue
+		}
+		L.Push(lua.LString(aura.Name))
+		L.Push(lua.LString(aura.Rank))
+		L.Push(lua.LString(aura.Texture))
+		L.Push(lua.LNumber(aura.Count))
+		if aura.DebuffType == "" {
+			L.Push(lua.LNil)
+		} else {
+			L.Push(lua.LString(aura.DebuffType))
+		}
+		L.Push(lua.LNumber(aura.Duration))
+		L.Push(lua.LNumber(aura.ExpirationTime))
+		if aura.Caster == "" {
+			L.Push(lua.LNil)
+		} else {
+			L.Push(lua.LString(aura.Caster))
+		}
+		L.Push(lua.LBool(aura.CanStealOrPurge))
+		L.Push(lua.LBool(aura.ShouldConsolidate))
+		return 10
+	}
+	return 0
 }

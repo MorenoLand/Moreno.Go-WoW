@@ -185,9 +185,23 @@ if not WatchFrame then
 elseif WatchFrame.showObjectives == nil then
     WatchFrame.showObjectives = true
 end
+if not table.wipe then
+    function table.wipe(value)
+        for key in pairs(value) do
+            value[key] = nil
+        end
+    end
+end
 if not PlayerFrameAlternateManaBar then
     PlayerFrameAlternateManaBar = CreateFrame("StatusBar", "PlayerFrameAlternateManaBar", UIParent)
     PlayerFrameAlternateManaBar:Hide()
+end
+if Minimap and not MinimapMap then
+    MinimapMap = Minimap:CreateTexture("MinimapMap", "BACKGROUND")
+    MinimapMap:SetWidth(140)
+    MinimapMap:SetHeight(140)
+    MinimapMap:SetPoint("CENTER", Minimap, "CENTER", 0, 0)
+    MinimapMap:SetTexture("Interface\\WorldMap\\Azeroth\\Azeroth1")
 end
 for _, name in ipairs({
     "GameTooltip",
@@ -232,6 +246,7 @@ end
 	// Drop glue-screen keyboard focus (e.g. AccountLoginAccountEdit) so the
 	// first world ESC runs TOGGLEGAMEMENU instead of only clearing focus.
 	eng.Rt.setFocus(nil)
+	eng.Rt.FireEvent("UNIT_AURA", lua.LString("player"))
 	eng.syncCombatLogButtons()
 	eng.worldUIReady = true
 	return nil
