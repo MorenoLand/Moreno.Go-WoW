@@ -235,6 +235,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var worldModel *core.Node
 	var worldSky *core.Node
 	worldEntities := make(map[uint64]*worldEntity)
+	worldAuras := worldAuraState{slots: make(map[uint64][]world.AuraSlot)}
 
 	worldCreatureCache := worldCreatureTables{}
 	var worldFloor func(float32, float32, float32) (float32, bool)
@@ -394,7 +395,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 							petModel.SetRotation(0, sceneCharacterFacing*math.Pi/180, 0)
 							scenePetModel = petModel
 							scene.Add(scenePetModel)
-					}
+				}
 					}
 				}
 			}
@@ -863,6 +864,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					worldPlayer = nil
 				}
 				worldEntities = make(map[uint64]*worldEntity)
+				worldAuras.reset()
 				worldCreatureCache = worldCreatureTables{}
 				worldFloor = nil
 				worldModel = loaded
@@ -930,6 +932,18 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					break
 				}
 				switch event.Packet.Opcode {
+				case world.AuraUpdate, world.AuraUpdateAll:
+					all := event.Packet.Opcode == world.AuraUpdateAll
+					auraUpdate, auraErr := world.ParseAuraUpdate(event.Packet.Body, all)
+					if auraErr != nil {
+						if debug {
+							log.Printf("world aura update: %v", auraErr)
+						}
+						break
+					}
+					if worldAuras.apply(uiEngine.Rt, uiEngine.AssetLoader, auraUpdate, all, worldCharacter.GUID) {
+						refresh()
+					}
 				case world.MessageChat:
 					message, chatErr := world.ParseMessageChat(event.Packet.Body)
 					if chatErr != nil {

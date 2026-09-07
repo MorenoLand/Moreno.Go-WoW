@@ -244,7 +244,7 @@ func parseCharSectionsTable(data []byte) (charSectionsTable, error) {
 		return charSectionsTable{}, fmt.Errorf("invalid CharSections.dbc")
 	}
 	table := charSectionsTable{data: data, records: int(binary.LittleEndian.Uint32(data[4:8])), fields: int(binary.LittleEndian.Uint32(data[8:12])), stride: int(binary.LittleEndian.Uint32(data[12:16])), stringSize: int(binary.LittleEndian.Uint32(data[16:20]))}
-	if table.records < 1 || table.fields < 3 || table.stride < table.fields*4 || table.stringSize < 1 || table.records > (len(data)-20-table.stringSize)/table.stride {
+	if table.records < 1 || table.fields < 2 || table.stride < table.fields*4 || table.stringSize < 1 || table.records > (len(data)-20-table.stringSize)/table.stride {
 		return charSectionsTable{}, fmt.Errorf("invalid CharSections.dbc dimensions")
 	}
 	table.stringStart = 20 + table.records*table.stride

@@ -78,6 +78,20 @@ func (rt *Runtime) ClearUnit(unit string) {
 	delete(rt.units, strings.ToLower(strings.TrimSpace(unit)))
 }
 
+func (rt *Runtime) SetUnitAuras(unit string, auras []AuraInfo) {
+	if rt == nil {
+		return
+	}
+	info := rt.unitInfo(unit)
+	if info == nil {
+		return
+	}
+	info.Auras = append([]AuraInfo(nil), auras...)
+	if rt.widgets["BuffFrame"] != nil {
+		rt.FireEvent("UNIT_AURA", lua.LString(strings.ToLower(strings.TrimSpace(unit))))
+	}
+}
+
 func (rt *Runtime) unitInfo(unit string) *UnitInfo {
 	if rt == nil || rt.units == nil {
 		return nil
@@ -633,7 +647,7 @@ func (rt *Runtime) pushAura(L *lua.LState, unit string, index int, filter string
 	wantHelpful := strings.Contains(strings.ToUpper(filter), "HELPFUL") || !wantHarmful
 	position := 0
 	for _, aura := range info.Auras {
-		harmful := aura.Harmful || aura.DebuffType != ""
+		harmful := aura.Harmful
 		if (wantHarmful && !harmful) || (wantHelpful && harmful) {
 			continue
 		}
