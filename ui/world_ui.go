@@ -203,6 +203,9 @@ if Minimap and not MinimapMap then
     MinimapMap:SetPoint("CENTER", Minimap, "CENTER", 0, 0)
     MinimapMap:SetTexture("Interface\\WorldMap\\Azeroth\\Azeroth1")
 end
+if Minimap_Update then
+    Minimap_Update()
+end
 for _, name in ipairs({
     "GameTooltip",
     "Minimap",

@@ -15,6 +15,7 @@ func TestLiveWorldMinimapHasMapContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer engine.Close()
+	engine.SetGlueState(GlueState{SelectedCharacter: 1, Characters: []CharacterEntry{{Zone: "Elwynn Forest"}}})
 	if err := engine.LoadWorldUI(); err != nil {
 		t.Fatal(err)
 	}
@@ -26,13 +27,16 @@ func TestLiveWorldMinimapHasMapContent(t *testing.T) {
 	if mapWidget.renderRect.W() < 139 || mapWidget.renderRect.H() < 139 {
 		t.Fatalf("minimap map rect=%v", mapWidget.renderRect)
 	}
+	if zone := engine.Rt.widgets["MinimapZoneText"]; zone == nil || zone.text != "Elwynn Forest" {
+		t.Fatalf("minimap zone text=%#v", zone)
+	}
 	frame := engine.RenderWorld(960, 640)
 	centerX := int((mapWidget.renderRect.X0 + mapWidget.renderRect.X1) * engine.uiScale / 2)
 	centerY := 640 - int((mapWidget.renderRect.Y0+mapWidget.renderRect.Y1)*engine.uiScale/2)
 	if frame.RGBAAt(centerX, centerY).A == 0 {
 		t.Fatal("minimap center is transparent")
 	}
-	cornerX := int((mapWidget.renderRect.X0+10)*engine.uiScale)
+	cornerX := int((mapWidget.renderRect.X0 + 10) * engine.uiScale)
 	cornerY := 640 - int((mapWidget.renderRect.Y1-10)*engine.uiScale)
 	if frame.RGBAAt(cornerX, cornerY).A != 0 {
 		t.Fatal("minimap map leaked outside circular mask")
