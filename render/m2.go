@@ -1028,15 +1028,11 @@ func m2PartTintAt(model *parsedM2, colorIndex, textureWeightIndex int, sequence 
 	if model != nil && colorIndex >= 0 && colorIndex < len(model.colors) {
 		entry := model.colors[colorIndex]
 		color = entry.colorTrack.value(sequence, m2TrackTime(entry.colorTrack.globalSequence, timeMS, globalTimeMS), model.globalLoops, color)
-		if value := entry.alphaTrack.value(sequence, m2TrackTime(entry.alphaTrack.globalSequence, timeMS, globalTimeMS), model.globalLoops, alpha); value > 0.001 {
-			alpha = value
-		}
+		alpha = entry.alphaTrack.value(sequence, m2TrackTime(entry.alphaTrack.globalSequence, timeMS, globalTimeMS), model.globalLoops, alpha)
 	}
 	if model != nil && textureWeightIndex >= 0 && textureWeightIndex < len(model.textureWeights) {
 		entry := model.textureWeights[textureWeightIndex]
-		if value := entry.weightTrack.value(sequence, m2TrackTime(entry.weightTrack.globalSequence, timeMS, globalTimeMS), model.globalLoops, 1); value > 0.001 {
-			alpha *= value
-		}
+		alpha *= entry.weightTrack.value(sequence, m2TrackTime(entry.weightTrack.globalSequence, timeMS, globalTimeMS), model.globalLoops, 1)
 	}
 	for index := range color {
 		color[index] = clampM2Color(color[index])

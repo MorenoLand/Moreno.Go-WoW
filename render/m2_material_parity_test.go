@@ -22,8 +22,8 @@ func TestM2PartTintHonorsColorAndWeightTracks(t *testing.T) {
 	}
 	zeroAlpha := m2TrackScalar{sequences: []m2ScalarKeys{{times: []uint32{0}, values: []float32{0}}}}
 	_, alpha = m2PartTintAt(&parsedM2{colors: []m2Color{{alphaTrack: zeroAlpha}}}, 0, -1, 0, 0, 0)
-	if alpha != 1 {
-		t.Fatalf("zero color alpha=%v want default opaque", alpha)
+	if alpha != 0 {
+		t.Fatalf("zero color alpha=%v want authored transparency", alpha)
 	}
 }
 
