@@ -205,6 +205,9 @@ end
 if Minimap_Update then
     Minimap_Update()
 end
+if TemporaryEnchantFrame_Hide then
+    TemporaryEnchantFrame_Hide()
+end
 for _, name in ipairs({
     "GameTooltip",
     "Minimap",
