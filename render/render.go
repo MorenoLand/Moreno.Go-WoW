@@ -224,6 +224,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var scenePetModel *core.Node
 	sceneCharacterFacing := float32(0)
 	sceneModelPath := ""
+	sceneModelKey := ""
 	sceneCharacterKey := ""
 	sceneCameraDiagonalFOV := float32(0)
 	debugModelLoadMS := float64(0)
@@ -287,6 +288,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				return false
 			}
 			path := uiEngine.CurrentModelPath()
+			sceneModels := uiEngine.VisibleGlueSceneModels()
+			sceneKey := uiEngine.VisibleGlueSceneKey()
 			characterKey := ""
 			var selectedCharacter world.Character
 			selectedIndex := uiEngine.SelectedCharacterIndex()
@@ -298,7 +301,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				selectedCharacter = glueCharacters[index]
 				characterKey = fmt.Sprintf("%d:%s:%d", selectedCharacter.GUID, worldCharacterModelPath(selectedCharacter), selectedCharacter.PetDisplayID)
 			}
-			if path == sceneModelPath && characterKey == sceneCharacterKey {
+			if path == sceneModelPath && sceneKey == sceneModelKey && characterKey == sceneCharacterKey {
 				return false
 			}
 			if debug {
@@ -322,18 +325,25 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			resetSceneCamera(cam)
 			sceneCameraDiagonalFOV = 0
 			sceneModelPath = path
+			sceneModelKey = sceneKey
 			sceneCharacterKey = characterKey
 			debugModelError = ""
 			debugModelLoadMS = 0
 			uiEngine.SetSceneBackground(false)
-			if path == "" {
+			if path == "" && len(sceneModels) == 0 {
 				return true
 			}
 			if debug {
 				log.Printf("scene: loading %s", path)
 			}
 			modelStarted := time.Now()
-			model, modelErr := loadGlueModel(uiEngine.AssetLoader, path)
+			var model *core.Node
+			var modelErr error
+			if len(sceneModels) > 0 {
+				model, modelErr = loadGlueScene(uiEngine.AssetLoader, sceneModels)
+			} else {
+				model, modelErr = loadGlueModel(uiEngine.AssetLoader, path)
+			}
 			debugModelLoadMS = time.Since(modelStarted).Seconds() * 1000
 			if modelErr != nil {
 				debugModelError = modelErr.Error()
@@ -642,19 +652,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			now := time.Now()
 			elapsed := now.Sub(lastUpdate).Seconds()
 			if sceneModel != nil {
-				if info, ok := sceneModel.UserData().(glueModelInfo); ok {
-					if info.animation != nil {
-						for _, soundID := range info.animation.Update(elapsed) {
-							if debug {
-								log.Printf("scene sound event id=%d", soundID)
-							}
-							if host.audio != nil {
-								host.audio.PlaySoundID(soundID)
-							}
-						}
+				for _, soundID := range updateGlueSceneNode(sceneModel, elapsed) {
+					if debug {
+						log.Printf("scene sound event id=%d", soundID)
 					}
-					if info.particles != nil {
-						info.particles.Update(elapsed)
+					if host.audio != nil {
+						host.audio.PlaySoundID(soundID)
 					}
 				}
 			}

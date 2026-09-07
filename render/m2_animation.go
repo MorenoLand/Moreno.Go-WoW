@@ -83,6 +83,19 @@ func (animation *m2Animation) SetMotion(id uint16) {
 	animation.variationTimer = m2VariationTimer(animation, 3000, 11000)
 }
 
+func (animation *m2Animation) SetSequence(index int) {
+	if animation == nil || animation.model == nil || index < 0 || index >= len(animation.model.sequences) {
+		return
+	}
+	animation.sequence = index
+	animation.motionID = animation.model.sequences[index].id
+	animation.clock = 0
+	animation.idle = []int{index}
+	animation.idleBase = index
+	animation.variationEnabled = false
+	animation.playingVariation = false
+}
+
 func defaultM2Sequence(model *parsedM2) int {
 	if sequence := m2SequenceIndex(model, 0); sequence >= 0 {
 		return sequence
