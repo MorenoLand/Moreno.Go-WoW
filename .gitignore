@@ -19,3 +19,4 @@ config.json
 *.dll
 *.pdb
 *_test.go
+test/
