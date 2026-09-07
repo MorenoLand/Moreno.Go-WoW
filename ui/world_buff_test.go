@@ -26,6 +26,9 @@ func TestLiveWorldBuffFrameRendersUnitAuras(t *testing.T) {
 	if buff == nil || !buff.shown || icon == nil || icon.textureFile == "" || count == nil || count.text != "2" {
 		t.Fatalf("buff state button=%#v icon=%#v count=%#v", buff, icon, count)
 	}
+	if buff.renderRect != icon.renderRect {
+		t.Fatalf("buff icon rect=%v button rect=%v", icon.renderRect, buff.renderRect)
+	}
 	if errors := engine.Rt.ScriptErrors(); len(errors) != 0 {
 		t.Fatalf("buff script errors=%v", errors)
 	}

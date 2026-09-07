@@ -39,6 +39,7 @@ func (eng *UIEngine) SetWorldMinimapPosition(mapName string, worldX, worldY floa
 			if img == nil {
 				continue
 			}
+			img = transposeMinimapTile(img)
 			dst := image.Rect((column+1)*256, (row+1)*256, (column+2)*256, (row+2)*256)
 			if img.Bounds().Dx() == dst.Dx() && img.Bounds().Dy() == dst.Dy() {
 				draw.Draw(composite, dst, img, img.Bounds().Min, draw.Src)
@@ -68,6 +69,17 @@ func (eng *UIEngine) SetWorldMinimapPosition(mapName string, worldX, worldY floa
 	eng.minimapWorldY = worldY
 	eng.minimapHasPosition = true
 	return true
+}
+
+func transposeMinimapTile(source image.Image) image.Image {
+	bounds := source.Bounds()
+	result := image.NewRGBA(image.Rect(0, 0, bounds.Dy(), bounds.Dx()))
+	for y := 0; y < bounds.Dy(); y++ {
+		for x := 0; x < bounds.Dx(); x++ {
+			result.Set(y, x, source.At(bounds.Min.X+x, bounds.Min.Y+y))
+		}
+	}
+	return result
 }
 
 func (eng *UIEngine) loadMinimapTRS() {

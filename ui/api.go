@@ -231,6 +231,7 @@ func registerGlueAPI(rt *Runtime) {
 		L.Push(lua.LNumber(now.Minute()))
 		return 2
 	})
+	reg("GetNetStats", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 3 })
 	reg("GetActionBarPage", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
 	reg("GetBonusBarOffset", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
 	reg("HasAction", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
@@ -284,6 +285,7 @@ func registerGlueAPI(rt *Runtime) {
 	reg("GetSummonFriendCooldown", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 2 })
 	reg("PetHasActionBar", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("GetPetActionInfo", func(L *lua.LState) int { return 7 })
+	reg("GetWeaponEnchantInfo", func(L *lua.LState) int { L.Push(lua.LFalse); L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); L.Push(lua.LFalse); L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 6 })
 	reg("IsPetAttackAction", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("GetPetActionSlotUsable", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("GetPetActionCooldown", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 3 })

@@ -260,8 +260,8 @@ func (eng *UIEngine) Update(elapsed float64) bool {
 		}
 	}
 	if eng.worldRoot != nil {
-		if chat := eng.Rt.widgets["ChatFrame1"]; chat != nil {
-			update(chat)
+		for _, child := range eng.worldRoot.children {
+			update(child)
 		}
 	}
 	return statusChanged || eng.updateMovie(elapsed)
@@ -482,6 +482,9 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 			}
 			if fill.W() > 0 && fill.H() > 0 && w.statusBarTexture != nil && w.statusBarTexture.textureFile != "" {
 				if img := eng.loadBLP(w.statusBarTexture.textureFile); img != nil {
+					if !w.statusBarColor.isZero() {
+						img = eng.tintTextureImage(w.statusBarTexture.textureFile, img, w.statusBarColor)
+					}
 					tc := [4]float64{w.statusBarTexture.texCoordL, w.statusBarTexture.texCoordR, w.statusBarTexture.texCoordT, w.statusBarTexture.texCoordB}
 					if tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0 {
 						tc = [4]float64{0, 1, 0, 1}

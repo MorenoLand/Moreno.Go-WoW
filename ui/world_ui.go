@@ -197,7 +197,7 @@ if not PlayerFrameAlternateManaBar then
     PlayerFrameAlternateManaBar:Hide()
 end
 if Minimap and not MinimapMap then
-    MinimapMap = Minimap:CreateTexture("MinimapMap", "BACKGROUND")
+    MinimapMap = MinimapBackdrop:CreateTexture("MinimapMap", "BACKGROUND")
     MinimapMap:SetWidth(140)
     MinimapMap:SetHeight(140)
     MinimapMap:SetPoint("CENTER", Minimap, "CENTER", 0, 0)

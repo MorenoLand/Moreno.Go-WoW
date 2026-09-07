@@ -28,7 +28,7 @@ func TestLiveWorldMinimapHasMapContent(t *testing.T) {
 	}
 	engine.RenderWorld(960, 640)
 	mapWidget := engine.Rt.widgets["MinimapMap"]
-	if mapWidget == nil || !mapWidget.shown || engine.minimapImage == nil {
+	if mapWidget == nil || !mapWidget.shown || mapWidget.parent == nil || mapWidget.parent.name != "MinimapBackdrop" || engine.minimapImage == nil {
 		t.Fatalf("minimap map content=%#v", mapWidget)
 	}
 	if mapWidget.renderRect.W() < 139 || mapWidget.renderRect.H() < 139 {
