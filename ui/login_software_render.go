@@ -64,6 +64,15 @@ type UIEngine struct {
 	worldUIReady     bool
 	worldLoading     bool
 	worldActive      bool
+	minimapImage     image.Image
+	minimapTRS       map[string]string
+	minimapTRSLoaded bool
+	minimapMapName   string
+	minimapTileX     int
+	minimapTileY     int
+	minimapWorldX    float32
+	minimapWorldY    float32
+	minimapHasPosition bool
 }
 
 func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, error) {
@@ -429,9 +438,12 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 
 		switch w.kind {
 		case kindTexture:
-			if w.textureFile != "" {
+			if w.textureFile != "" || (w.name == "MinimapMap" && eng.minimapImage != nil) {
 				tc := [4]float64{w.texCoordL, w.texCoordR, w.texCoordT, w.texCoordB}
-				img := eng.loadBLP(w.textureFile)
+				img := eng.minimapImage
+				if w.name != "MinimapMap" || img == nil {
+					img = eng.loadBLP(w.textureFile)
+				}
 				if img != nil {
 					if tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0 {
 						tc = [4]float64{0, 1, 0, 1}
@@ -1646,6 +1658,9 @@ func (eng *UIEngine) handleKey(key window.Key, extendSelection bool) bool {
 			return true
 		}
 		if eng.worldUIReady {
+			if eng.worldActive && eng.closeWorldPanel() {
+				return true
+			}
 			return eng.ToggleGameMenu()
 		}
 		target := eng.keyboardTarget()
@@ -1719,6 +1734,17 @@ func (eng *UIEngine) handleKey(key window.Key, extendSelection bool) bool {
 	}
 	eng.Rt.fire(target, "OnKeyDown", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString(name)})
 	return true
+}
+
+func (eng *UIEngine) closeWorldPanel() bool {
+	for _, name := range []string{"VideoOptionsFrame", "AudioOptionsFrame", "InterfaceOptionsFrame", "KeyBindingFrame", "MacroFrame", "QuestLogFrame", "CharacterFrame", "SpellBookFrame"} {
+		frame := eng.Rt.widgets[name]
+		if frame == nil || !frame.shown {
+			continue
+		}
+		return eng.Rt.Execute(fmt.Sprintf("%s:Hide()", name), "@world-escape-close-"+name+".lua")
+	}
+	return false
 }
 
 func (eng *UIEngine) handleWorldHotkey(key window.Key) bool {

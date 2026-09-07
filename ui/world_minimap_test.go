@@ -19,9 +19,16 @@ func TestLiveWorldMinimapHasMapContent(t *testing.T) {
 	if err := engine.LoadWorldUI(); err != nil {
 		t.Fatal(err)
 	}
+	if !engine.SetWorldMinimapPosition("Azeroth", 0, 0) {
+		t.Fatal("minimap tiles were not selected")
+	}
+	hash := engine.minimapTRS["azeroth\\map32_32"]
+	if hash == "" || engine.loadBLP(`Textures\Minimap\`+hash) == nil {
+		t.Fatalf("center minimap tile hash=%q", hash)
+	}
 	engine.RenderWorld(960, 640)
 	mapWidget := engine.Rt.widgets["MinimapMap"]
-	if mapWidget == nil || !mapWidget.shown || mapWidget.textureFile == "" || engine.loadBLP(mapWidget.textureFile) == nil {
+	if mapWidget == nil || !mapWidget.shown || engine.minimapImage == nil {
 		t.Fatalf("minimap map content=%#v", mapWidget)
 	}
 	if mapWidget.renderRect.W() < 139 || mapWidget.renderRect.H() < 139 {

@@ -240,6 +240,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	worldCreatureCache := worldCreatureTables{}
 	var worldFloor func(float32, float32, float32) (float32, bool)
 	var worldCharacter world.Character
+	worldMapName := ""
 	var glueCharacters []world.Character
 	var setSceneModel func() bool
 	if dataPath != "" {
@@ -669,8 +670,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					}
 				}
 			}
+			minimapChanged := false
 			if worldMode && worldCamera != nil {
 				worldCamera.update(elapsed, cam, worldPlayer)
+				minimapChanged = uiEngine.SetWorldMinimapPosition(worldMapName, worldCamera.position[0], worldCamera.position[1])
 				advanceWorldEntities(worldEntities, elapsed, worldFloor)
 				if worldPlayer != nil {
 					if info, ok := worldPlayer.UserData().(glueModelInfo); ok {
@@ -742,7 +745,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				sceneCharacterModel.SetRotation(0, sceneCharacterFacing*math.Pi/180, 0)
 			}
 			lastUpdate = now
-			if movieChanged || sceneChanged {
+			if movieChanged || sceneChanged || minimapChanged {
 				refresh()
 			}
 			if uiEngine.DebugPanelDragging() && (lastUIRefresh.IsZero() || frameAt.Sub(lastUIRefresh) >= time.Second/60) {
@@ -839,7 +842,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					refresh()
 					break
 				}
-				uiEngine.SetWorldMinimapMap(info.mapName)
+				worldMapName = info.mapName
 				if sceneModel != nil {
 					scene.Remove(sceneModel)
 					sceneModel.Dispose()
@@ -901,6 +904,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				}
 				configureWorldCamera(cam, entry.position)
 				worldCamera.update(1.0/60.0, cam, worldPlayer)
+				uiEngine.SetWorldMinimapPosition(worldMapName, worldCamera.position[0], worldCamera.position[1])
 				cameraPosition := cam.Position()
 				worldSky.SetPositionVec(&cameraPosition)
 				if debug {

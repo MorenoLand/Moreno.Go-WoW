@@ -18,11 +18,11 @@ func TestLiveWorldMinimapFollowsMapName(t *testing.T) {
 	if err := engine.LoadWorldUI(); err != nil {
 		t.Fatal(err)
 	}
-	if !engine.SetWorldMinimapMap("Azeroth") {
-		t.Fatal("Azeroth minimap map was not selected")
+	if !engine.SetWorldMinimapPosition("Azeroth", 0, 0) {
+		t.Fatal("Azeroth minimap tiles were not selected")
 	}
 	mapWidget := engine.Rt.widgets["MinimapMap"]
-	if mapWidget == nil || mapWidget.textureFile != `Interface\WorldMap\Azeroth\Azeroth1` {
+	if mapWidget == nil || engine.minimapMapName != "Azeroth" || mapWidget.texCoordL >= mapWidget.texCoordR || mapWidget.texCoordT >= mapWidget.texCoordB {
 		t.Fatalf("minimap map=%#v", mapWidget)
 	}
 	if errors := engine.Rt.ScriptErrors(); len(errors) != 0 {

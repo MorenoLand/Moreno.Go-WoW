@@ -201,7 +201,6 @@ if Minimap and not MinimapMap then
     MinimapMap:SetWidth(140)
     MinimapMap:SetHeight(140)
     MinimapMap:SetPoint("CENTER", Minimap, "CENTER", 0, 0)
-    MinimapMap:SetTexture("Interface\\WorldMap\\Azeroth\\Azeroth1")
 end
 if Minimap_Update then
     Minimap_Update()
@@ -329,21 +328,6 @@ func (eng *UIEngine) SetWorldLoading(loading bool) {
 			button.buttonState = "NORMAL"
 		}
 	}
-}
-
-func (eng *UIEngine) SetWorldMinimapMap(mapName string) bool {
-	if eng == nil || eng.Rt == nil || eng.AssetLoader == nil {
-		return false
-	}
-	mapName = strings.TrimSpace(mapName)
-	if mapName == "" {
-		return false
-	}
-	path := fmt.Sprintf(`Interface\WorldMap\%s\%s1`, mapName, mapName)
-	if _, err := eng.AssetLoader.ReadAsset(path); err != nil {
-		return false
-	}
-	return eng.Rt.Execute(fmt.Sprintf(`if MinimapMap then MinimapMap:SetTexture(%q) end`, path), "@world-minimap-map.lua")
 }
 
 func (eng *UIEngine) SelectedCharacterIndex() int {

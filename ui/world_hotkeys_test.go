@@ -39,8 +39,8 @@ func TestLiveWorldMenuHotkeysOpenNativePanels(t *testing.T) {
 		if engine.Rt.widgets["GameMenuFrame"].shown {
 			t.Fatalf("%s left GameMenuFrame open", test.frame)
 		}
-		if !engine.HandleKey(test.key) || engine.Rt.widgets[test.frame].shown {
-			t.Fatalf("hotkey %v did not close %s; errors=%v", test.key, test.frame, engine.Rt.ScriptErrors())
+		if !engine.HandleKey(window.KeyEscape) || engine.Rt.widgets[test.frame].shown || engine.Rt.widgets["GameMenuFrame"].shown {
+			t.Fatalf("escape did not close %s before game menu; errors=%v", test.frame, engine.Rt.ScriptErrors())
 		}
 	}
 	if errors := engine.Rt.ScriptErrors(); len(errors) != 0 {
