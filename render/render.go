@@ -839,6 +839,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					refresh()
 					break
 				}
+				uiEngine.SetWorldMinimapMap(info.mapName)
 				if sceneModel != nil {
 					scene.Remove(sceneModel)
 					sceneModel.Dispose()

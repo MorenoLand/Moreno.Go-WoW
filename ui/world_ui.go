@@ -328,6 +328,21 @@ func (eng *UIEngine) SetWorldLoading(loading bool) {
 	}
 }
 
+func (eng *UIEngine) SetWorldMinimapMap(mapName string) bool {
+	if eng == nil || eng.Rt == nil || eng.AssetLoader == nil {
+		return false
+	}
+	mapName = strings.TrimSpace(mapName)
+	if mapName == "" {
+		return false
+	}
+	path := fmt.Sprintf(`Interface\WorldMap\%s\%s1`, mapName, mapName)
+	if _, err := eng.AssetLoader.ReadAsset(path); err != nil {
+		return false
+	}
+	return eng.Rt.Execute(fmt.Sprintf(`if MinimapMap then MinimapMap:SetTexture(%q) end`, path), "@world-minimap-map.lua")
+}
+
 func (eng *UIEngine) SelectedCharacterIndex() int {
 	if eng == nil || eng.Rt == nil {
 		return -1
