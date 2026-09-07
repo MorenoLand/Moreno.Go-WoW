@@ -200,7 +200,7 @@ if Minimap and not MinimapMap then
     MinimapMap = MinimapBackdrop:CreateTexture("MinimapMap", "BACKGROUND")
     MinimapMap:SetWidth(140)
     MinimapMap:SetHeight(140)
-    MinimapMap:SetPoint("CENTER", MinimapBackdrop, "CENTER", 0, 0)
+    MinimapMap:SetPoint("CENTER", Minimap, "CENTER", 0, 0)
 end
 if Minimap_Update then
     Minimap_Update()
