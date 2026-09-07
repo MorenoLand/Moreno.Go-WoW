@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"math"
 	"os"
 	"testing"
 )
@@ -33,6 +34,10 @@ func TestLiveWorldMinimapHasMapContent(t *testing.T) {
 	}
 	if mapWidget.renderRect.W() < 139 || mapWidget.renderRect.H() < 139 {
 		t.Fatalf("minimap map rect=%v", mapWidget.renderRect)
+	}
+	border := engine.Rt.widgets["MinimapBorder"]
+	if border == nil || math.Abs((mapWidget.renderRect.X0+mapWidget.renderRect.X1)-(border.renderRect.X0+border.renderRect.X1)) > 0.01 || math.Abs((mapWidget.renderRect.Y0+mapWidget.renderRect.Y1)-(border.renderRect.Y0+border.renderRect.Y1)) > 0.01 {
+		t.Fatalf("minimap map/ring centers map=%v border=%v", mapWidget.renderRect, border)
 	}
 	if zone := engine.Rt.widgets["MinimapZoneText"]; zone == nil || zone.text != "Elwynn Forest" {
 		t.Fatalf("minimap zone text=%#v", zone)

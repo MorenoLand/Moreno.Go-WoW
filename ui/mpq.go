@@ -261,10 +261,6 @@ func discoverMPQArchives(root, locale string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	installEntries, err := mpqDirectoryImmediate(filepath.Dir(root))
-	if err != nil {
-		return nil, err
-	}
 	localeDir := findLocaleDirectory(root, locale)
 	localeEntries := map[string]string{}
 	if localeDir != "" {
@@ -298,7 +294,6 @@ func discoverMPQArchives(root, locale string) ([]string, error) {
 	}
 	addPatches(rootEntries)
 	addPatches(localeEntries)
-	addPatches(installEntries)
 	sort.SliceStable(patches, func(i, j int) bool {
 		if patches[i].number != patches[j].number {
 			return patches[i].number < patches[j].number

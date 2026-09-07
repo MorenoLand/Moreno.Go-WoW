@@ -39,7 +39,7 @@ func TestLiveGlueAccountLoginOpens(t *testing.T) {
 	}
 }
 
-func TestDiscoverMPQIncludesInstallRootPatch(t *testing.T) {
+func TestDiscoverMPQIgnoresInstallRootPatch(t *testing.T) {
 	root := t.TempDir()
 	data := filepath.Join(root, "Data")
 	if err := os.MkdirAll(data, 0o755); err != nil {
@@ -63,8 +63,11 @@ func TestDiscoverMPQIncludesInstallRootPatch(t *testing.T) {
 			dataPatch = index
 		}
 	}
-	if rootPatch < 0 || dataPatch < 0 || rootPatch <= dataPatch {
-		t.Fatalf("patch order root=%d data=%d paths=%v", rootPatch, dataPatch, paths)
+	if rootPatch >= 0 {
+		t.Fatalf("install-root patch was loaded at %d: %v", rootPatch, paths)
+	}
+	if dataPatch < 0 {
+		t.Fatalf("Data patch-3 was not loaded: %v", paths)
 	}
 }
 
