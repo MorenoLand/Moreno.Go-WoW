@@ -24,6 +24,14 @@ func TestM2ParticleBlendModes(t *testing.T) {
 	}
 }
 
+func TestM2MaterialBlendModes(t *testing.T) {
+	for raw, want := range map[uint16]material.Blending{0: material.BlendNone, 1: material.BlendNone, 2: material.BlendNormal, 3: material.BlendAdditive, 4: material.BlendMultiply, 5: material.BlendMultiply, 6: material.BlendAdditive} {
+		if got := m2MaterialBlending(raw); got != want {
+			t.Fatalf("material blend %d=%v want %v", raw, got, want)
+		}
+	}
+}
+
 func TestM2ParticleAppearancePreservesAxisScale(t *testing.T) {
 	emitter := m2ParticleEmitter{alpha: 1, scale: [2]float32{2, 3}}
 	_, size, _, _ := particleAppearance(emitter, m2Particle{life: 1})

@@ -1082,19 +1082,12 @@ func buildWorldM2BatchedMesh(loader *ui.Loader, builder *worldM2MeshBuilder, tex
 	mat.SetUseLights(material.UseLightNone)
 	mat.SetDepthTest(builder.part.material.flags&0x08 == 0)
 	mat.SetDepthMask(builder.part.material.flags&0x10 == 0)
-	switch builder.part.material.blend {
-	case 0, 1:
+	if m2MaterialBlending(builder.part.material.blend) == material.BlendNone {
 		mat.SetTransparent(false)
 		mat.SetBlending(material.BlendNone)
-	case 3, 4:
+	} else {
 		mat.SetTransparent(true)
-		mat.SetBlending(material.BlendAdditive)
-	case 5, 6:
-		mat.SetTransparent(true)
-		mat.SetBlending(material.BlendMultiply)
-	default:
-		mat.SetTransparent(true)
-		mat.SetBlending(material.BlendNormal)
+		mat.SetBlending(m2MaterialBlending(builder.part.material.blend))
 	}
 	for textureIndex, texturePath := range builder.part.texturePaths {
 		tex := textures[texturePath]
@@ -1191,19 +1184,12 @@ func buildWorldM2Instance(loader *ui.Loader, parts map[string]*m2Part, textures 
 		mat.SetUseLights(material.UseLightNone)
 		mat.SetDepthTest(part.material.flags&0x08 == 0)
 		mat.SetDepthMask(part.material.flags&0x10 == 0)
-		switch part.material.blend {
-		case 0, 1:
+		if m2MaterialBlending(part.material.blend) == material.BlendNone {
 			mat.SetTransparent(false)
 			mat.SetBlending(material.BlendNone)
-		case 3, 4:
+		} else {
 			mat.SetTransparent(true)
-			mat.SetBlending(material.BlendAdditive)
-		case 5, 6:
-			mat.SetTransparent(true)
-			mat.SetBlending(material.BlendMultiply)
-		default:
-			mat.SetTransparent(true)
-			mat.SetBlending(material.BlendNormal)
+			mat.SetBlending(m2MaterialBlending(part.material.blend))
 		}
 		for textureIndex, texturePath := range part.texturePaths {
 			tex := textures[texturePath]

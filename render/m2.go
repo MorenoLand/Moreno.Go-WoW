@@ -353,22 +353,12 @@ func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model 
 		mat.SetUseLights(material.UseLightNone)
 		mat.SetDepthTest(part.material.flags&0x08 == 0)
 		mat.SetDepthMask(part.material.flags&0x10 == 0)
-		switch part.material.blend {
-		case 0:
+		if m2MaterialBlending(part.material.blend) == material.BlendNone {
 			mat.SetTransparent(false)
 			mat.SetBlending(material.BlendNone)
-		case 1:
-			mat.SetTransparent(false)
-			mat.SetBlending(material.BlendNone)
-		case 3, 4:
+		} else {
 			mat.SetTransparent(true)
-			mat.SetBlending(material.BlendAdditive)
-		case 5, 6:
-			mat.SetTransparent(true)
-			mat.SetBlending(material.BlendMultiply)
-		default:
-			mat.SetTransparent(true)
-			mat.SetBlending(material.BlendNormal)
+			mat.SetBlending(m2MaterialBlending(part.material.blend))
 		}
 		mat.SetOpacity(alpha)
 		if alpha < 1 && part.material.blend < 2 {
@@ -911,6 +901,19 @@ func m2RenderOrder(part *m2Part) int {
 		return -100 + part.renderOrder
 	}
 	return int(part.priorityPlane)*1000000 + int(part.materialLayer)*10000 + int(part.material.blend)*100 + part.renderOrder
+}
+
+func m2MaterialBlending(raw uint16) material.Blending {
+	switch raw {
+	case 0, 1:
+		return material.BlendNone
+	case 3, 6:
+		return material.BlendAdditive
+	case 4, 5:
+		return material.BlendMultiply
+	default:
+		return material.BlendNormal
+	}
 }
 
 func loadModelTexture(loader *ui.Loader, path string) *texture.Texture2D {
