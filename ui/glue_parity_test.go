@@ -133,6 +133,11 @@ func TestLiveLoginSceneAdvancesFromPatch4FrameXML(t *testing.T) {
 	if engine.CurrentModelPath() == "" {
 		t.Fatal("patch-4 LoginScene did not expose an active model")
 	}
+	engine.SetSceneBackground(true)
+	engine.Render(960, 640)
+	if background.renderRect.W() < 900 || background.renderRect.H() < 500 {
+		t.Fatalf("login background collapsed to %v", background.renderRect)
+	}
 	if errors := engine.Rt.ScriptErrors(); len(errors) != 0 {
 		t.Fatalf("login scene script errors=%v", errors)
 	}

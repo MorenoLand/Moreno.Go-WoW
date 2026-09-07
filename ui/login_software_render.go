@@ -2504,17 +2504,22 @@ func drawSubModeFilter(canvas *image.RGBA, img image.Image, r Rect, screenHeight
 	if dst.Dx() <= 0 || dst.Dy() <= 0 {
 		return
 	}
-	if !additive {
-		xdraw.BiLinear.Scale(canvas, dst, srcImg, srcImg.Bounds(), xdraw.Over, nil)
+	clipped := dst.Intersect(canvas.Bounds())
+	if clipped.Empty() {
 		return
 	}
-	blend := acquireBlendScratch(dst)
+	source := clipTextureSource(srcImg, dst, clipped)
+	if !additive {
+		xdraw.BiLinear.Scale(canvas, clipped, source, source.Bounds(), xdraw.Over, nil)
+		return
+	}
+	blend := acquireBlendScratch(clipped)
 	defer releaseBlendScratch(blend)
-	xdraw.BiLinear.Scale(blend, blend.Bounds(), srcImg, srcImg.Bounds(), xdraw.Src, nil)
-	for y := dst.Min.Y; y < dst.Max.Y; y++ {
-		dstOff := canvas.PixOffset(dst.Min.X, y)
-		srcOff := blend.PixOffset(dst.Min.X, y)
-		for x := dst.Min.X; x < dst.Max.X; x++ {
+	xdraw.BiLinear.Scale(blend, blend.Bounds(), source, source.Bounds(), xdraw.Src, nil)
+	for y := clipped.Min.Y; y < clipped.Max.Y; y++ {
+		dstOff := canvas.PixOffset(clipped.Min.X, y)
+		srcOff := blend.PixOffset(clipped.Min.X, y)
+		for x := clipped.Min.X; x < clipped.Max.X; x++ {
 			sr8 := blend.Pix[srcOff+0]
 			sg8 := blend.Pix[srcOff+1]
 			sb8 := blend.Pix[srcOff+2]
@@ -2539,6 +2544,33 @@ func drawSubModeFilter(canvas *image.RGBA, img image.Image, r Rect, screenHeight
 			srcOff += 4
 		}
 	}
+}
+
+func clipTextureSource(source image.Image, destination, clipped image.Rectangle) image.Image {
+	if destination == clipped {
+		return source
+	}
+	bounds := source.Bounds()
+	if destination.Dx() <= 0 || destination.Dy() <= 0 || bounds.Dx() <= 0 || bounds.Dy() <= 0 {
+		return source
+	}
+	x0 := bounds.Min.X + int(math.Floor(float64(clipped.Min.X-destination.Min.X)*float64(bounds.Dx())/float64(destination.Dx())))
+	x1 := bounds.Min.X + int(math.Ceil(float64(clipped.Max.X-destination.Min.X)*float64(bounds.Dx())/float64(destination.Dx())))
+	y0 := bounds.Min.Y + int(math.Floor(float64(clipped.Min.Y-destination.Min.Y)*float64(bounds.Dy())/float64(destination.Dy())))
+	y1 := bounds.Min.Y + int(math.Ceil(float64(clipped.Max.Y-destination.Min.Y)*float64(bounds.Dy())/float64(destination.Dy())))
+	x0 = max(x0, bounds.Min.X)
+	y0 = max(y0, bounds.Min.Y)
+	x1 = min(x1, bounds.Max.X)
+	y1 = min(y1, bounds.Max.Y)
+	if x1 <= x0 || y1 <= y0 {
+		return source
+	}
+	if rgba, ok := source.(*image.RGBA); ok {
+		return rgba.SubImage(image.Rect(x0, y0, x1, y1))
+	}
+	result := image.NewRGBA(image.Rect(0, 0, x1-x0, y1-y0))
+	draw.Draw(result, result.Bounds(), source, image.Point{X: x0, Y: y0}, draw.Src)
+	return result
 }
 
 func resolveTextureSubRGBA(img image.Image, tc [4]float64) (*image.RGBA, bool) {

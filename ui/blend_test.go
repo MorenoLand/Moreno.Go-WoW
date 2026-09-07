@@ -44,3 +44,18 @@ func TestTextureCoordinatesPreserveHorizontalFlip(t *testing.T) {
 		t.Fatalf("horizontal flip was discarded: left=%+v right=%+v", canvas.RGBAAt(0, 0), canvas.RGBAAt(1, 0))
 	}
 }
+
+func TestDrawSubModeClipsOffscreenDestination(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 2; x++ {
+			source.SetRGBA(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	drawSubModeFilter(canvas, source, Rect{X0: -2, Y0: 0, X1: 2, Y1: 4}, 4, [4]float64{0, 1, 0, 1}, false)
+	drawSubModeFilter(canvas, source, Rect{X0: 2, Y0: 0, X1: 6, Y1: 4}, 4, [4]float64{0, 1, 0, 1}, true)
+	if canvas.RGBAAt(0, 1).A == 0 || canvas.RGBAAt(3, 1).A == 0 {
+		t.Fatalf("clipped texture draw missed visible pixels: left=%+v right=%+v", canvas.RGBAAt(0, 1), canvas.RGBAAt(3, 1))
+	}
+}

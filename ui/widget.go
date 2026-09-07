@@ -502,19 +502,37 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			if w.kind == kindFontString && w.autoTextWidth && rt.measureText != nil {
 				rt.measureText(w)
 			}
-			L.Push(lua.LNumber(w.width))
+			width := w.width
+			if width <= 0 && (w.name == "GlueParent" || w.name == "UIParent") && rt.Host != nil {
+				width, _ = rt.Host.ScreenSize()
+			}
+			L.Push(lua.LNumber(width))
 			return 1
 		},
 		"GetHeight": func(L *lua.LState, w *widget) int {
 			if w.kind == kindFontString && w.autoTextHeight && rt.measureText != nil {
 				rt.measureText(w)
 			}
-			L.Push(lua.LNumber(w.height))
+			height := w.height
+			if height <= 0 && (w.name == "GlueParent" || w.name == "UIParent") && rt.Host != nil {
+				_, height = rt.Host.ScreenSize()
+			}
+			L.Push(lua.LNumber(height))
 			return 1
 		},
 		"GetSize": func(L *lua.LState, w *widget) int {
-			L.Push(lua.LNumber(w.width))
-			L.Push(lua.LNumber(w.height))
+			width, height := w.width, w.height
+			if (width <= 0 || height <= 0) && (w.name == "GlueParent" || w.name == "UIParent") && rt.Host != nil {
+				hostWidth, hostHeight := rt.Host.ScreenSize()
+				if width <= 0 {
+					width = hostWidth
+				}
+				if height <= 0 {
+					height = hostHeight
+				}
+			}
+			L.Push(lua.LNumber(width))
+			L.Push(lua.LNumber(height))
 			return 2
 		},
 		"GetTop": func(L *lua.LState, w *widget) int {
