@@ -246,14 +246,14 @@ type glueModelStats struct {
 }
 
 func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
-	return loadGlueModelWithNormalization(loader, modelPath, true)
+	return loadGlueModelWithNormalization(loader, modelPath, true, 1)
 }
 
-func loadGlueSceneModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
-	return loadGlueModelWithNormalization(loader, modelPath, false)
+func loadGlueSceneModel(loader *ui.Loader, modelPath string, alpha float32) (*core.Node, error) {
+	return loadGlueModelWithNormalization(loader, modelPath, false, alpha)
 }
 
-func loadGlueModelWithNormalization(loader *ui.Loader, modelPath string, normalize bool) (*core.Node, error) {
+func loadGlueModelWithNormalization(loader *ui.Loader, modelPath string, normalize bool, alpha float32) (*core.Node, error) {
 	modelPath = normalizeModelPath(modelPath)
 	if modelPath == "" {
 		return nil, nil
@@ -276,14 +276,15 @@ func loadGlueModelWithNormalization(loader *ui.Loader, modelPath string, normali
 	if err != nil {
 		return nil, err
 	}
-	return buildGlueModelWithNormalization(loader, modelPath, model, skin, nil, nil, nil, normalize)
+	return buildGlueModelWithNormalization(loader, modelPath, model, skin, nil, nil, nil, normalize, alpha)
 }
 
 func buildGlueModel(loader *ui.Loader, modelPath string, model parsedM2, skin parsedSkin, textureOverrides map[int]string, preloaded map[string]*texture.Texture2D, activeGeosets map[uint16]bool) (*core.Node, error) {
-	return buildGlueModelWithNormalization(loader, modelPath, model, skin, textureOverrides, preloaded, activeGeosets, true)
+	return buildGlueModelWithNormalization(loader, modelPath, model, skin, textureOverrides, preloaded, activeGeosets, true, 1)
 }
 
-func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model parsedM2, skin parsedSkin, textureOverrides map[int]string, preloaded map[string]*texture.Texture2D, activeGeosets map[uint16]bool, normalize bool) (*core.Node, error) {
+func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model parsedM2, skin parsedSkin, textureOverrides map[int]string, preloaded map[string]*texture.Texture2D, activeGeosets map[uint16]bool, normalize bool, alpha float32) (*core.Node, error) {
+	alpha = clampM2Color(alpha)
 	parts := buildM2PartsWithFilters(model, skin, textureOverrides, activeGeosets)
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("%s: no renderable skin batches", modelPath)
@@ -359,6 +360,12 @@ func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model 
 			mat.SetTransparent(true)
 			mat.SetBlending(material.BlendNormal)
 		}
+		mat.SetOpacity(alpha)
+		if alpha < 1 && part.material.blend < 2 {
+			mat.SetTransparent(true)
+			mat.SetBlending(material.BlendNormal)
+			mat.SetDepthMask(false)
+		}
 		for textureIndex, texturePath := range part.texturePaths {
 			tex := preloaded[texturePath]
 			if tex == nil {
@@ -406,7 +413,7 @@ func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model 
 		}
 	}
 	stats.textures = len(texturePaths)
-	particles := buildM2ParticleSystem(loader, &model, root, scale, textures)
+	particles := buildM2ParticleSystem(loader, &model, root, scale, textures, alpha)
 	if particles != nil {
 		stats.particleEmitters = particles.emitterCount
 		stats.particlePoints = particles.pointCount

@@ -297,10 +297,11 @@ func clampParticleValue(value, low, high float32) float32 {
 	return value
 }
 
-func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, rootScale float32, textures map[string]*texture.Texture2D) *m2ParticleSystem {
+func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, rootScale float32, textures map[string]*texture.Texture2D, alpha float32) *m2ParticleSystem {
 	if model == nil || len(model.particles) == 0 {
 		return nil
 	}
+	alpha = clampM2Color(alpha)
 	right, up := particleBasis(*model)
 	particleTextures := make(map[particleTextureKey]*texture.Texture2D)
 	system := &m2ParticleSystem{}
@@ -392,7 +393,7 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 		mat.SetShader("morenowow_particle")
 		mat.SetShaderUnique(true)
 		mat.SetEmissiveColor(&math32.Color{R: 1, G: 1, B: 1})
-		mat.SetOpacity(1)
+		mat.SetOpacity(alpha)
 		mat.SetSide(material.SideDouble)
 		mat.SetUseLights(material.UseLightNone)
 		mat.SetDepthTest(true)

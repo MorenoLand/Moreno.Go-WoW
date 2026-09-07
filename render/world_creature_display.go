@@ -243,7 +243,7 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 		}
 	}
 	stats.textures = len(texturePaths)
-	particles := buildM2ParticleSystem(loader, &model, root, scale, textures)
+	particles := buildM2ParticleSystem(loader, &model, root, scale, textures, 1)
 	if particles != nil {
 		stats.particleEmitters = particles.emitterCount
 		stats.particlePoints = particles.pointCount

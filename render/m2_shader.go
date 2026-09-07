@@ -22,6 +22,7 @@ void main() {
 }`
 
 const m2FragmentShader = `precision highp float;
+#include <material>
 #if MAT_TEXTURES > 0
 uniform sampler2D MatTexture[MAT_TEXTURES];
 #endif
@@ -74,7 +75,7 @@ void main() {
     }
 #endif
 #endif
-    FragColor = vec4(result.rgb * FragVertexColor, result.a * FragM2Alpha);
+    FragColor = vec4(result.rgb * FragVertexColor, result.a * FragM2Alpha * MatOpacity);
 }`
 
 const m2ParticleVertexShader = `#include <attributes>
@@ -117,10 +118,11 @@ void main() {
     vec2 coord = sprite * repeat + ParticleCell * repeat + MatTexOffset(0);
     result = texture(MatTexture[0], coord);
 #endif
-    FragColor = vec4(result.rgb * ParticleColor, result.a * ParticleAlpha);
+    FragColor = vec4(result.rgb * ParticleColor, result.a * ParticleAlpha * MatOpacity);
 }`
 
 const m2AlphaKeyFragmentShader = `precision highp float;
+#include <material>
 #if MAT_TEXTURES > 0
 uniform sampler2D MatTexture[MAT_TEXTURES];
 #endif
@@ -173,7 +175,7 @@ void main() {
     }
 #endif
 #endif
-    if (result.a * FragM2Alpha < 0.5) {
+    if (result.a * FragM2Alpha * MatOpacity < 0.5) {
         discard;
     }
     FragColor = vec4(result.rgb * FragVertexColor, 1.0);

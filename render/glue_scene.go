@@ -13,7 +13,7 @@ func loadGlueScene(loader *ui.Loader, models []ui.GlueSceneModel) (*core.Node, e
 	hasCamera := false
 	loaded := 0
 	for _, state := range models {
-		model, err := loadGlueSceneModel(loader, state.Path)
+		model, err := loadGlueSceneModel(loader, state.Path, float32(state.Alpha))
 		if err != nil {
 			continue
 		}
