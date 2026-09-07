@@ -44,3 +44,9 @@ func TestGlueScenePositionUsesNativeModelAxes(t *testing.T) {
 		t.Fatalf("scene position=%v want %v", got, want)
 	}
 }
+
+func TestGlueSceneScaleUsesFrameSquish(t *testing.T) {
+	if width, height, depth := glueSceneScale(3, ui.GlueSceneModel{Scale: 2, WidthSquish: 4, HeightSquish: 5}); width != 1.5 || height != 1.2 || depth != 6 {
+		t.Fatalf("scene scale=%v,%v,%v", width, height, depth)
+	}
+}

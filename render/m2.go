@@ -246,6 +246,14 @@ type glueModelStats struct {
 }
 
 func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
+	return loadGlueModelWithNormalization(loader, modelPath, true)
+}
+
+func loadGlueSceneModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
+	return loadGlueModelWithNormalization(loader, modelPath, false)
+}
+
+func loadGlueModelWithNormalization(loader *ui.Loader, modelPath string, normalize bool) (*core.Node, error) {
 	modelPath = normalizeModelPath(modelPath)
 	if modelPath == "" {
 		return nil, nil
@@ -268,10 +276,14 @@ func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildGlueModel(loader, modelPath, model, skin, nil, nil, nil)
+	return buildGlueModelWithNormalization(loader, modelPath, model, skin, nil, nil, nil, normalize)
 }
 
 func buildGlueModel(loader *ui.Loader, modelPath string, model parsedM2, skin parsedSkin, textureOverrides map[int]string, preloaded map[string]*texture.Texture2D, activeGeosets map[uint16]bool) (*core.Node, error) {
+	return buildGlueModelWithNormalization(loader, modelPath, model, skin, textureOverrides, preloaded, activeGeosets, true)
+}
+
+func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model parsedM2, skin parsedSkin, textureOverrides map[int]string, preloaded map[string]*texture.Texture2D, activeGeosets map[uint16]bool, normalize bool) (*core.Node, error) {
 	parts := buildM2PartsWithFilters(model, skin, textureOverrides, activeGeosets)
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("%s: no renderable skin batches", modelPath)
@@ -379,6 +391,10 @@ func buildGlueModel(loader *ui.Loader, modelPath string, model parsedM2, skin pa
 		return nil, fmt.Errorf("%s: model textures or geometry unavailable", modelPath)
 	}
 	center, scale := modelTransform(model.vertices)
+	if !normalize {
+		center = [3]float32{}
+		scale = 1
+	}
 	root.SetPosition(-center[0]*scale, -center[1]*scale, -center[2]*scale)
 	root.SetScale(scale, scale, scale)
 	modelBottom := float32(math.MaxFloat32)

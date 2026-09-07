@@ -13,15 +13,12 @@ func loadGlueScene(loader *ui.Loader, models []ui.GlueSceneModel) (*core.Node, e
 	hasCamera := false
 	loaded := 0
 	for _, state := range models {
-		model, err := loadGlueModel(loader, state.Path)
+		model, err := loadGlueSceneModel(loader, state.Path)
 		if err != nil {
 			continue
 		}
-		if state.Scale <= 0 {
-			state.Scale = 1
-		}
-		modelScale := model.Scale().X * float32(state.Scale)
-		model.SetScale(modelScale, modelScale, modelScale)
+		scaleX, scaleY, scaleZ := glueSceneScale(model.Scale().X, state)
+		model.SetScale(scaleX, scaleY, scaleZ)
 		position := glueScenePosition(state.Position)
 		model.SetPosition(position[0], position[1], position[2])
 		model.SetRotation(0, float32(state.Facing), 0)
@@ -59,6 +56,22 @@ func loadGlueScene(loader *ui.Loader, models []ui.GlueSceneModel) (*core.Node, e
 
 func glueScenePosition(position [3]float64) [3]float32 {
 	return [3]float32{float32(position[1]), float32(position[2]), -float32(position[0])}
+}
+
+func glueSceneScale(base float32, state ui.GlueSceneModel) (float32, float32, float32) {
+	scale := state.Scale
+	if scale <= 0 {
+		scale = 1
+	}
+	widthSquish, heightSquish := state.WidthSquish, state.HeightSquish
+	if widthSquish <= 0 {
+		widthSquish = 1
+	}
+	if heightSquish <= 0 {
+		heightSquish = 1
+	}
+	modelScale := base * float32(scale)
+	return modelScale / float32(widthSquish), modelScale / float32(heightSquish), modelScale
 }
 
 func updateGlueSceneNode(node *core.Node, elapsed float64) []uint32 {
