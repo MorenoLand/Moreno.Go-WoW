@@ -18,3 +18,4 @@ config.json
 *.exe
 *.dll
 *.pdb
+*_test.go
