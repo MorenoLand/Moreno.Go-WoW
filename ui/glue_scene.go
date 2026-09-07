@@ -14,6 +14,9 @@ type GlueSceneModel struct {
 	Sequence     int
 	WidthSquish  float64
 	HeightSquish float64
+	Camera       int
+	Light        [13]float64
+	HasLight     bool
 }
 
 func (eng *UIEngine) VisibleGlueSceneModels() []GlueSceneModel {
@@ -39,7 +42,7 @@ func (eng *UIEngine) VisibleGlueSceneModels() []GlueSceneModel {
 				if scene.height > 0 && child.height > 0 {
 					heightSquish = scene.height / child.height
 				}
-				models = append(models, GlueSceneModel{Path: child.modelFile, Position: child.modelPosition, Facing: child.modelFacing, Scale: child.modelScale, Alpha: child.alpha, Sequence: child.sequence, WidthSquish: widthSquish, HeightSquish: heightSquish})
+				models = append(models, GlueSceneModel{Path: child.modelFile, Position: child.modelPosition, Facing: child.modelFacing, Scale: child.modelScale, Alpha: child.alpha, Sequence: child.sequence, WidthSquish: widthSquish, HeightSquish: heightSquish, Camera: child.camera, Light: child.modelLight, HasLight: child.modelLightSet})
 				continue
 			}
 			visit(child)
@@ -56,7 +59,13 @@ func (eng *UIEngine) VisibleGlueSceneKey() string {
 	}
 	var key strings.Builder
 	for _, model := range models {
-		fmt.Fprintf(&key, "%q|%.6f,%.6f,%.6f|%.6f|%.6f|%.6f|%.6f|%.6f|", model.Path, model.Position[0], model.Position[1], model.Position[2], model.Facing, model.Scale, model.Alpha, model.WidthSquish, model.HeightSquish)
+		fmt.Fprintf(&key, "%q|%.6f,%.6f,%.6f|%.6f|%.6f|%.6f|%.6f|%.6f|%d|", model.Path, model.Position[0], model.Position[1], model.Position[2], model.Facing, model.Scale, model.Alpha, model.WidthSquish, model.HeightSquish, model.Camera)
+		if model.HasLight {
+			for _, value := range model.Light {
+				fmt.Fprintf(&key, "%.6f,", value)
+			}
+		}
+		key.WriteString(";")
 		key.WriteString(fmt.Sprintf("%d;", model.Sequence))
 	}
 	return key.String()

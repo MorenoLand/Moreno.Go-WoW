@@ -213,6 +213,16 @@ type m2Camera struct {
 	target   [3]float32
 }
 
+type m2SceneLight struct {
+	enabled          bool
+	omni             bool
+	direction        [3]float32
+	ambientIntensity float32
+	ambient          [3]float32
+	diffuseIntensity float32
+	diffuse          [3]float32
+}
+
 type m2Attachment struct {
 	id       uint32
 	bone     uint16
@@ -246,14 +256,14 @@ type glueModelStats struct {
 }
 
 func loadGlueModel(loader *ui.Loader, modelPath string) (*core.Node, error) {
-	return loadGlueModelWithNormalization(loader, modelPath, true, 1)
+	return loadGlueModelWithNormalization(loader, modelPath, true, 1, 0, m2SceneLight{})
 }
 
-func loadGlueSceneModel(loader *ui.Loader, modelPath string, alpha float32) (*core.Node, error) {
-	return loadGlueModelWithNormalization(loader, modelPath, false, alpha)
+func loadGlueSceneModel(loader *ui.Loader, modelPath string, alpha float32, cameraIndex int, light [13]float64, hasLight bool) (*core.Node, error) {
+	return loadGlueModelWithNormalization(loader, modelPath, false, alpha, cameraIndex, m2SceneLightFromValues(light, hasLight))
 }
 
-func loadGlueModelWithNormalization(loader *ui.Loader, modelPath string, normalize bool, alpha float32) (*core.Node, error) {
+func loadGlueModelWithNormalization(loader *ui.Loader, modelPath string, normalize bool, alpha float32, cameraIndex int, light m2SceneLight) (*core.Node, error) {
 	modelPath = normalizeModelPath(modelPath)
 	if modelPath == "" {
 		return nil, nil
@@ -276,14 +286,14 @@ func loadGlueModelWithNormalization(loader *ui.Loader, modelPath string, normali
 	if err != nil {
 		return nil, err
 	}
-	return buildGlueModelWithNormalization(loader, modelPath, model, skin, nil, nil, nil, normalize, alpha)
+	return buildGlueModelWithNormalization(loader, modelPath, model, skin, nil, nil, nil, normalize, alpha, cameraIndex, light)
 }
 
 func buildGlueModel(loader *ui.Loader, modelPath string, model parsedM2, skin parsedSkin, textureOverrides map[int]string, preloaded map[string]*texture.Texture2D, activeGeosets map[uint16]bool) (*core.Node, error) {
-	return buildGlueModelWithNormalization(loader, modelPath, model, skin, textureOverrides, preloaded, activeGeosets, true, 1)
+	return buildGlueModelWithNormalization(loader, modelPath, model, skin, textureOverrides, preloaded, activeGeosets, true, 1, 0, m2SceneLight{})
 }
 
-func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model parsedM2, skin parsedSkin, textureOverrides map[int]string, preloaded map[string]*texture.Texture2D, activeGeosets map[uint16]bool, normalize bool, alpha float32) (*core.Node, error) {
+func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model parsedM2, skin parsedSkin, textureOverrides map[int]string, preloaded map[string]*texture.Texture2D, activeGeosets map[uint16]bool, normalize bool, alpha float32, cameraIndex int, light m2SceneLight) (*core.Node, error) {
 	alpha = clampM2Color(alpha)
 	parts := buildM2PartsWithFilters(model, skin, textureOverrides, activeGeosets)
 	if len(parts) == 0 {
@@ -366,6 +376,7 @@ func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model 
 			mat.SetBlending(material.BlendNormal)
 			mat.SetDepthMask(false)
 		}
+		applyM2SceneLight(part, light)
 		for textureIndex, texturePath := range part.texturePaths {
 			tex := preloaded[texturePath]
 			if tex == nil {
@@ -392,7 +403,7 @@ func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model 
 		mesh := graphic.NewMesh(geom, mat)
 		mesh.SetRenderOrder(m2RenderOrder(part))
 		root.Add(mesh)
-		animatedMeshes = append(animatedMeshes, &m2AnimatedMesh{part: part, positionVBO: positionVBO, normalVBO: normalVBO, uvVBO: uvVBO, uv2VBO: uv2VBO, colorVBO: colorVBO, alphaVBO: alphaVBO, baseUVs: append(math32.ArrayF32(nil), part.uvs...), baseUVs2: append(math32.ArrayF32(nil), part.uvs2...), textureTransformIndices: append([]int(nil), part.textureTransformIndices...)})
+		animatedMeshes = append(animatedMeshes, &m2AnimatedMesh{part: part, positionVBO: positionVBO, normalVBO: normalVBO, uvVBO: uvVBO, uv2VBO: uv2VBO, colorVBO: colorVBO, alphaVBO: alphaVBO, light: light, baseUVs: append(math32.ArrayF32(nil), part.uvs...), baseUVs2: append(math32.ArrayF32(nil), part.uvs2...), textureTransformIndices: append([]int(nil), part.textureTransformIndices...)})
 	}
 	if len(root.Children()) == 0 {
 		return nil, fmt.Errorf("%s: model textures or geometry unavailable", modelPath)
@@ -428,14 +439,14 @@ func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model 
 			break
 		}
 	}
-	if model.camera != nil {
-		position := modelPoint(model.camera.position, center, scale)
-		target := modelPoint(model.camera.target, center, scale)
+	if camera := m2CameraAt(&model, cameraIndex); camera != nil {
+		position := modelPoint(camera.position, center, scale)
+		target := modelPoint(camera.target, center, scale)
 		info.position = *math32.NewVector3(position[0], position[1], position[2])
 		info.target = *math32.NewVector3(target[0], target[1], target[2])
-		info.fov = model.camera.fov
-		info.far = model.camera.farClip * scale
-		info.near = model.camera.nearClip * scale
+		info.fov = camera.fov
+		info.far = camera.farClip * scale
+		info.near = camera.nearClip * scale
 	}
 	root.SetUserData(info)
 	return root, nil
@@ -469,6 +480,7 @@ type parsedM2 struct {
 	textureTransformCombos []uint16
 	renderFlags            []m2RenderFlag
 	attachments            []m2Attachment
+	cameras                []m2Camera
 	camera                 *m2Camera
 	particles              []m2ParticleEmitter
 	events                 []m2Event
@@ -561,7 +573,7 @@ func parseM2(data []byte) (parsedM2, error) {
 	if err != nil {
 		return parsedM2{}, err
 	}
-	result := parsedM2{data: data, flags: flags, boneOffset: bones.offset, colorOffset: colors.offset, textureWeightOffset: textureWeights.offset, textureTransformOffset: textureTransforms.offset, vertices: make([]m2Vertex, vertices.count), bones: make([]m2Bone, bones.count), colors: make([]m2Color, colors.count), sequences: make([]m2Sequence, sequences.count), globalLoops: make([]uint32, globalLoops.count), boneCombos: make([]uint16, boneCombos.count), textures: make([]string, textures.count), textureTypes: make([]uint32, textures.count), textureFlags: make([]uint32, textures.count), textureCombos: make([]uint16, combos.count), textureCombinerCombos: make([]uint16, textureCombinerCombos.count), textureCoords: make([]uint16, textureCoords.count), textureWeightCombos: make([]uint16, textureWeightCombos.count), textureWeights: make([]m2TextureWeight, textureWeights.count), textureTransforms: make([]m2TextureTransform, textureTransforms.count), textureTransformCombos: make([]uint16, textureTransformCombos.count), renderFlags: make([]m2RenderFlag, renderFlags.count), attachments: make([]m2Attachment, attachments.count), particles: make([]m2ParticleEmitter, particles.count), events: make([]m2Event, events.count)}
+	result := parsedM2{data: data, flags: flags, boneOffset: bones.offset, colorOffset: colors.offset, textureWeightOffset: textureWeights.offset, textureTransformOffset: textureTransforms.offset, vertices: make([]m2Vertex, vertices.count), bones: make([]m2Bone, bones.count), colors: make([]m2Color, colors.count), sequences: make([]m2Sequence, sequences.count), globalLoops: make([]uint32, globalLoops.count), boneCombos: make([]uint16, boneCombos.count), textures: make([]string, textures.count), textureTypes: make([]uint32, textures.count), textureFlags: make([]uint32, textures.count), textureCombos: make([]uint16, combos.count), textureCombinerCombos: make([]uint16, textureCombinerCombos.count), textureCoords: make([]uint16, textureCoords.count), textureWeightCombos: make([]uint16, textureWeightCombos.count), textureWeights: make([]m2TextureWeight, textureWeights.count), textureTransforms: make([]m2TextureTransform, textureTransforms.count), textureTransformCombos: make([]uint16, textureTransformCombos.count), renderFlags: make([]m2RenderFlag, renderFlags.count), attachments: make([]m2Attachment, attachments.count), cameras: make([]m2Camera, cameras.count), particles: make([]m2ParticleEmitter, particles.count), events: make([]m2Event, events.count)}
 	for index := range result.globalLoops {
 		result.globalLoops[index] = binary.LittleEndian.Uint32(data[globalLoops.offset+index*4:])
 	}
@@ -639,12 +651,65 @@ func parseM2(data []byte) (parsedM2, error) {
 		result.particles[index] = emitter
 	}
 	result.events = readM2Events(data, events, len(result.sequences), nil, inline)
-	if cameras.count > 0 {
-		base := cameras.offset
-		result.camera = &m2Camera{fov: readF32(data, base+4), farClip: readF32(data, base+8), nearClip: readF32(data, base+12), position: [3]float32{readF32(data, base+36), readF32(data, base+40), readF32(data, base+44)}, target: [3]float32{readF32(data, base+68), readF32(data, base+72), readF32(data, base+76)}}
+	for index := range result.cameras {
+		base := cameras.offset + index*m2CameraSize
+		result.cameras[index] = m2Camera{fov: readF32(data, base+4), farClip: readF32(data, base+8), nearClip: readF32(data, base+12), position: [3]float32{readF32(data, base+36), readF32(data, base+40), readF32(data, base+44)}, target: [3]float32{readF32(data, base+68), readF32(data, base+72), readF32(data, base+76)}}
+	}
+	if len(result.cameras) > 0 {
+		result.camera = &result.cameras[0]
 	}
 	updateM2AnimatedValues(&result, defaultM2Sequence(&result), 0, 0)
 	return result, nil
+}
+
+func m2CameraAt(model *parsedM2, index int) *m2Camera {
+	if model == nil || len(model.cameras) == 0 {
+		return nil
+	}
+	if index < 0 || index >= len(model.cameras) {
+		index = 0
+	}
+	return &model.cameras[index]
+}
+
+func m2SceneLightFromValues(values [13]float64, present bool) m2SceneLight {
+	if !present || values[0] <= 0 {
+		return m2SceneLight{}
+	}
+	return m2SceneLight{enabled: true, omni: values[1] > 0, direction: [3]float32{float32(values[2]), float32(values[3]), float32(values[4])}, ambientIntensity: float32(values[5]), ambient: [3]float32{float32(values[6]), float32(values[7]), float32(values[8])}, diffuseIntensity: float32(values[9]), diffuse: [3]float32{float32(values[10]), float32(values[11]), float32(values[12])}}
+}
+
+func applyM2SceneLight(part *m2Part, light m2SceneLight) {
+	if part == nil || !light.enabled {
+		return
+	}
+	direction := modelVector(light.direction)
+	directionLength := float32(math.Sqrt(float64(direction[0]*direction[0] + direction[1]*direction[1] + direction[2]*direction[2])))
+	if directionLength > 0 {
+		direction[0] /= directionLength
+		direction[1] /= directionLength
+		direction[2] /= directionLength
+	}
+	for index := 0; index+2 < len(part.colors) && index+2 < len(part.normals); index += 3 {
+		normal := [3]float32{part.normals[index], part.normals[index+1], part.normals[index+2]}
+		normalLength := float32(math.Sqrt(float64(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2])))
+		if normalLength > 0 {
+			normal[0] /= normalLength
+			normal[1] /= normalLength
+			normal[2] /= normalLength
+		}
+		diffuse := float32(1)
+		if !light.omni {
+			diffuse = -(normal[0]*direction[0] + normal[1]*direction[1] + normal[2]*direction[2])
+			if diffuse < 0 {
+				diffuse = 0
+			}
+		}
+		for component := 0; component < 3; component++ {
+			factor := light.ambientIntensity*light.ambient[component] + light.diffuseIntensity*light.diffuse[component]*diffuse
+			part.colors[index+component] = clampM2Color(part.color[component] * factor)
+		}
+	}
 }
 
 type parsedSkin struct {

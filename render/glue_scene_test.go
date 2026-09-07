@@ -37,6 +37,10 @@ func TestLivePatch4LoginSceneLoadsCompositeModels(t *testing.T) {
 	if !ok || info.stats.parts == 0 {
 		t.Fatalf("composite scene metadata=%v parts=%d", ok, info.stats.parts)
 	}
+	reference, referenceOK := loadGlueSceneReferenceCamera(engine.AssetLoader)
+	if !referenceOK || info.position != reference.position || info.target != reference.target || info.fov != reference.fov {
+		t.Fatalf("composite camera=%+v reference=%+v available=%v", info, reference, referenceOK)
+	}
 }
 
 func TestGlueScenePositionUsesNativeModelAxes(t *testing.T) {
@@ -49,4 +53,36 @@ func TestGlueSceneScaleUsesFrameSquish(t *testing.T) {
 	if width, height, depth := glueSceneScale(3, ui.GlueSceneModel{Scale: 2, WidthSquish: 4, HeightSquish: 5}); width != 1.5 || height != 1.2 || depth != 6 {
 		t.Fatalf("scene scale=%v,%v,%v", width, height, depth)
 	}
+}
+
+func TestLivePatch4SceneReferenceCamera(t *testing.T) {
+	dataPath := os.Getenv("WOW_TEST_DATA")
+	if dataPath == "" {
+		t.Skip("WOW_TEST_DATA not set")
+	}
+	engine, err := ui.LoadUIEngineFromMPQ(dataPath, "enUS", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	model, err := loadGlueModel(engine.AssetLoader, `Character\Human\Male\HumanMale.m2`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer model.Dispose()
+	info, ok := model.UserData().(glueModelInfo)
+	if !ok || info.fov <= 0 {
+		t.Fatalf("reference camera metadata=%v fov=%v", ok, info.fov)
+	}
+	t.Logf("reference camera position=%v target=%v fov=%v near=%v far=%v", info.position, info.target, info.fov, info.near, info.far)
+	raw, err := loadGlueSceneModel(engine.AssetLoader, `Character\Human\Male\HumanMale.m2`, 1, 1, [13]float64{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Dispose()
+	rawInfo, ok := raw.UserData().(glueModelInfo)
+	if !ok || rawInfo.fov <= 0 {
+		t.Fatalf("raw reference camera metadata=%v fov=%v", ok, rawInfo.fov)
+	}
+	t.Logf("raw reference camera position=%v target=%v fov=%v near=%v far=%v", rawInfo.position, rawInfo.target, rawInfo.fov, rawInfo.near, rawInfo.far)
 }

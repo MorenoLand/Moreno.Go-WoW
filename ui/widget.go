@@ -200,6 +200,8 @@ type widget struct {
 	modelScale      float64
 	modelPosition   [3]float64
 	modelFacing     float64
+	modelLight      [13]float64
+	modelLightSet   bool
 	fogNear, fogFar float64
 	hasFog          bool
 
@@ -1525,7 +1527,15 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.hasFog = false
 			return 0
 		},
-		"SetLight":          func(L *lua.LState, w *widget) int { return 0 },
+		"SetLight": func(L *lua.LState, w *widget) int {
+			for index := 0; index < len(w.modelLight) && index+2 <= L.GetTop(); index++ {
+				if L.Get(index+2).Type() == lua.LTNumber {
+					w.modelLight[index] = float64(L.CheckNumber(index + 2))
+				}
+			}
+			w.modelLightSet = true
+			return 0
+		},
 		"ResetLights":       func(L *lua.LState, w *widget) int { return 0 },
 		"AddCharacterLight": func(L *lua.LState, w *widget) int { return 0 },
 		"AddLight":          func(L *lua.LState, w *widget) int { return 0 },

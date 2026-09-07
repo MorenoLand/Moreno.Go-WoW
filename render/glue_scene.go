@@ -5,15 +5,15 @@ import (
 
 	"github.com/MorenoLand/Moreno.WoW/ui"
 	"github.com/g3n/engine/core"
+	"github.com/g3n/engine/math32"
 )
 
 func loadGlueScene(loader *ui.Loader, models []ui.GlueSceneModel) (*core.Node, error) {
 	root := core.NewNode()
-	aggregate := glueModelInfo{}
-	hasCamera := false
+	aggregate, hasCamera := loadGlueSceneReferenceCamera(loader)
 	loaded := 0
 	for _, state := range models {
-		model, err := loadGlueSceneModel(loader, state.Path, float32(state.Alpha))
+		model, err := loadGlueSceneModel(loader, state.Path, float32(state.Alpha), state.Camera, state.Light, state.HasLight)
 		if err != nil {
 			continue
 		}
@@ -26,7 +26,7 @@ func loadGlueScene(loader *ui.Loader, models []ui.GlueSceneModel) (*core.Node, e
 			if info.animation != nil {
 				info.animation.SetSequence(state.Sequence)
 			}
-			if !hasCamera || info.fov > 0 {
+			if !hasCamera && info.fov > 0 {
 				aggregate = info
 				aggregate.animation = nil
 				aggregate.particles = nil
@@ -52,6 +52,24 @@ func loadGlueScene(loader *ui.Loader, models []ui.GlueSceneModel) (*core.Node, e
 	}
 	root.SetUserData(aggregate)
 	return root, nil
+}
+
+func loadGlueSceneReferenceCamera(loader *ui.Loader) (glueModelInfo, bool) {
+	data, err := loader.ReadFile(`Character\Human\Male\HumanMale.m2`)
+	if err != nil {
+		return glueModelInfo{}, false
+	}
+	model, err := parseM2(data)
+	if err != nil {
+		return glueModelInfo{}, false
+	}
+	camera := m2CameraAt(&model, 1)
+	if camera == nil {
+		return glueModelInfo{}, false
+	}
+	position := modelVector(camera.position)
+	target := modelVector(camera.target)
+	return glueModelInfo{position: *math32.NewVector3(position[0], position[1], position[2]), target: *math32.NewVector3(target[0], target[1], target[2]), fov: camera.fov, near: camera.nearClip, far: camera.farClip}, true
 }
 
 func glueScenePosition(position [3]float64) [3]float32 {

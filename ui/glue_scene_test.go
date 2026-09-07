@@ -26,6 +26,18 @@ func TestLivePatch4LoginSceneExposesVisibleModels(t *testing.T) {
 	if models[0].Path == "" || models[0].Scale <= 0 {
 		t.Fatalf("first patch4 model=%+v", models[0])
 	}
+	lightModels, cameraModels := 0, 0
+	for _, model := range models {
+		if model.HasLight {
+			lightModels++
+		}
+		if model.Camera == 1 {
+			cameraModels++
+		}
+	}
+	if lightModels != len(models) || cameraModels != len(models) {
+		t.Fatalf("patch4 scene metadata lights=%d cameras=%d models=%d", lightModels, cameraModels, len(models))
+	}
 	if errors := engine.Rt.ScriptErrors(); len(errors) != 0 {
 		t.Fatalf("patch4 scene script errors=%v", errors)
 	}

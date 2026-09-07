@@ -331,6 +331,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			debugModelLoadMS = 0
 			uiEngine.SetSceneBackground(false)
 			if path == "" && len(sceneModels) == 0 {
+				uiEngine.SetSceneBackground(true)
 				return true
 			}
 			if debug {
@@ -346,6 +347,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 			debugModelLoadMS = time.Since(modelStarted).Seconds() * 1000
 			if modelErr != nil {
+				uiEngine.SetSceneBackground(true)
 				debugModelError = modelErr.Error()
 				if debug {
 					log.Printf("model %s: %v", path, modelErr)

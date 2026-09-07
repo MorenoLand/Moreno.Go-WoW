@@ -15,6 +15,7 @@ type m2AnimatedMesh struct {
 	uv2VBO                  *gls.VBO
 	colorVBO                *gls.VBO
 	alphaVBO                *gls.VBO
+	light                   m2SceneLight
 	baseUVs                 math32.ArrayF32
 	baseUVs2                math32.ArrayF32
 	textureTransformIndices []int
@@ -302,6 +303,7 @@ func (animation *m2Animation) Update(elapsed float64) []uint32 {
 			part.colors[index+1] = part.color[1]
 			part.colors[index+2] = part.color[2]
 		}
+		applyM2SceneLight(part, animatedMesh.light)
 		for index := range part.alphas {
 			part.alphas[index] = part.alpha
 		}
