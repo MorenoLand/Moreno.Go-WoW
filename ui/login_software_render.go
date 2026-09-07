@@ -439,7 +439,9 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 					if !w.vertexColor.isZero() {
 						img = eng.tintTextureImage(w.textureFile, img, w.vertexColor)
 					}
-					if w.horizTile || w.vertTile {
+					if w.name == "MinimapMap" {
+						eng.drawCircularTexture(target, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.blendMode, "ADD") || strings.EqualFold(w.alphaMode, "ADD"))
+					} else if w.horizTile || w.vertTile {
 						eng.drawTiledTexture(target, img, scaledRect, float64(screenHeight), tc, w.horizTile, w.vertTile, strings.EqualFold(w.blendMode, "ADD") || strings.EqualFold(w.alphaMode, "ADD"))
 					} else {
 						drawSubModeFilter(target, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.blendMode, "ADD") || strings.EqualFold(w.alphaMode, "ADD"))
@@ -1103,6 +1105,30 @@ func (eng *UIEngine) drawTextureColor(canvas *image.RGBA, r Rect, c rgba) {
 		alpha = 1
 	}
 	draw.Draw(canvas, dst, &image.Uniform{C: color.RGBA{R: uint8(c.r * 255), G: uint8(c.g * 255), B: uint8(c.b * 255), A: uint8(alpha * 255)}}, image.Point{}, draw.Over)
+}
+
+func (eng *UIEngine) drawCircularTexture(canvas *image.RGBA, source image.Image, rect Rect, screenHeight float64, tc [4]float64, additive bool) {
+	layer := eng.acquireLayer(canvas.Bounds())
+	drawSubModeFilter(layer, source, rect, screenHeight, tc, additive)
+	cx := (rect.X0 + rect.X1) / 2
+	cy := screenHeight - (rect.Y0+rect.Y1)/2
+	radius := math.Min(rect.W(), rect.H()) / 2
+	minX := int(math.Max(0, rect.X0))
+	maxX := int(math.Min(float64(canvas.Bounds().Max.X), rect.X1+1))
+	minY := int(math.Max(0, cy-radius))
+	maxY := int(math.Min(float64(canvas.Bounds().Max.Y), cy+radius+1))
+	radiusSquared := radius * radius
+	for y := minY; y < maxY; y++ {
+		for x := minX; x < maxX; x++ {
+			dx := float64(x) + 0.5 - cx
+			dy := float64(y) + 0.5 - cy
+			if dx*dx+dy*dy > radiusSquared {
+				layer.SetRGBA(x, y, color.RGBA{})
+			}
+		}
+	}
+	draw.Draw(canvas, canvas.Bounds(), layer, layer.Bounds().Min, draw.Over)
+	eng.releaseLayer()
 }
 
 func screenScaledRect(r Rect, scale float64) Rect {
