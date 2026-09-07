@@ -32,6 +32,19 @@ func TestAdditiveTextureKeysBlackBackground(t *testing.T) {
 	}
 }
 
+func TestModTextureColorMultipliesDestination(t *testing.T) {
+	canvas := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 2; x++ {
+			canvas.SetRGBA(x, y, color.RGBA{R: 100, G: 150, B: 200, A: 255})
+		}
+	}
+	(&UIEngine{}).drawTextureModColor(canvas, Rect{X0: 0, Y0: 0, X1: 2, Y1: 2}, rgba{r: 0.3, g: 0.3, b: 0.4, a: 1})
+	if got := canvas.RGBAAt(1, 1); got != (color.RGBA{R: 30, G: 45, B: 80, A: 255}) {
+		t.Fatalf("mod color replaced destination: %+v", got)
+	}
+}
+
 func TestTextureCoordinatesPreserveHorizontalFlip(t *testing.T) {
 	source := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	for y := 0; y < 2; y++ {

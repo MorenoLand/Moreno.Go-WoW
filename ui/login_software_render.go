@@ -460,7 +460,11 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 					}
 				}
 			} else if !w.vertexColor.isZero() {
-				eng.drawTextureColor(target, scaledRect, w.vertexColor)
+				if strings.EqualFold(w.blendMode, "MOD") || strings.EqualFold(w.alphaMode, "MOD") {
+					eng.drawTextureModColor(target, scaledRect, w.vertexColor)
+				} else {
+					eng.drawTextureColor(target, scaledRect, w.vertexColor)
+				}
 			}
 
 		case kindStatusBar:
@@ -1120,6 +1124,29 @@ func (eng *UIEngine) drawTextureColor(canvas *image.RGBA, r Rect, c rgba) {
 		alpha = 1
 	}
 	draw.Draw(canvas, dst, &image.Uniform{C: color.RGBA{R: uint8(c.r * 255), G: uint8(c.g * 255), B: uint8(c.b * 255), A: uint8(alpha * 255)}}, image.Point{}, draw.Over)
+}
+
+func (eng *UIEngine) drawTextureModColor(canvas *image.RGBA, r Rect, c rgba) {
+	dst := ScreenRect(r, float64(canvas.Bounds().Dy())).Intersect(canvas.Bounds())
+	if dst.Empty() || c.a <= 0 {
+		return
+	}
+	alpha := c.a
+	if alpha > 1 {
+		alpha = 1
+	}
+	red := clampImageChannel(c.r)
+	green := clampImageChannel(c.g)
+	blue := clampImageChannel(c.b)
+	for y := dst.Min.Y; y < dst.Max.Y; y++ {
+		offset := canvas.PixOffset(dst.Min.X, y)
+		for x := dst.Min.X; x < dst.Max.X; x++ {
+			canvas.Pix[offset] = uint8(math.Round(float64(canvas.Pix[offset]) * (1 - alpha + red*alpha)))
+			canvas.Pix[offset+1] = uint8(math.Round(float64(canvas.Pix[offset+1]) * (1 - alpha + green*alpha)))
+			canvas.Pix[offset+2] = uint8(math.Round(float64(canvas.Pix[offset+2]) * (1 - alpha + blue*alpha)))
+			offset += 4
+		}
+	}
 }
 
 func (eng *UIEngine) drawCircularTexture(canvas *image.RGBA, source image.Image, rect Rect, screenHeight float64, tc [4]float64, additive bool) {
