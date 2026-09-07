@@ -23,9 +23,6 @@ void main() {
 
 const m2FragmentShader = `precision highp float;
 #include <material>
-#if MAT_TEXTURES > 0
-uniform sampler2D MatTexture[MAT_TEXTURES];
-#endif
 in vec2 FragTexcoord;
 in vec2 FragTexcoord2;
 in vec3 FragVertexColor;
@@ -123,9 +120,6 @@ void main() {
 
 const m2AlphaKeyFragmentShader = `precision highp float;
 #include <material>
-#if MAT_TEXTURES > 0
-uniform sampler2D MatTexture[MAT_TEXTURES];
-#endif
 in vec2 FragTexcoord;
 in vec2 FragTexcoord2;
 in vec3 FragVertexColor;
