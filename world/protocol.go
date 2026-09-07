@@ -38,6 +38,8 @@ const (
 	CharacterLoginFailed   uint16 = 0x0041
 	LoginVerifyWorld       uint16 = 0x0236
 	MessageChat            uint16 = 0x0096
+	AuraUpdate             uint16 = 0x0496
+	AuraUpdateAll          uint16 = 0x0495
 	UpdateObject           uint16 = 0x00A9
 	DestroyObject          uint16 = 0x00AA
 	CompressedUpdateObject uint16 = 0x01F6
