@@ -924,6 +924,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				if uiImage != nil {
 					uiImage.SetVisible(true)
 				}
+				host.StopMusic()
 				gl.ClearColor(.08, .12, .16, 1)
 				if debug {
 					log.Printf("world: loaded %s tile %d,%d chunks=%d vertices=%d triangles=%d textures=%d wmoMeshes=%d m2Meshes=%d", info.mapName, info.tileX, info.tileY, info.chunks, info.vertices, info.triangles, info.textures, info.wmoMeshes, info.m2Meshes)

@@ -1295,9 +1295,7 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 	doodadCount := 0
 	solids := make([]worldCollisionMesh, 0)
 	for _, placement := range adt.wmoPlacements {
-		origin := worldWMOPosition(placement.position)
-		dx, dy := origin[0]-position.X, origin[1]-position.Y
-		if dx*dx+dy*dy > worldObjectDistance*worldObjectDistance {
+		if !worldWMOPlacementInRange(placement, position) {
 			continue
 		}
 		model, ok := cache.wmoModels[placement.path]
@@ -1353,6 +1351,27 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 		return nil, 0, nil
 	}
 	return root, meshCount, solids
+}
+
+func worldWMOPlacementInRange(placement worldWMOPlacement, position world.WorldPosition) bool {
+	const worldOrigin = float32(32 * worldTileSize)
+	minX, maxX := worldOrigin-placement.upper[2], worldOrigin-placement.lower[2]
+	minY, maxY := worldOrigin-placement.upper[0], worldOrigin-placement.lower[0]
+	if minX > maxX {
+		minX, maxX = maxX, minX
+	}
+	if minY > maxY {
+		minY, maxY = maxY, minY
+	}
+	if maxX-minX < 0.001 && maxY-minY < 0.001 {
+		origin := worldWMOPosition(placement.position)
+		dx, dy := origin[0]-position.X, origin[1]-position.Y
+		return dx*dx+dy*dy <= worldObjectDistance*worldObjectDistance
+	}
+	closestX := float32(math.Max(float64(minX), math.Min(float64(position.X), float64(maxX))))
+	closestY := float32(math.Max(float64(minY), math.Min(float64(position.Y), float64(maxY))))
+	dx, dy := closestX-position.X, closestY-position.Y
+	return dx*dx+dy*dy <= worldObjectDistance*worldObjectDistance
 }
 
 func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, model worldWMORoot, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) ([]*graphic.Mesh, []worldCollisionMesh) {
