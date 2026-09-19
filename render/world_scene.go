@@ -430,7 +430,7 @@ func (collision worldSceneCollision) cameraPosition(focus, eye math32.Vector3) m
 	spanX, spanY, spanZ := eye.X-focus.X, eye.Y-focus.Y, eye.Z-focus.Z
 	clear := func(fraction float32) bool {
 		x, y, z := focus.X+spanX*fraction, focus.Y+spanY*fraction, focus.Z+spanZ*fraction
-		ground, _, ok := collision.terrain(x, y)
+		ground, ok := collision.floor(x, y, z)
 		return !ok || z >= ground+0.35
 	}
 	allowed := float32(1)
