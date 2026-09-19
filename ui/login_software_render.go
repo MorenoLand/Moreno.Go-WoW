@@ -75,6 +75,7 @@ type UIEngine struct {
 	minimapWorldX    float32
 	minimapWorldY    float32
 	minimapHasPosition bool
+	minimapVersion   uint64
 }
 
 func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, error) {
@@ -323,12 +324,7 @@ func (eng *UIEngine) RenderWorld(screenWidth, screenHeight int) *image.RGBA {
 	eng.worldActive = true
 	eng.syncCombatLogButtons()
 	eng.worldRenderScale = 1
-	maxWorldWidth := 1280
-	if screenWidth > maxWorldWidth {
-		eng.worldRenderScale = float64(maxWorldWidth) / float64(screenWidth)
-	}
-	renderWidth := int(math.Round(float64(screenWidth) * eng.worldRenderScale))
-	renderHeight := int(math.Round(float64(screenHeight) * eng.worldRenderScale))
+	renderWidth, renderHeight := screenWidth, screenHeight
 	bounds := image.Rect(0, 0, renderWidth, renderHeight)
 	if eng.debugPanel.dragging && eng.worldBaseCanvas != nil && eng.worldBaseCanvas.Bounds().Eq(bounds) && eng.screenWidth == renderWidth && eng.screenHeight == renderHeight {
 		if eng.paintCanvas == nil || !eng.paintCanvas.Bounds().Eq(bounds) {
@@ -346,12 +342,7 @@ func (eng *UIEngine) RenderWorld(screenWidth, screenHeight int) *image.RGBA {
 func (eng *UIEngine) RenderWorldDebugPanel(screenWidth, screenHeight int) *image.RGBA {
 	eng.worldActive = true
 	eng.worldRenderScale = 1
-	maxWorldWidth := 1280
-	if screenWidth > maxWorldWidth {
-		eng.worldRenderScale = float64(maxWorldWidth) / float64(screenWidth)
-	}
-	renderWidth := int(math.Round(float64(screenWidth) * eng.worldRenderScale))
-	renderHeight := int(math.Round(float64(screenHeight) * eng.worldRenderScale))
+	renderWidth, renderHeight := screenWidth, screenHeight
 	bounds := image.Rect(0, 0, renderWidth, renderHeight)
 	if eng.worldBaseCanvas == nil || !eng.worldBaseCanvas.Bounds().Eq(bounds) || eng.screenWidth != renderWidth || eng.screenHeight != renderHeight {
 		return eng.RenderWorld(screenWidth, screenHeight)
@@ -366,6 +357,31 @@ func (eng *UIEngine) RenderWorldDebugPanel(screenWidth, screenHeight int) *image
 		eng.drawDebugPanel(eng.paintCanvas, face, faceLg)
 	}
 	return eng.paintCanvas
+}
+
+func (eng *UIEngine) RenderWorldMinimap(screenWidth, screenHeight int) *image.RGBA {
+	canvas := image.NewRGBA(image.Rect(0, 0, screenWidth, screenHeight))
+	if eng == nil || eng.Rt == nil || eng.minimapImage == nil {
+		return canvas
+	}
+	mapWidget := eng.Rt.widgets["MinimapMap"]
+	if mapWidget == nil {
+		return canvas
+	}
+	rect, ok := eng.rects[mapWidget]
+	if !ok {
+		return canvas
+	}
+	uiScale := eng.uiScale
+	if uiScale <= 0 {
+		uiScale = float64(screenHeight) / 768
+	}
+	tc := [4]float64{mapWidget.texCoordL, mapWidget.texCoordR, mapWidget.texCoordT, mapWidget.texCoordB}
+	if tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0 {
+		tc = [4]float64{0, 1, 0, 1}
+	}
+	eng.drawCircularTexture(canvas, eng.minimapImage, screenScaledRect(rect, uiScale), float64(screenHeight), tc, strings.EqualFold(mapWidget.blendMode, "ADD") || strings.EqualFold(mapWidget.alphaMode, "ADD"))
+	return canvas
 }
 
 func (eng *UIEngine) worldInputPoint(x, y float64) (float64, float64) {
@@ -468,6 +484,9 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 	}
 	paintWidget = func(target *image.RGBA, w *widget, parent Rect) {
 		rect := eng.layoutRect(w, parent)
+		if eng.worldActive && w.name == "MinimapMap" {
+			return
+		}
 
 		scaledRect := Rect{
 			X0: rect.X0 * uiScale,

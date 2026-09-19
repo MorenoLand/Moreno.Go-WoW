@@ -217,6 +217,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 
 	var uiImage *gui.Image
 	var uiTex *texture.Texture2D
+	var uiMapImage *gui.Image
+	var uiMapTex *texture.Texture2D
 	var eng *ui.UIEngine
 	var err error
 	lastUIRefresh := time.Time{}
@@ -421,6 +423,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		}
 		setSceneModel()
 		initialUI := eng.Render(960, 640)
+		uiMapTex = texture.NewTexture2DFromRGBA(image.NewRGBA(image.Rect(0, 0, 1, 1)))
+		uiMapImage = gui.NewImageFromTex(uiMapTex)
+		uiMapImage.SetZLayerDelta(-1)
+		uiMapImage.SetPosition(0, 0)
+		uiMapImage.SetVisible(false)
+		scene.Add(uiMapImage)
 		uiTex = texture.NewTexture2DFromRGBA(initialUI)
 		uiImage = gui.NewImageFromTex(uiTex)
 		uiImage.SetColor4(&math32.Color4{R: 1, G: 1, B: 1, A: 0})
@@ -442,6 +450,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	debugFPS := float64(0)
 	debugFrameMS := float64(0)
 	debugPanelRefresh := time.Time{}
+	lastMinimapVersion := uint64(0)
 	updateDebugPanel := func() {
 		width, height := win.GetSize()
 		parts := 0
@@ -471,6 +480,25 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		}))
 	}
 
+	refreshMinimap := func(width, height int) {
+		if !worldMode || uiMapImage == nil || uiEngine == nil {
+			return
+		}
+		version := uiEngine.WorldMinimapVersion()
+		if version == lastMinimapVersion && uiMapTex != nil {
+			return
+		}
+		mapFrame := uiEngine.RenderWorldMinimap(width, height)
+		if uiMapTex == nil {
+			uiMapTex = texture.NewTexture2DFromRGBA(mapFrame)
+			uiMapImage.SetTexture(uiMapTex)
+		} else {
+			uiMapTex.SetFromRGBA(mapFrame)
+		}
+		uiMapImage.SetSize(float32(width), float32(height))
+		uiMapImage.SetVisible(true)
+		lastMinimapVersion = version
+	}
 	refreshFrame := func(panelOnly bool) {
 		if uiImage == nil || uiEngine == nil {
 			return
@@ -494,6 +522,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 		} else {
 			uiFrame = uiEngine.Render(width, height)
+			if uiMapImage != nil {
+				uiMapImage.SetVisible(false)
+			}
 		}
 		// Reuse one GPU texture and upload pixels in place. Recreating a
 		// Texture2D every UI paint forced a full delete/alloc + material rebind.
@@ -505,10 +536,20 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		}
 		debugUIRenderMS = time.Since(uiStarted).Seconds() * 1000
 		uiImage.SetSize(float32(width), float32(height))
+		refreshMinimap(width, height)
 		lastUIRefresh = time.Now()
 	}
 	refresh := func() { refreshFrame(false) }
 	refreshDebugPanel := func() { refreshFrame(true) }
+	refreshMinimapOnly := func() {
+		if !worldMode || uiEngine == nil || uiMapImage == nil {
+			return
+		}
+		width, height := win.GetSize()
+		if width > 0 && height > 0 {
+			refreshMinimap(width, height)
+		}
+	}
 
 	host.logout = func() {
 		if !worldMode {
@@ -522,6 +563,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			uiEngine.SetWorldLoading(false)
 			uiEngine.ClearLoadingScreen()
 			uiEngine.SetGlueState(uiEngine.Rt.Glue)
+		}
+		if uiMapImage != nil {
+			uiMapImage.SetVisible(false)
 		}
 		if worldModel != nil {
 			scene.Remove(worldModel)
@@ -759,8 +803,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				sceneCharacterModel.SetRotation(0, sceneCharacterFacing*math.Pi/180, 0)
 			}
 			lastUpdate = now
-			if movieChanged || sceneChanged || minimapChanged {
+			if movieChanged || sceneChanged {
 				refresh()
+			} else if minimapChanged {
+				refreshMinimapOnly()
 			}
 			if uiEngine.DebugPanelDragging() && (lastUIRefresh.IsZero() || frameAt.Sub(lastUIRefresh) >= time.Second/30) {
 				refreshDebugPanel()
@@ -932,6 +978,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				uiEngine.ClearLoadingScreen()
 				if uiImage != nil {
 					uiImage.SetVisible(true)
+				}
+				if uiMapImage != nil {
+					uiMapImage.SetVisible(true)
 				}
 				host.StopMusic()
 				gl.ClearColor(.08, .12, .16, 1)

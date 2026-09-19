@@ -1819,10 +1819,14 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 		}
 		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
 		mat.SetShader("morenowow_world_terrain")
-		mat.SetShaderUnique(true)
+		mat.SetShaderUnique(false)
 		mat.SetSide(material.SideDouble)
 		mat.SetUseLights(material.UseLightNone)
-		for _, textureIndex := range layerIndices {
+		textureCount := 1
+		if len(chunk.layers) > 1 {
+			textureCount = len(layerIndices)
+		}
+		for _, textureIndex := range layerIndices[:textureCount] {
 			tex := cache.terrainPlaceholder
 			if textureIndex >= 0 && textureIndex < len(adt.textures) {
 				path := adt.textures[textureIndex]
@@ -1837,18 +1841,20 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 			}
 			mat.AddTexture(tex)
 		}
-		for index := 0; index < 3; index++ {
-			alphaTexture := cache.zeroAlpha
-			if index < len(chunk.alphaMaps) {
-				if len(chunk.alphaMaps[index]) == 0 {
-					alphaTexture = cache.zeroAlpha
-				} else if isOpaqueWorldAlpha(chunk.alphaMaps[index]) {
-					alphaTexture = cache.opaqueAlpha
-				} else {
-					alphaTexture = texture.NewTexture2DFromRGBA(worldAlphaTexture(chunk.alphaMaps[index], false))
+		if len(chunk.layers) > 1 {
+			for index := 0; index < 3; index++ {
+				alphaTexture := cache.zeroAlpha
+				if index < len(chunk.alphaMaps) {
+					if len(chunk.alphaMaps[index]) == 0 {
+						alphaTexture = cache.zeroAlpha
+					} else if isOpaqueWorldAlpha(chunk.alphaMaps[index]) {
+						alphaTexture = cache.opaqueAlpha
+					} else {
+						alphaTexture = texture.NewTexture2DFromRGBA(worldAlphaTexture(chunk.alphaMaps[index], false))
+					}
 				}
+				mat.AddTexture(alphaTexture)
 			}
-			mat.AddTexture(alphaTexture)
 		}
 		mesh := graphic.NewMesh(geom, mat)
 		mesh.SetRenderOrder(-90)

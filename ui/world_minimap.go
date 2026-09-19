@@ -68,7 +68,15 @@ func (eng *UIEngine) SetWorldMinimapPosition(mapName string, worldX, worldY floa
 	eng.minimapWorldX = worldX
 	eng.minimapWorldY = worldY
 	eng.minimapHasPosition = true
+	eng.minimapVersion++
 	return true
+}
+
+func (eng *UIEngine) WorldMinimapVersion() uint64 {
+	if eng == nil {
+		return 0
+	}
+	return eng.minimapVersion
 }
 
 func transposeMinimapTile(source image.Image) image.Image {
