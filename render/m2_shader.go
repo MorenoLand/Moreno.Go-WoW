@@ -188,16 +188,16 @@ uniform sampler2D MatTexture[MAT_TEXTURES];
 in vec2 FragTexcoord;
 out vec4 FragColor;
 void main() {
-    vec2 tiled = FragTexcoord * 8.0;
-    vec4 color = texture(MatTexture[0], tiled);
-#if MAT_TEXTURES > 4
-    color.rgb = mix(color.rgb, texture(MatTexture[1], tiled).rgb, texture(MatTexture[4], FragTexcoord).r);
+	vec2 tiled = FragTexcoord * 8.0;
+	vec4 color = texture(MatTexture[0], tiled);
+#if MAT_TEXTURES > 1
+	color.rgb = mix(color.rgb, texture(MatTexture[1], tiled).rgb, texture(MatTexture[2], FragTexcoord).r);
+#endif
+#if MAT_TEXTURES > 3
+	color.rgb = mix(color.rgb, texture(MatTexture[2], tiled).rgb, texture(MatTexture[3], FragTexcoord).r);
 #endif
 #if MAT_TEXTURES > 5
-    color.rgb = mix(color.rgb, texture(MatTexture[2], tiled).rgb, texture(MatTexture[5], FragTexcoord).r);
-#endif
-#if MAT_TEXTURES > 6
-    color.rgb = mix(color.rgb, texture(MatTexture[3], tiled).rgb, texture(MatTexture[6], FragTexcoord).r);
+	color.rgb = mix(color.rgb, texture(MatTexture[3], tiled).rgb, texture(MatTexture[4], FragTexcoord).r);
 #endif
     FragColor = vec4(color.rgb, 1.0);
 }`
