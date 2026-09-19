@@ -384,6 +384,33 @@ func (eng *UIEngine) RenderWorldMinimap(screenWidth, screenHeight int) *image.RG
 	return canvas
 }
 
+func (eng *UIEngine) RenderWorldChat(screenWidth, screenHeight int) *image.RGBA {
+	canvas := image.NewRGBA(image.Rect(0, 0, screenWidth, screenHeight))
+	if eng == nil || eng.Rt == nil {
+		return canvas
+	}
+	edit := eng.worldChatEditBox()
+	if edit == nil {
+		return canvas
+	}
+	rect, ok := eng.rects[edit]
+	if !ok {
+		return canvas
+	}
+	uiScale := eng.uiScale
+	if uiScale <= 0 {
+		uiScale = float64(screenHeight) / 768
+	}
+	face := eng.cachedFace("__base13", eng.FontObj, 13*uiScale)
+	faceLg := eng.cachedFace("__base16", eng.FontObj, 16*uiScale)
+	eng.drawEditText(canvas, face, faceLg, edit, rect, float64(screenHeight))
+	return canvas
+}
+
+func (eng *UIEngine) WorldChatFocused() bool {
+	return eng != nil && eng.Rt != nil && eng.Rt.focused == eng.worldChatEditBox()
+}
+
 func (eng *UIEngine) worldInputPoint(x, y float64) (float64, float64) {
 	if eng.worldActive && eng.worldRenderScale > 0 && eng.worldRenderScale < 1 {
 		return x * eng.worldRenderScale, y * eng.worldRenderScale
@@ -644,7 +671,7 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 				}
 			}
 		}
-		if w.kind == kindEditBox {
+		if w.kind == kindEditBox && !(eng.worldActive && w == eng.worldChatEditBox()) {
 			eng.drawEditText(target, face, faceLg, w, rect, float64(screenHeight))
 		}
 	}

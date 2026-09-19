@@ -219,6 +219,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var uiTex *texture.Texture2D
 	var uiMapImage *gui.Image
 	var uiMapTex *texture.Texture2D
+	var uiChatImage *gui.Image
+	var uiChatTex *texture.Texture2D
 	var eng *ui.UIEngine
 	var err error
 	lastUIRefresh := time.Time{}
@@ -429,6 +431,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		uiMapImage.SetPosition(0, 0)
 		uiMapImage.SetVisible(false)
 		scene.Add(uiMapImage)
+		uiChatTex = texture.NewTexture2DFromRGBA(image.NewRGBA(image.Rect(0, 0, 1, 1)))
+		uiChatImage = gui.NewImageFromTex(uiChatTex)
+		uiChatImage.SetZLayerDelta(1)
+		uiChatImage.SetPosition(0, 0)
+		uiChatImage.SetVisible(false)
+		scene.Add(uiChatImage)
 		uiTex = texture.NewTexture2DFromRGBA(initialUI)
 		uiImage = gui.NewImageFromTex(uiTex)
 		uiImage.SetColor4(&math32.Color4{R: 1, G: 1, B: 1, A: 0})
@@ -505,6 +513,20 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		uiMapImage.SetVisible(true)
 		lastMinimapVersion = version
 	}
+	refreshChat := func(width, height int) {
+		if !worldMode || uiChatImage == nil || uiEngine == nil {
+			return
+		}
+		chatFrame := uiEngine.RenderWorldChat(width, height)
+		if uiChatTex == nil {
+			uiChatTex = texture.NewTexture2DFromRGBA(chatFrame)
+			uiChatImage.SetTexture(uiChatTex)
+		} else {
+			uiChatTex.SetFromRGBA(chatFrame)
+		}
+		uiChatImage.SetSize(float32(width), float32(height))
+		uiChatImage.SetVisible(uiEngine.WorldChatFocused())
+	}
 	refreshFrame := func(panelOnly bool) {
 		if uiImage == nil || uiEngine == nil {
 			return
@@ -531,6 +553,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			if uiMapImage != nil {
 				uiMapImage.SetVisible(false)
 			}
+			if uiChatImage != nil {
+				uiChatImage.SetVisible(false)
+			}
 		}
 		// Reuse one GPU texture and upload pixels in place. Recreating a
 		// Texture2D every UI paint forced a full delete/alloc + material rebind.
@@ -543,6 +568,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		debugUIRenderMS = time.Since(uiStarted).Seconds() * 1000
 		uiImage.SetSize(float32(width), float32(height))
 		refreshMinimap(width, height)
+		refreshChat(width, height)
 		lastUIRefresh = time.Now()
 	}
 	refresh := func() { refreshFrame(false) }
@@ -554,6 +580,15 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		width, height := win.GetSize()
 		if width > 0 && height > 0 {
 			refreshMinimap(width, height)
+		}
+	}
+	refreshChatOnly := func() {
+		if !worldMode || uiEngine == nil || uiChatImage == nil {
+			return
+		}
+		width, height := win.GetSize()
+		if width > 0 && height > 0 {
+			refreshChat(width, height)
 		}
 	}
 
@@ -572,6 +607,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		}
 		if uiMapImage != nil {
 			uiMapImage.SetVisible(false)
+		}
+		if uiChatImage != nil {
+			uiChatImage.SetVisible(false)
 		}
 		if worldModel != nil {
 			scene.Remove(worldModel)
@@ -657,7 +695,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		win.Subscribe(window.OnChar, func(_ string, event interface{}) {
 			char := event.(*window.CharEvent)
 			if uiEngine.HandleChar(char.Char) {
-				refresh()
+				if worldMode && uiEngine.WorldChatFocused() {
+					refreshChatOnly()
+				} else {
+					refresh()
+				}
 			}
 		})
 		win.Subscribe(window.OnKeyDown, func(_ string, event interface{}) {
@@ -673,7 +715,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				return
 			}
 			if uiEngine.HandleKeyWithMods(key.Key, key.Mods) {
-				refresh()
+				if worldMode && uiEngine.WorldChatFocused() {
+					refreshChatOnly()
+				} else {
+					refresh()
+				}
 			}
 		})
 		win.Subscribe(window.OnKeyUp, func(_ string, event interface{}) {
