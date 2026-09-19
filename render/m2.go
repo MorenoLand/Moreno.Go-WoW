@@ -344,7 +344,7 @@ func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model 
 		} else {
 			mat.SetShader("morenowow_m2")
 		}
-		mat.SetShaderUnique(true)
+		mat.SetShaderUnique(false)
 		if part.material.flags&0x04 != 0 {
 			mat.SetSide(material.SideDouble)
 		} else {

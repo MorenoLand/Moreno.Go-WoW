@@ -1110,7 +1110,7 @@ func buildWorldM2BatchedMesh(loader *ui.Loader, builder *worldM2MeshBuilder, tex
 	} else {
 		mat.SetShader("morenowow_m2")
 	}
-	mat.SetShaderUnique(true)
+	mat.SetShaderUnique(false)
 	if builder.part.material.flags&0x04 != 0 {
 		mat.SetSide(material.SideDouble)
 	} else {
@@ -1212,7 +1212,7 @@ func buildWorldM2Instance(loader *ui.Loader, parts map[string]*m2Part, textures 
 		} else {
 			mat.SetShader("morenowow_m2")
 		}
-		mat.SetShaderUnique(true)
+		mat.SetShaderUnique(false)
 		if part.material.flags&0x04 != 0 {
 			mat.SetSide(material.SideDouble)
 		} else {
