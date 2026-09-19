@@ -23,9 +23,6 @@ func (eng *UIEngine) VisibleGlueSceneModels() []GlueSceneModel {
 	if eng == nil || eng.Rt == nil {
 		return nil
 	}
-	if account := eng.Rt.widgets["AccountLogin"]; account != nil && widgetVisible(account) && account.modelFile != "" {
-		return []GlueSceneModel{{Path: account.modelFile, Position: account.modelPosition, Facing: account.modelFacing, Scale: account.modelScale, Alpha: account.alpha, Sequence: account.sequence, Camera: account.camera, Light: account.modelLight, HasLight: account.modelLightSet}}
-	}
 	scene := eng.Rt.widgets["LoginScene"]
 	if scene == nil || !widgetVisible(scene) {
 		return nil
