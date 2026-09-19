@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -39,6 +40,14 @@ type worldEntryResult struct {
 	position  world.WorldPosition
 	character world.Character
 	err       error
+}
+
+type sceneLoadResult struct {
+	requestKey, path, sceneKey, characterKey string
+	model, characterModel, petModel          *core.Node
+	fov, characterFacing                     float32
+	loadMS                                   float64
+	err                                      error
 }
 
 type clientHost struct {
@@ -165,6 +174,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	host := &clientHost{width: 960, height: 640}
 	results := make(chan loginResult, 1)
 	worldResults := make(chan worldEntryResult, 1)
+	sceneResults := make(chan sceneLoadResult, 1)
 	var uiEngine *ui.UIEngine
 	var activeSession *network.Session
 	var worldPackets <-chan world.PacketEvent
@@ -230,7 +240,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	sceneCharacterFacing := float32(0)
 	sceneModelPath := ""
 	sceneModelKey := ""
-	sceneCharacterKey := ""
+	sceneRequestKey := ""
+	sceneLoadPending := false
+	var sceneLoadMu sync.Mutex
 	sceneCameraDiagonalFOV := float32(0)
 	debugModelLoadMS := float64(0)
 	debugUIRenderMS := float64(0)
@@ -293,7 +305,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				return false
 			}
 			path := uiEngine.CurrentModelPath()
-			sceneModels := uiEngine.VisibleGlueSceneModels()
+			sceneModels := append([]ui.GlueSceneModel(nil), uiEngine.VisibleGlueSceneModels()...)
 			sceneKey := uiEngine.VisibleGlueSceneKey()
 			characterKey := ""
 			var selectedCharacter world.Character
@@ -302,15 +314,15 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				selectedCharacter = world.Character{Race: createState.RaceID, Class: createState.ClassID, Gender: createState.Gender}
 				characterKey = fmt.Sprintf("create:%d:%d:%d", createState.RaceID, createState.Gender, createState.ClassID)
 			} else if uiEngine.CharacterSelectVisible() && selectedIndex >= 0 && selectedIndex < len(glueCharacters) {
-				index := selectedIndex
-				selectedCharacter = glueCharacters[index]
+				selectedCharacter = glueCharacters[selectedIndex]
 				characterKey = fmt.Sprintf("%d:%s:%d", selectedCharacter.GUID, worldCharacterModelPath(selectedCharacter), selectedCharacter.PetDisplayID)
 			}
-			if path == sceneModelPath && sceneKey == sceneModelKey && characterKey == sceneCharacterKey {
+			requestKey := fmt.Sprintf("%s\x00%s\x00%s", path, sceneKey, characterKey)
+			if requestKey == sceneRequestKey && (sceneModel != nil || sceneLoadPending || path == "" && len(sceneModels) == 0) {
 				return false
 			}
 			if debug {
-				log.Printf("scene request path=%s selected=%d key=%s previous=%s/%s", path, selectedIndex, characterKey, sceneModelPath, sceneCharacterKey)
+				log.Printf("scene request path=%s selected=%d key=%s previous=%s/%s", path, selectedIndex, characterKey, sceneModelPath, sceneModelKey)
 			}
 			if sceneModel != nil {
 				scene.Remove(sceneModel)
@@ -329,98 +341,24 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 			resetSceneCamera(cam)
 			sceneCameraDiagonalFOV = 0
-			sceneModelPath = path
-			sceneModelKey = sceneKey
-			sceneCharacterKey = characterKey
+			sceneModelPath, sceneModelKey = path, sceneKey
+			sceneRequestKey = requestKey
 			debugModelError = ""
 			debugModelLoadMS = 0
-			uiEngine.SetSceneBackground(false)
-			if path == "" && len(sceneModels) == 0 {
-				uiEngine.SetSceneBackground(true)
-				return true
-			}
-			if debug {
-				log.Printf("scene: loading %s", path)
-			}
-			modelStarted := time.Now()
-			var model *core.Node
-			var modelErr error
-			if len(sceneModels) > 0 {
-				model, modelErr = loadGlueScene(uiEngine.AssetLoader, sceneModels)
-			} else {
-				model, modelErr = loadGlueModel(uiEngine.AssetLoader, path)
-			}
-			debugModelLoadMS = time.Since(modelStarted).Seconds() * 1000
-			if modelErr != nil {
-				uiEngine.SetSceneBackground(true)
-				debugModelError = modelErr.Error()
-				if debug {
-					log.Printf("model %s: %v", path, modelErr)
-				}
-				return true
-			}
-			debugModelError = ""
-			sceneModel = model
-			scene.Add(sceneModel)
-			if info, ok := sceneModel.UserData().(glueModelInfo); ok {
-				sceneCameraDiagonalFOV = info.fov
-			}
-			configureSceneCamera(cam, sceneModel)
-			if characterKey != "" {
-				characterModel, characterErr := loadGlueCharacterModel(uiEngine.AssetLoader, selectedCharacter)
-				if characterErr != nil {
-					if debug {
-						log.Printf("character select model %s: %v", worldCharacterModelPath(selectedCharacter), characterErr)
-					}
-				} else {
-					if backgroundInfo, ok := sceneModel.UserData().(glueModelInfo); ok && backgroundInfo.hasStand {
-						characterInfo, _ := characterModel.UserData().(glueModelInfo)
-						characterScale, characterPosition := sceneCharacterTransform(backgroundInfo, characterInfo, characterModel.Position())
-						characterModel.SetScale(characterScale, characterScale, characterScale)
-						characterModel.SetPosition(characterPosition.X, characterPosition.Y, characterPosition.Z)
-					}
-					sceneCharacterFacing = uiEngine.SceneCharacterFacing()
-					characterModel.SetRotation(0, sceneCharacterFacing*math.Pi/180, 0)
-					sceneCharacterModel = characterModel
-					scene.Add(sceneCharacterModel)
-					if selectedCharacter.PetDisplayID != 0 {
-						petDefinition, petDefinitionErr := worldCreatureCache.definition(uiEngine.AssetLoader, selectedCharacter.PetDisplayID, 0)
-						if petDefinitionErr != nil {
-							if debug {
-								log.Printf("character select pet display %d: %v", selectedCharacter.PetDisplayID, petDefinitionErr)
-							}
-						} else if petModel, petModelErr := buildWorldCreatureModel(uiEngine.AssetLoader, petDefinition); petModelErr != nil {
-							if debug {
-								log.Printf("character select pet model %d: %v", selectedCharacter.PetDisplayID, petModelErr)
-							}
-						} else {
-							petInfo, _ := petModel.UserData().(glueModelInfo)
-							petScale := float32(1)
-							if petDefinition.scale > 0 {
-								petScale = petDefinition.scale
-							}
-							if backgroundInfo, ok := sceneModel.UserData().(glueModelInfo); ok {
-								petScale *= backgroundInfo.modelScale
-								petFactor := petScale
-								if petInfo.modelScale > 0 {
-									petFactor /= petInfo.modelScale
-								}
-								petPosition := petModel.Position()
-								petPosition.X += 0.8 / petFactor
-								petModel.SetScale(petScale, petScale, petScale)
-								petModel.SetPosition(backgroundInfo.standPosition.X+petPosition.X*petFactor, backgroundInfo.standPosition.Y+(petPosition.Y-petInfo.modelBottom)*petFactor, backgroundInfo.standPosition.Z+petPosition.Z*petFactor)
-							}
-							petModel.SetRotation(0, sceneCharacterFacing*math.Pi/180, 0)
-							scenePetModel = petModel
-							scene.Add(scenePetModel)
-				}
-					}
-				}
-			}
+			sceneLoadPending = false
 			uiEngine.SetSceneBackground(true)
-			if debug {
-				log.Printf("scene: loaded %s with %d parts", path, len(sceneModel.Children()))
+			if path == "" && len(sceneModels) == 0 {
+				return true
 			}
+			sceneLoadPending = true
+			requestedCharacter, requestedFacing := selectedCharacter, uiEngine.SceneCharacterFacing()
+			go func() {
+				sceneLoadMu.Lock()
+				loaded := loadGlueSceneRequest(uiEngine.AssetLoader, &worldCreatureCache, sceneModels, path, sceneKey, characterKey, requestedCharacter, requestedFacing, debug)
+				sceneLoadMu.Unlock()
+				loaded.requestKey = requestKey
+				sceneResults <- loaded
+			}()
 			return true
 		}
 		setSceneModel()
@@ -858,6 +796,51 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				refreshDebugPanel()
 			}
 			select {
+			case loaded := <-sceneResults:
+				if loaded.requestKey != sceneRequestKey {
+					if loaded.model != nil {
+						loaded.model.Dispose()
+					}
+					if loaded.characterModel != nil {
+						loaded.characterModel.Dispose()
+					}
+					if loaded.petModel != nil {
+						loaded.petModel.Dispose()
+					}
+					break
+				}
+				sceneLoadPending = false
+				debugModelLoadMS = loaded.loadMS
+				if loaded.err != nil || loaded.model == nil {
+					if loaded.err != nil {
+						debugModelError = loaded.err.Error()
+						if debug {
+							log.Printf("model %s: %v", loaded.path, loaded.err)
+						}
+					}
+					uiEngine.SetSceneBackground(true)
+					refresh()
+					break
+				}
+				debugModelError = ""
+				sceneModel = loaded.model
+				scene.Add(sceneModel)
+				sceneCameraDiagonalFOV = loaded.fov
+				configureSceneCamera(cam, sceneModel)
+				sceneCharacterFacing = loaded.characterFacing
+				if loaded.characterModel != nil {
+					sceneCharacterModel = loaded.characterModel
+					scene.Add(sceneCharacterModel)
+				}
+				if loaded.petModel != nil {
+					scenePetModel = loaded.petModel
+					scene.Add(scenePetModel)
+				}
+				uiEngine.SetSceneBackground(true)
+				if debug {
+					log.Printf("scene: loaded %s with %d parts", loaded.path, len(sceneModel.Children()))
+				}
+				refresh()
 			case result := <-results:
 				host.loginRunning = false
 				if result.err != nil {

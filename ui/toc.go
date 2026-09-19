@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	lua "github.com/yuin/gopher-lua"
 )
@@ -21,6 +22,7 @@ type Loader struct {
 	assetRoot string
 	mpq       *mpqSet
 	rt        *Runtime
+	mu        sync.Mutex
 }
 
 // NewLoader creates a loader rooted at the given data directory.
@@ -211,6 +213,8 @@ func (l *Loader) ReadAsset(path string) ([]byte, error) {
 func (l *Loader) ReadFile(path string) ([]byte, error) { return l.read(path) }
 
 func (l *Loader) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.mpq == nil {
 		return nil
 	}
@@ -219,6 +223,8 @@ func (l *Loader) Close() error {
 
 // read resolves and reads an interface file.
 func (l *Loader) read(interfacePath string) ([]byte, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.mpq != nil {
 		return l.mpq.ReadFile(interfacePath)
 	}
@@ -230,6 +236,8 @@ func (l *Loader) read(interfacePath string) ([]byte, error) {
 }
 
 func (l *Loader) readAsset(interfacePath string) ([]byte, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.mpq != nil {
 		return l.mpq.ReadFile(interfacePath)
 	}
