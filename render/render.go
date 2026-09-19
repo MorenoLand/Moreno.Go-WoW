@@ -243,6 +243,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	sceneRequestKey := ""
 	sceneLoadPending := false
 	var sceneLoadMu sync.Mutex
+	var sceneUploadQueue []core.INode
 	sceneCameraDiagonalFOV := float32(0)
 	debugModelLoadMS := float64(0)
 	debugUIRenderMS := float64(0)
@@ -329,6 +330,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				sceneModel.Dispose()
 				sceneModel = nil
 			}
+			sceneUploadQueue = nil
 			if sceneCharacterModel != nil {
 				scene.Remove(sceneCharacterModel)
 				sceneCharacterModel.Dispose()
@@ -825,16 +827,19 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				debugModelError = ""
 				sceneModel = loaded.model
 				scene.Add(sceneModel)
+				queueSceneLeaves(sceneModel, &sceneUploadQueue)
 				sceneCameraDiagonalFOV = loaded.fov
 				configureSceneCamera(cam, sceneModel)
 				sceneCharacterFacing = loaded.characterFacing
 				if loaded.characterModel != nil {
 					sceneCharacterModel = loaded.characterModel
 					scene.Add(sceneCharacterModel)
+					queueSceneLeaves(sceneCharacterModel, &sceneUploadQueue)
 				}
 				if loaded.petModel != nil {
 					scenePetModel = loaded.petModel
 					scene.Add(scenePetModel)
+					queueSceneLeaves(scenePetModel, &sceneUploadQueue)
 				}
 				uiEngine.SetSceneBackground(true)
 				if debug {
@@ -1127,6 +1132,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				refreshDebugPanel()
 			}
 		}
+		revealSceneBatch(&sceneUploadQueue, 4)
 		gl.Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
 		if renderErr := r.Render(scene, cam); renderErr != nil && debug {
 			log.Printf("render: %v", renderErr)
