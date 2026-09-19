@@ -27,6 +27,10 @@ type debugPanelData struct {
 	cursor          bool
 	modelError      string
 	terminalDebug   bool
+	rendererMats    int
+	rendererPanels  int
+	rendererOthers  int
+	worldParts      int
 }
 
 func debugPanelLines(data debugPanelData) []string {
@@ -49,6 +53,8 @@ func debugPanelLines(data debugPanelData) []string {
 		fmt.Sprintf("UI cache %d decoded textures | assets %s", data.assetCache, dataSource),
 		"scene " + scene,
 		fmt.Sprintf("model %d parts | %d scene nodes", data.model.parts, data.sceneParts),
+		fmt.Sprintf("renderer %d materials | %d panels | %d others", data.rendererMats, data.rendererPanels, data.rendererOthers),
+		fmt.Sprintf("world %d scene nodes", data.worldParts),
 		fmt.Sprintf("geometry %d vertices | %d triangles", data.model.vertices, data.model.triangles),
 		fmt.Sprintf("batches %d opaque | %d blended | %d textures", data.model.opaqueBatches, data.model.transparentBatches, data.model.textures),
 		fmt.Sprintf("particles %d emitters | %d points", data.model.particleEmitters, data.model.particlePoints),

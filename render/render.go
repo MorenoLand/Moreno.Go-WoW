@@ -469,6 +469,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				modelStats = info.stats
 			}
 		}
+		worldParts := 0
+		if worldModel != nil {
+			worldParts = len(worldModel.Children())
+		}
+		renderStats := r.Stats()
 		assetStats := uiEngine.AssetLoader.AssetStats()
 		uiEngine.SetDebugPanelLines(debugPanelLines(debugPanelData{
 			width: width, height: height, fps: debugFPS, frameMS: debugFrameMS, uiRenderMS: debugUIRenderMS,
@@ -477,6 +482,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			model: modelStats, sceneParts: parts, assetCache: len(uiEngine.Cache), mpqArchives: assetStats.Archives,
 			mpqCachedFiles: assetStats.CachedFiles, mpqMissingFiles: assetStats.MissingFiles, audio: host.audio != nil,
 			cursor: wowCursor != nil, modelError: debugModelError, terminalDebug: debug,
+		rendererMats: renderStats.GraphicMats, rendererPanels: renderStats.Panels, rendererOthers: renderStats.Others, worldParts: worldParts,
 		}))
 	}
 
