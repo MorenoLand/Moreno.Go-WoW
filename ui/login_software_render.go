@@ -330,7 +330,7 @@ func (eng *UIEngine) RenderWorld(screenWidth, screenHeight int) *image.RGBA {
 	renderWidth := int(math.Round(float64(screenWidth) * eng.worldRenderScale))
 	renderHeight := int(math.Round(float64(screenHeight) * eng.worldRenderScale))
 	bounds := image.Rect(0, 0, renderWidth, renderHeight)
-	if eng.debugPanel.dragging && eng.worldBaseCanvas != nil && eng.worldBaseCanvas.Bounds().Eq(bounds) {
+	if eng.debugPanel.dragging && eng.worldBaseCanvas != nil && eng.worldBaseCanvas.Bounds().Eq(bounds) && eng.screenWidth == renderWidth && eng.screenHeight == renderHeight {
 		if eng.paintCanvas == nil || !eng.paintCanvas.Bounds().Eq(bounds) {
 			eng.paintCanvas = image.NewRGBA(bounds)
 		}
@@ -341,6 +341,31 @@ func (eng *UIEngine) RenderWorld(screenWidth, screenHeight int) *image.RGBA {
 		return eng.paintCanvas
 	}
 	return eng.render(renderWidth, renderHeight, eng.worldRoot, false)
+}
+
+func (eng *UIEngine) RenderWorldDebugPanel(screenWidth, screenHeight int) *image.RGBA {
+	eng.worldActive = true
+	eng.worldRenderScale = 1
+	maxWorldWidth := 1280
+	if screenWidth > maxWorldWidth {
+		eng.worldRenderScale = float64(maxWorldWidth) / float64(screenWidth)
+	}
+	renderWidth := int(math.Round(float64(screenWidth) * eng.worldRenderScale))
+	renderHeight := int(math.Round(float64(screenHeight) * eng.worldRenderScale))
+	bounds := image.Rect(0, 0, renderWidth, renderHeight)
+	if eng.worldBaseCanvas == nil || !eng.worldBaseCanvas.Bounds().Eq(bounds) || eng.screenWidth != renderWidth || eng.screenHeight != renderHeight {
+		return eng.RenderWorld(screenWidth, screenHeight)
+	}
+	if eng.paintCanvas == nil || !eng.paintCanvas.Bounds().Eq(bounds) {
+		eng.paintCanvas = image.NewRGBA(bounds)
+	}
+	copy(eng.paintCanvas.Pix, eng.worldBaseCanvas.Pix)
+	face := eng.cachedFace("__base13", eng.FontObj, 13*eng.uiScale)
+	faceLg := eng.cachedFace("__base16", eng.FontObj, 16*eng.uiScale)
+	if eng.debugPanel.visible {
+		eng.drawDebugPanel(eng.paintCanvas, face, faceLg)
+	}
+	return eng.paintCanvas
 }
 
 func (eng *UIEngine) worldInputPoint(x, y float64) (float64, float64) {
@@ -649,13 +674,13 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 			}
 		}
 	}
-	if eng.debugPanel.visible {
-		if eng.worldActive {
-			if eng.worldBaseCanvas == nil || !eng.worldBaseCanvas.Bounds().Eq(canvas.Bounds()) {
-				eng.worldBaseCanvas = image.NewRGBA(canvas.Bounds())
-			}
-			copy(eng.worldBaseCanvas.Pix, canvas.Pix)
+	if eng.worldActive {
+		if eng.worldBaseCanvas == nil || !eng.worldBaseCanvas.Bounds().Eq(canvas.Bounds()) {
+			eng.worldBaseCanvas = image.NewRGBA(canvas.Bounds())
 		}
+		copy(eng.worldBaseCanvas.Pix, canvas.Pix)
+	}
+	if eng.debugPanel.visible {
 		eng.drawDebugPanel(canvas, face, faceLg)
 	}
 

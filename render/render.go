@@ -471,7 +471,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		}))
 	}
 
-	refresh := func() {
+	refreshFrame := func(panelOnly bool) {
 		if uiImage == nil || uiEngine == nil {
 			return
 		}
@@ -487,7 +487,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		uiStarted := time.Now()
 		var uiFrame *image.RGBA
 		if worldMode {
-			uiFrame = uiEngine.RenderWorld(width, height)
+			if panelOnly {
+				uiFrame = uiEngine.RenderWorldDebugPanel(width, height)
+			} else {
+				uiFrame = uiEngine.RenderWorld(width, height)
+			}
 		} else {
 			uiFrame = uiEngine.Render(width, height)
 		}
@@ -503,6 +507,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		uiImage.SetSize(float32(width), float32(height))
 		lastUIRefresh = time.Now()
 	}
+	refresh := func() { refreshFrame(false) }
+	refreshDebugPanel := func() { refreshFrame(true) }
 
 	host.logout = func() {
 		if !worldMode {
@@ -757,7 +763,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				refresh()
 			}
 			if uiEngine.DebugPanelDragging() && (lastUIRefresh.IsZero() || frameAt.Sub(lastUIRefresh) >= time.Second/30) {
-				refresh()
+				refreshDebugPanel()
 			}
 			select {
 			case result := <-results:
@@ -1040,7 +1046,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			if uiEngine.DebugPanelVisible() && (debugPanelRefresh.IsZero() || frameAt.Sub(debugPanelRefresh) >= time.Second) {
 				updateDebugPanel()
 				debugPanelRefresh = frameAt
-				refresh()
+				refreshDebugPanel()
 			}
 		}
 		gl.Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)

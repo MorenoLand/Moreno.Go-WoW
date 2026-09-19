@@ -167,9 +167,10 @@ type worldSceneInfo struct {
 }
 
 type worldSceneCollision struct {
-	chunks []worldADTChunk
-	solids []worldCollisionMesh
-	cells  map[[2]int][]worldCollisionRef
+	chunks       []worldADTChunk
+	solids       []worldCollisionMesh
+	cells        map[[2]int][]worldCollisionRef
+	terrainCells map[[2]int][]int
 }
 
 type worldCollisionRef struct {
@@ -203,7 +204,11 @@ func worldCollisionTriangleFromPoints(a, b, c [3]float32, noCamera bool) (worldC
 }
 
 func newWorldSceneCollision(chunks []worldADTChunk, solids []worldCollisionMesh) worldSceneCollision {
-	collision := worldSceneCollision{chunks: chunks, solids: solids, cells: make(map[[2]int][]worldCollisionRef)}
+	collision := worldSceneCollision{chunks: chunks, solids: solids, cells: make(map[[2]int][]worldCollisionRef), terrainCells: make(map[[2]int][]int)}
+	for chunkIndex, chunk := range chunks {
+		key := [2]int{int(math.Floor(float64(chunk.position[0] / float32(worldChunkSize)))), int(math.Floor(float64(chunk.position[1] / float32(worldChunkSize))))}
+		collision.terrainCells[key] = append(collision.terrainCells[key], chunkIndex)
+	}
 	for meshIndex, mesh := range solids {
 		for triangleIndex, triangle := range mesh.triangles {
 			minX := int(math.Floor(float64(triangle.min[0] / worldCollisionCell)))
@@ -266,39 +271,71 @@ func (collision worldSceneCollision) floor(x, y, reference float32) (float32, bo
 }
 
 func (collision worldSceneCollision) terrain(x, y float32) (float32, [3]float32, bool) {
+	if len(collision.terrainCells) > 0 {
+		cellX := int(math.Floor(float64(x / float32(worldChunkSize))))
+		cellY := int(math.Floor(float64(y / float32(worldChunkSize))))
+		found := len(collision.chunks)
+		foundValid := false
+		var height float32
+		var normal [3]float32
+		for offsetY := -1; offsetY <= 1; offsetY++ {
+			for offsetX := -1; offsetX <= 1; offsetX++ {
+				for _, chunkIndex := range collision.terrainCells[[2]int{cellX + offsetX, cellY + offsetY}] {
+					if chunkIndex >= found {
+						continue
+					}
+					if candidateHeight, candidateNormal, inside, ok := worldTerrainAt(collision.chunks[chunkIndex], x, y); inside {
+						found = chunkIndex
+						height, normal = candidateHeight, candidateNormal
+						foundValid = ok
+					}
+				}
+			}
+		}
+		if found < len(collision.chunks) && foundValid {
+			return height, normal, true
+		}
+		return 0, [3]float32{}, false
+	}
 	for _, chunk := range collision.chunks {
-		localX := (chunk.position[0] - x) / worldUnitSize
-		localY := (chunk.position[1] - y) / worldUnitSize
-		if localX < 0 || localY < 0 || localX > 8 || localY > 8 {
-			continue
+		if height, normal, inside, ok := worldTerrainAt(chunk, x, y); inside {
+			return height, normal, ok
 		}
-		row, column := int(math.Floor(float64(localX))), int(math.Floor(float64(localY)))
-		if row >= 8 {
-			row = 7
-			localX = 8
-		}
-		if column >= 8 {
-			column = 7
-			localY = 8
-		}
-		if chunk.holes&(1<<uint((row/2)*4+column/2)) != 0 {
-			return 0, [3]float32{}, false
-		}
-		u, v := localX-float32(row), localY-float32(column)
-		outer := func(r, c int) float32 { return chunk.heights[r*17+c] }
-		h00, h01 := outer(row, column), outer(row, column+1)
-		h10, h11 := outer(row+1, column), outer(row+1, column+1)
-		height := h00*(1-u)*(1-v) + h10*u*(1-v) + h01*(1-u)*v + h11*u*v
-		dx := ((h10-h00)*(1-v) + (h11-h01)*v) / worldUnitSize
-		dy := ((h01-h00)*(1-u) + (h11-h10)*u) / worldUnitSize
-		normal := [3]float32{-(-dx), -(-dy), 1}
-		length := float32(math.Sqrt(float64(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2])))
-		if length > 0 {
-			normal[0], normal[1], normal[2] = normal[0]/length, normal[1]/length, normal[2]/length
-		}
-		return chunk.position[2] + height, normal, true
 	}
 	return 0, [3]float32{}, false
+}
+
+func worldTerrainAt(chunk worldADTChunk, x, y float32) (float32, [3]float32, bool, bool) {
+	localX := (chunk.position[0] - x) / worldUnitSize
+	localY := (chunk.position[1] - y) / worldUnitSize
+	if localX < 0 || localY < 0 || localX > 8 || localY > 8 {
+		return 0, [3]float32{}, false, false
+	}
+	row, column := int(math.Floor(float64(localX))), int(math.Floor(float64(localY)))
+	if row >= 8 {
+		row = 7
+		localX = 8
+	}
+	if column >= 8 {
+		column = 7
+		localY = 8
+	}
+	if chunk.holes&(1<<uint((row/2)*4+column/2)) != 0 {
+		return 0, [3]float32{}, true, false
+	}
+	u, v := localX-float32(row), localY-float32(column)
+	outer := func(r, c int) float32 { return chunk.heights[r*17+c] }
+	h00, h01 := outer(row, column), outer(row, column+1)
+	h10, h11 := outer(row+1, column), outer(row+1, column+1)
+	height := h00*(1-u)*(1-v) + h10*u*(1-v) + h01*(1-u)*v + h11*u*v
+	dx := ((h10-h00)*(1-v) + (h11-h01)*v) / worldUnitSize
+	dy := ((h01-h00)*(1-u) + (h11-h10)*u) / worldUnitSize
+	normal := [3]float32{-(-dx), -(-dy), 1}
+	length := float32(math.Sqrt(float64(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2])))
+	if length > 0 {
+		normal[0], normal[1], normal[2] = normal[0]/length, normal[1]/length, normal[2]/length
+	}
+	return chunk.position[2] + height, normal, true, true
 }
 
 func (collision worldSceneCollision) move(from, to [3]float32) [3]float32 {
