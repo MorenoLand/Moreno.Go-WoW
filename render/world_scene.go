@@ -1470,6 +1470,10 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 				tex = loaded
 			}
 		}
+		if tex != nil {
+			tex.SetWrapS(gls.REPEAT)
+			tex.SetWrapT(gls.REPEAT)
+		}
 		geom := geometry.NewGeometry()
 		geom.SetIndices(builder.indices)
 		geom.AddVBO(gls.NewVBO(builder.positions).AddAttrib(gls.VertexPosition))
