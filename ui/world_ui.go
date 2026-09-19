@@ -80,6 +80,8 @@ func (eng *UIEngine) LoadWorldUI() error {
 	if eng.AssetLoader == nil || eng.Rt == nil {
 		return fmt.Errorf("world UI has no asset loader")
 	}
+	eng.Rt.suppressSound = true
+	defer func() { eng.Rt.suppressSound = false }()
 	if eng.Rt.Host != nil {
 		if _, height := eng.Rt.Host.ScreenSize(); height > 0 {
 			eng.Rt.SetCVar("uiScale", fmt.Sprintf("%.6f", height/768))

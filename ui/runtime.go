@@ -39,6 +39,7 @@ type Runtime struct {
 	selectedSex       int
 	selectedClass     int
 	addonVersionCheck bool
+	suppressSound     bool
 
 	// Glue carries the connection-flow state surfaced by the realm and
 	// character list API functions.

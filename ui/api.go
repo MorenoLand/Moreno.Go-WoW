@@ -619,19 +619,19 @@ func registerGlueAPI(rt *Runtime) {
 
 	// Audio.
 	reg("PlaySound", func(L *lua.LState) int {
-		if rt.Host != nil {
+		if rt.Host != nil && !rt.suppressSound {
 			rt.Host.PlaySound(L.CheckString(1))
 		}
 		return 0
 	})
 	reg("PlaySoundFile", func(L *lua.LState) int {
-		if rt.Host != nil {
+		if rt.Host != nil && !rt.suppressSound {
 			rt.Host.PlaySound(L.CheckString(1))
 		}
 		return 0
 	})
 	reg("PlayGlueMusic", func(L *lua.LState) int {
-		if rt.Host != nil {
+		if rt.Host != nil && !rt.suppressSound {
 			rt.Host.PlayMusic(L.CheckString(1))
 		}
 		return 0
@@ -643,7 +643,7 @@ func registerGlueAPI(rt *Runtime) {
 		return 0
 	})
 	reg("PlayGlueAmbience", func(L *lua.LState) int {
-		if rt.Host != nil && L.GetTop() >= 1 && L.Get(1).Type() == lua.LTString {
+		if rt.Host != nil && !rt.suppressSound && L.GetTop() >= 1 && L.Get(1).Type() == lua.LTString {
 			rt.Host.PlayAmbience(L.CheckString(1))
 		}
 		return 0
@@ -661,7 +661,7 @@ func registerGlueAPI(rt *Runtime) {
 		return 0
 	})
 	reg("PlayCreditsMusic", func(L *lua.LState) int {
-		if rt.Host != nil {
+		if rt.Host != nil && !rt.suppressSound {
 			rt.Host.PlayMusic(L.CheckString(1))
 		}
 		return 0
