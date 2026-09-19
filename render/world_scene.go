@@ -1829,7 +1829,7 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 		if layerCount > len(layerIndices) {
 			layerCount = len(layerIndices)
 		}
-		for _, textureIndex := range layerIndices[:layerCount] {
+		addTerrainTexture := func(textureIndex int) {
 			tex := cache.terrainPlaceholder
 			if textureIndex >= 0 && textureIndex < len(adt.textures) {
 				path := adt.textures[textureIndex]
@@ -1844,7 +1844,7 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 			}
 			mat.AddTexture(tex)
 		}
-		for index := 0; index < layerCount-1; index++ {
+		addTerrainAlpha := func(index int) {
 			alphaTexture := cache.zeroAlpha
 			if index < len(chunk.alphaMaps) {
 				if len(chunk.alphaMaps[index]) == 0 {
@@ -1856,6 +1856,11 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 				}
 			}
 			mat.AddTexture(alphaTexture)
+		}
+		addTerrainTexture(layerIndices[0])
+		for index := 1; index < layerCount; index++ {
+			addTerrainTexture(layerIndices[index])
+			addTerrainAlpha(index - 1)
 		}
 		mesh := graphic.NewMesh(geom, mat)
 		mesh.SetRenderOrder(-90)

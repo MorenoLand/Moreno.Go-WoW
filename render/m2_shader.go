@@ -194,10 +194,10 @@ void main() {
 	color.rgb = mix(color.rgb, texture(MatTexture[1], tiled).rgb, texture(MatTexture[2], FragTexcoord).r);
 #endif
 #if MAT_TEXTURES > 3
-	color.rgb = mix(color.rgb, texture(MatTexture[2], tiled).rgb, texture(MatTexture[3], FragTexcoord).r);
+	color.rgb = mix(color.rgb, texture(MatTexture[3], tiled).rgb, texture(MatTexture[4], FragTexcoord).r);
 #endif
 #if MAT_TEXTURES > 5
-	color.rgb = mix(color.rgb, texture(MatTexture[3], tiled).rgb, texture(MatTexture[4], FragTexcoord).r);
+	color.rgb = mix(color.rgb, texture(MatTexture[5], tiled).rgb, texture(MatTexture[6], FragTexcoord).r);
 #endif
     FragColor = vec4(color.rgb, 1.0);
 }`
