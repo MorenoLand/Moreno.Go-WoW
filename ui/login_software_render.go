@@ -322,8 +322,12 @@ func (eng *UIEngine) RenderWorld(screenWidth, screenHeight int) *image.RGBA {
 	eng.worldActive = true
 	eng.syncCombatLogButtons()
 	eng.worldRenderScale = 1
-	if screenWidth > 1280 {
-		eng.worldRenderScale = 1280 / float64(screenWidth)
+	maxWorldWidth := 1280
+	if eng.debugPanel.dragging {
+		maxWorldWidth = 640
+	}
+	if screenWidth > maxWorldWidth {
+		eng.worldRenderScale = float64(maxWorldWidth) / float64(screenWidth)
 	}
 	renderWidth := int(math.Round(float64(screenWidth) * eng.worldRenderScale))
 	renderHeight := int(math.Round(float64(screenHeight) * eng.worldRenderScale))

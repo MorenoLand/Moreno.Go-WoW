@@ -756,7 +756,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			if movieChanged || sceneChanged || minimapChanged {
 				refresh()
 			}
-			if uiEngine.DebugPanelDragging() && (lastUIRefresh.IsZero() || frameAt.Sub(lastUIRefresh) >= time.Second/60) {
+			if uiEngine.DebugPanelDragging() && (lastUIRefresh.IsZero() || frameAt.Sub(lastUIRefresh) >= time.Second/30) {
 				refresh()
 			}
 			select {
