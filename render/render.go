@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"image"
 	"log"
 	"math"
 	"os"
@@ -484,9 +485,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			setSceneModel()
 		}
 		uiStarted := time.Now()
-		uiFrame := uiEngine.Render(width, height)
+		var uiFrame *image.RGBA
 		if worldMode {
 			uiFrame = uiEngine.RenderWorld(width, height)
+		} else {
+			uiFrame = uiEngine.Render(width, height)
 		}
 		// Reuse one GPU texture and upload pixels in place. Recreating a
 		// Texture2D every UI paint forced a full delete/alloc + material rebind.
@@ -1034,7 +1037,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				}
 			default:
 			}
-			if uiEngine.DebugPanelVisible() && (debugPanelRefresh.IsZero() || frameAt.Sub(debugPanelRefresh) >= 250*time.Millisecond) {
+			if uiEngine.DebugPanelVisible() && (debugPanelRefresh.IsZero() || frameAt.Sub(debugPanelRefresh) >= time.Second) {
 				updateDebugPanel()
 				debugPanelRefresh = frameAt
 				refresh()

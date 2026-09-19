@@ -64,6 +64,7 @@ type UIEngine struct {
 	worldUIReady     bool
 	worldLoading     bool
 	worldActive      bool
+	worldRenderScale float64
 	minimapImage     image.Image
 	minimapTRS       map[string]string
 	minimapTRSLoaded bool
@@ -313,13 +314,27 @@ func (eng *UIEngine) loadBLP(path string) image.Image {
 
 func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 	eng.worldActive = false
+	eng.worldRenderScale = 1
 	return eng.render(screenWidth, screenHeight, eng.Rt.widgets["GlueParent"], true)
 }
 
 func (eng *UIEngine) RenderWorld(screenWidth, screenHeight int) *image.RGBA {
 	eng.worldActive = true
 	eng.syncCombatLogButtons()
-	return eng.render(screenWidth, screenHeight, eng.worldRoot, false)
+	eng.worldRenderScale = 1
+	if screenWidth > 1280 {
+		eng.worldRenderScale = 1280 / float64(screenWidth)
+	}
+	renderWidth := int(math.Round(float64(screenWidth) * eng.worldRenderScale))
+	renderHeight := int(math.Round(float64(screenHeight) * eng.worldRenderScale))
+	return eng.render(renderWidth, renderHeight, eng.worldRoot, false)
+}
+
+func (eng *UIEngine) worldInputPoint(x, y float64) (float64, float64) {
+	if eng.worldActive && eng.worldRenderScale > 0 && eng.worldRenderScale < 1 {
+		return x * eng.worldRenderScale, y * eng.worldRenderScale
+	}
+	return x, y
 }
 
 func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBackground bool) *image.RGBA {
@@ -1359,6 +1374,7 @@ func (eng *UIEngine) SetGlueState(state GlueState) {
 }
 
 func (eng *UIEngine) HandleCursor(x, y float64) bool {
+	x, y = eng.worldInputPoint(x, y)
 	if eng.Rt != nil {
 		eng.Rt.cursorX = x
 		eng.Rt.cursorY = y
@@ -1405,6 +1421,7 @@ func (eng *UIEngine) HandleMouse(x, y float64, button window.MouseButton, down b
 	if button != window.MouseButtonLeft {
 		return false
 	}
+	x, y = eng.worldInputPoint(x, y)
 	if eng.Rt != nil {
 		eng.Rt.cursorX = x
 		eng.Rt.cursorY = y
