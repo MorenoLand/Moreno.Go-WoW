@@ -15,6 +15,7 @@ type worldCameraController struct {
 	velocity   [3]float32
 	distance   float32
 	yaw        float32
+	bodyYaw    float32
 	pitch      float32
 	keys       map[window.Key]bool
 	ground     func(float32, float32) (float32, bool)
@@ -22,19 +23,22 @@ type worldCameraController struct {
 	move       func([3]float32, [3]float32) [3]float32
 	cameraTest func(math32.Vector3, math32.Vector3) math32.Vector3
 	jumpQueued bool
+	grounded   bool
+	airTime    float64
+	landingTime float64
 	dragging   bool
 	lastMouseX float64
 	lastMouseY float64
 }
 
 func newWorldCameraController(position world.WorldPosition) *worldCameraController {
-	return &worldCameraController{position: [3]float32{position.X, position.Y, position.Z}, distance: 10, yaw: position.Orientation, pitch: -15 * float32(math.Pi) / 180, keys: make(map[window.Key]bool)}
+	return &worldCameraController{position: [3]float32{position.X, position.Y, position.Z}, distance: 10, yaw: position.Orientation, bodyYaw: position.Orientation, pitch: -15 * float32(math.Pi) / 180, grounded: true, keys: make(map[window.Key]bool)}
 }
 
 func (c *worldCameraController) handleKey(key window.Key, down bool) bool {
 	switch key {
 	case window.KeyW, window.KeyA, window.KeyS, window.KeyD, window.KeyUp, window.KeyDown, window.KeyLeft, window.KeyRight, window.KeyQ, window.KeyE, window.KeySpace:
-		if key == window.KeySpace && down && !c.keys[key] {
+		if key == window.KeySpace && down && !c.keys[key] && c.grounded {
 			c.jumpQueued = true
 		}
 		c.keys[key] = down
@@ -73,7 +77,27 @@ func (c *worldCameraController) isMoving() bool {
 }
 
 func (c *worldCameraController) isAirborne() bool {
-	return math.Abs(float64(c.velocity[2])) > 0.25
+	return !c.grounded
+}
+
+func (c *worldCameraController) motion() uint16 {
+	if !c.grounded {
+		switch {
+		case c.airTime < 0.2:
+			return 37
+		case c.velocity[2] > 0.5:
+			return 38
+		default:
+			return 40
+		}
+	}
+	if c.landingTime > 0 {
+		return 39
+	}
+	if c.isMoving() {
+		return 5
+	}
+	return 0
 }
 
 func (c *worldCameraController) handleMouse(x, y float64, button window.MouseButton, down bool) bool {
@@ -102,6 +126,13 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 		return false
 	}
 	delta := float32(math.Min(elapsed, 0.1))
+	c.airTime += float64(delta)
+	if c.grounded {
+		c.airTime = 0
+	}
+	if c.landingTime > 0 {
+		c.landingTime -= float64(delta)
+	}
 	turn := float32(1.8) * delta
 	if c.keys[window.KeyLeft] {
 		c.yaw += turn
@@ -135,6 +166,10 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 		move[1] -= strafe[1]
 	}
 	moveLength := float32(math.Hypot(float64(move[0]), float64(move[1])))
+	moveDirection := c.bodyYaw
+	if moveLength > 0 {
+		moveDirection = float32(math.Atan2(float64(move[1]), float64(move[0])))
+	}
 	targetSpeed := float32(7)
 	if moveLength > 0 {
 		move[0], move[1] = move[0]/moveLength*targetSpeed, move[1]/moveLength*targetSpeed
@@ -148,6 +183,11 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 		c.velocity[0] *= friction
 		c.velocity[1] *= friction
 	}
+	if moveLength > 0 {
+		c.bodyYaw = approachWorldAngle(c.bodyYaw, moveDirection, 10*delta)
+	} else if c.dragging && math.Abs(float64(worldAngleDelta(c.bodyYaw, c.yaw))) > 1.2 {
+		c.bodyYaw = approachWorldAngle(c.bodyYaw, c.yaw, 7*delta)
+	}
 	from := c.position
 	to := from
 	to[0] += c.velocity[0] * delta
@@ -157,11 +197,13 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 	}
 	c.position[0], c.position[1] = to[0], to[1]
 	grounded := false
+	wasAirborne := !c.grounded
 	groundHeight := float32(0)
 	if c.floor != nil {
 		groundHeight, grounded = c.floor(c.position[0], c.position[1], c.position[2])
-		if grounded && c.velocity[2] == 0 && math.Abs(float64(c.position[2]-groundHeight)) <= worldMaxGroundSnap {
+		if grounded && c.velocity[2] <= 0 && math.Abs(float64(c.position[2]-groundHeight)) <= worldMaxGroundSnap {
 			c.position[2] = groundHeight
+			c.velocity[2] = 0
 		}
 	} else if c.ground != nil {
 		groundHeight, grounded = c.ground(c.position[0], c.position[1])
@@ -172,6 +214,7 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 	if c.jumpQueued && grounded {
 		c.velocity[2] = 8
 		grounded = false
+		c.airTime = 0
 	}
 	c.jumpQueued = false
 	c.velocity[2] -= 24 * delta
@@ -180,24 +223,32 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 		if height, ok := c.floor(c.position[0], c.position[1], c.position[2]); ok && c.position[2] <= height {
 			c.position[2] = height
 			c.velocity[2] = 0
+			grounded = true
 		}
 	} else if c.ground != nil {
 		if height, ok := c.ground(c.position[0], c.position[1]); ok && c.position[2] <= height {
 			c.position[2] = height
 			c.velocity[2] = 0
+			grounded = true
 		}
 	}
 	if c.keys[window.KeyQ] {
 		c.position[2] += targetSpeed * delta
 		c.velocity[2] = 0
+		grounded = false
 	}
 	if c.keys[window.KeyE] {
 		c.position[2] -= targetSpeed * delta
 		c.velocity[2] = 0
+		grounded = false
 	}
+	if wasAirborne && grounded {
+		c.landingTime = 0.16
+	}
+	c.grounded = grounded
 	if player != nil {
 		player.SetPosition(c.position[0], c.position[1], c.position[2])
-		player.SetRotation(0, 0, c.yaw)
+		player.SetRotation(0, 0, c.bodyYaw)
 	}
 	pivot := math32.NewVector3(c.position[0], c.position[1], c.position[2]+1.6)
 	cosPitch := float32(math.Cos(float64(c.pitch)))
@@ -212,6 +263,28 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 	target := pivot
 	cam.LookAt(target, math32.NewVector3(0, 0, 1))
 	return true
+}
+
+func worldAngleDelta(from, to float32) float32 {
+	delta := to - from
+	for delta > math.Pi {
+		delta -= 2 * math.Pi
+	}
+	for delta < -math.Pi {
+		delta += 2 * math.Pi
+	}
+	return delta
+}
+
+func approachWorldAngle(current, target, amount float32) float32 {
+	delta := worldAngleDelta(current, target)
+	if math.Abs(float64(delta)) <= float64(amount) {
+		return target
+	}
+	if delta < 0 {
+		return current - amount
+	}
+	return current + amount
 }
 
 func clampWorldPitch(pitch float32) float32 {

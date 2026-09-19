@@ -742,13 +742,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				if worldPlayer != nil {
 					if info, ok := worldPlayer.UserData().(glueModelInfo); ok {
 						if info.animation != nil {
-							motion := uint16(0)
-							if worldCamera.isAirborne() {
-								motion = 38
-							} else if worldCamera.isMoving() {
-								motion = 5
-							}
-							info.animation.SetMotion(motion)
+							info.animation.SetMotion(worldCamera.motion())
 							for _, soundID := range info.animation.Update(elapsed) {
 								if debug {
 									log.Printf("world player sound event id=%d", soundID)
