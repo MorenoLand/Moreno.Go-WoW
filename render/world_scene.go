@@ -1118,7 +1118,7 @@ func buildWorldM2BatchedMesh(loader *ui.Loader, builder *worldM2MeshBuilder, tex
 	}
 	mat.SetUseLights(material.UseLightNone)
 	mat.SetDepthTest(builder.part.material.flags&0x08 == 0)
-	mat.SetDepthMask(builder.part.material.flags&0x10 == 0)
+	mat.SetDepthMask(builder.part.material.flags&0x10 != 0)
 	if m2MaterialBlending(builder.part.material.blend) == material.BlendNone {
 		mat.SetTransparent(false)
 		mat.SetBlending(material.BlendNone)
@@ -1220,7 +1220,7 @@ func buildWorldM2Instance(loader *ui.Loader, parts map[string]*m2Part, textures 
 		}
 		mat.SetUseLights(material.UseLightNone)
 		mat.SetDepthTest(part.material.flags&0x08 == 0)
-		mat.SetDepthMask(part.material.flags&0x10 == 0)
+		mat.SetDepthMask(part.material.flags&0x10 != 0)
 		if m2MaterialBlending(part.material.blend) == material.BlendNone {
 			mat.SetTransparent(false)
 			mat.SetBlending(material.BlendNone)

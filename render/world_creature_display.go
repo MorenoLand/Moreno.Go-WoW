@@ -187,7 +187,7 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 		}
 		mat.SetUseLights(material.UseLightNone)
 		mat.SetDepthTest(part.material.flags&0x08 == 0)
-		mat.SetDepthMask(part.material.flags&0x10 == 0)
+		mat.SetDepthMask(part.material.flags&0x10 != 0)
 		if m2MaterialBlending(part.material.blend) == material.BlendNone {
 			mat.SetTransparent(false)
 			mat.SetBlending(material.BlendNone)
