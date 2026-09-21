@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	commonmpq "github.com/MorenoLand/GScript.Go-Common/MPQ"
 )
 
 const (
@@ -48,6 +50,7 @@ type mpqBlockEntry struct {
 }
 
 type mpqArchive struct {
+	common       *commonmpq.MPQArchive
 	file         *os.File
 	path         string
 	headerOffset int64
@@ -63,7 +66,7 @@ type mpqHashKey struct {
 
 type mpqFileRef struct {
 	archive *mpqArchive
-	block   mpqBlockEntry
+	entry   commonmpq.MPQEntry
 }
 
 type mpqSet struct {
@@ -115,8 +118,14 @@ func openMPQSet(dataPath, locale string) (*mpqSet, error) {
 func (set *mpqSet) Close() error {
 	var first error
 	for _, archive := range set.archives {
-		if err := archive.file.Close(); err != nil && first == nil {
-			first = err
+		if archive.common != nil {
+			if err := archive.common.Close(); err != nil && first == nil {
+				first = err
+			}
+		} else if archive.file != nil {
+			if err := archive.file.Close(); err != nil && first == nil {
+				first = err
+			}
 		}
 	}
 	set.archives = nil
@@ -126,7 +135,7 @@ func (set *mpqSet) Close() error {
 func (set *mpqSet) ReadFile(name string) ([]byte, error) {
 	name = normalizeMPQPath(name)
 	if ref, ok := set.files[name]; ok {
-		return ref.archive.readBlock(name, ref.block)
+		return ref.archive.common.ReadEntry(ref.entry)
 	}
 	if _, ok := set.missing[name]; ok {
 		return nil, os.ErrNotExist
@@ -134,16 +143,16 @@ func (set *mpqSet) ReadFile(name string) ([]byte, error) {
 	var lastReadErr error
 	for index := len(set.archives) - 1; index >= 0; index-- {
 		archive := set.archives[index]
-		block, ok := archive.findBlock(name, set.locale)
+		entry, ok := archive.common.Find(name, set.locale)
 		if !ok {
 			continue
 		}
-		data, err := archive.readBlock(name, block)
+		data, err := archive.common.ReadEntry(entry)
 		if err != nil {
 			lastReadErr = err
 			continue
 		}
-		set.files[name] = mpqFileRef{archive: archive, block: block}
+		set.files[name] = mpqFileRef{archive: archive, entry: entry}
 		return data, nil
 	}
 	if path, ok := set.loose[name]; ok {
@@ -464,6 +473,11 @@ func mpqLocaleID(locale string) uint16 {
 }
 
 func openMPQArchive(path string) (*mpqArchive, error) {
+	shared, err := commonmpq.OpenMPQ(path)
+	if err != nil {
+		return nil, err
+	}
+	return &mpqArchive{common: shared, path: path}, nil
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err

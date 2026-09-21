@@ -8,6 +8,8 @@ import (
 	"image/color"
 	"image/draw"
 	"image/jpeg"
+
+	commonblp "github.com/MorenoLand/GScript.Go-Common/BLP"
 )
 
 // BLP2 texture decoding for interface assets. Format reference: the
@@ -28,51 +30,54 @@ const (
 
 // DecodeBLP decodes the first (largest) mip level of a BLP2 texture.
 func DecodeBLP(data []byte) (image.Image, error) {
-	if len(data) < 148 {
-		return nil, fmt.Errorf("blp: truncated header (%d bytes)", len(data))
-	}
-	if string(data[0:4]) != "BLP2" {
-		return nil, fmt.Errorf("blp: bad magic %q", data[0:4])
-	}
-	// data[4:8] is the format type. 1 is BLP2.
-	// data[8] is the encoding (1=Palette, 2=DXT, 3=ARGB8888)
-	// data[9] is the alpha depth (0, 1, 4, 8)
-	encoding := data[8]
-	alphaDepth := uint32(data[9])
-	alphaType := data[10]
-	width := int(binary.LittleEndian.Uint32(data[12:16]))
-	height := int(binary.LittleEndian.Uint32(data[16:20]))
-	if width <= 0 || height <= 0 || width > 4096 || height > 4096 {
-		return nil, fmt.Errorf("blp: bad dimensions %dx%d", width, height)
-	}
-
-	// Mip levels 0..15: offsets at 20..84, sizes at 84..148.
-	mipOffset := int(binary.LittleEndian.Uint32(data[20:24]))
-	mipSize := int(binary.LittleEndian.Uint32(data[84:88]))
-	if mipOffset == 0 || mipSize <= 0 || mipOffset+mipSize > len(data) {
-		return nil, fmt.Errorf("blp: mip 0 out of range (offset %d size %d, file %d)", mipOffset, mipSize, len(data))
-	}
-	mip := data[mipOffset : mipOffset+mipSize]
-
-	switch encoding {
-	case blpEncodingAlpha:
-		var palette [256]color.RGBA
-		if len(data) < blpHeaderSize {
-			return nil, fmt.Errorf("blp: palette out of range")
+	return commonblp.DecodeBLP(data)
+	/*
+		if len(data) < 148 {
+			return nil, fmt.Errorf("blp: truncated header (%d bytes)", len(data))
 		}
-		palData := data[148:blpHeaderSize]
-		for i := 0; i < 256; i++ {
-			palette[i] = color.RGBA{R: palData[i*4+2], G: palData[i*4+1], B: palData[i*4+0], A: 255}
+		if string(data[0:4]) != "BLP2" {
+			return nil, fmt.Errorf("blp: bad magic %q", data[0:4])
 		}
-		return decodeBLPPalette(mip, width, height, alphaDepth, palette)
-	case blpEncodingDXT:
-		return decodeBLPDXT(mip, width, height, alphaDepth, alphaType)
-	case blpEncodingUncomp:
-		return decodeBLPRaw(mip, width, height)
-	case blpEncodingJPEG:
-		return decodeBLPJPEG(data, mip, width, height)
-	}
-	return nil, fmt.Errorf("blp: unknown encoding %d", encoding)
+		// data[4:8] is the format type. 1 is BLP2.
+		// data[8] is the encoding (1=Palette, 2=DXT, 3=ARGB8888)
+		// data[9] is the alpha depth (0, 1, 4, 8)
+		encoding := data[8]
+		alphaDepth := uint32(data[9])
+		alphaType := data[10]
+		width := int(binary.LittleEndian.Uint32(data[12:16]))
+		height := int(binary.LittleEndian.Uint32(data[16:20]))
+		if width <= 0 || height <= 0 || width > 4096 || height > 4096 {
+			return nil, fmt.Errorf("blp: bad dimensions %dx%d", width, height)
+		}
+
+		// Mip levels 0..15: offsets at 20..84, sizes at 84..148.
+		mipOffset := int(binary.LittleEndian.Uint32(data[20:24]))
+		mipSize := int(binary.LittleEndian.Uint32(data[84:88]))
+		if mipOffset == 0 || mipSize <= 0 || mipOffset+mipSize > len(data) {
+			return nil, fmt.Errorf("blp: mip 0 out of range (offset %d size %d, file %d)", mipOffset, mipSize, len(data))
+		}
+		mip := data[mipOffset : mipOffset+mipSize]
+
+		switch encoding {
+		case blpEncodingAlpha:
+			var palette [256]color.RGBA
+			if len(data) < blpHeaderSize {
+				return nil, fmt.Errorf("blp: palette out of range")
+			}
+			palData := data[148:blpHeaderSize]
+			for i := 0; i < 256; i++ {
+				palette[i] = color.RGBA{R: palData[i*4+2], G: palData[i*4+1], B: palData[i*4+0], A: 255}
+			}
+			return decodeBLPPalette(mip, width, height, alphaDepth, palette)
+		case blpEncodingDXT:
+			return decodeBLPDXT(mip, width, height, alphaDepth, alphaType)
+		case blpEncodingUncomp:
+			return decodeBLPRaw(mip, width, height)
+		case blpEncodingJPEG:
+			return decodeBLPJPEG(data, mip, width, height)
+		}
+		return nil, fmt.Errorf("blp: unknown encoding %d", encoding)
+	*/
 }
 
 func decodeBLPPalette(mip []byte, width, height int, alphaDepth uint32, palette [256]color.RGBA) (image.Image, error) {

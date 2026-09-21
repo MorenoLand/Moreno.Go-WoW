@@ -1,3 +1,5 @@
+github.com/MorenoLand/GScript.Go-Common v0.0.0-20260921235020-4720a106e15d h1:9v2TlcPYAmZ3qWGzc4U+31oPDW0G8zo98+xmDCVBKFw=
+github.com/MorenoLand/GScript.Go-Common v0.0.0-20260921235020-4720a106e15d/go.mod h1:OHpZd3RHzj+VvYHclJ+x9tpyi/S0Eyaoy1IIVXz41cw=
 github.com/danieljoos/wincred v1.2.3 h1:v7dZC2x32Ut3nEfRH+vhoZGvN72+dQ/snVXo/vMFLdQ=
 github.com/danieljoos/wincred v1.2.3/go.mod h1:6qqX0WNrS4RzPZ1tnroDzq9kY3fu1KwE7MRLQK4X0bs=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
