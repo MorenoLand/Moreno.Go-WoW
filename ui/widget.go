@@ -1030,7 +1030,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"SetPlayerTextureHeight": func(L *lua.LState, w *widget) int { return 0 },
-		"SetPlayerTextureWidth": func(L *lua.LState, w *widget) int { return 0 },
+		"SetPlayerTextureWidth":  func(L *lua.LState, w *widget) int { return 0 },
 		"SetOrientation": func(L *lua.LState, w *widget) int {
 			w.orientation = L.CheckString(2)
 			return 0
@@ -1312,8 +1312,18 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		"GetAttribute": func(L *lua.LState, w *widget) int {
 			if w.fields == nil {
 				L.Push(lua.LNil)
-			} else {
+			} else if L.Get(3) == lua.LNil {
 				L.Push(w.fields.RawGet(L.Get(2)))
+			} else {
+				prefix, name, suffix := L.OptString(2, ""), L.CheckString(3), L.OptString(4, "")
+				value := lua.LValue(lua.LNil)
+				for _, key := range []string{prefix + name + suffix, "*" + name + suffix, prefix + name + "*", "*" + name + "*", name} {
+					value = w.fields.RawGetString(key)
+					if value != lua.LNil {
+						break
+					}
+				}
+				L.Push(value)
 			}
 			return 1
 		},

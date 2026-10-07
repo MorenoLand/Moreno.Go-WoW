@@ -24,6 +24,7 @@ type Connection struct {
 	writeMu   sync.Mutex
 	streamMu  sync.Mutex
 	stream    chan PacketEvent
+	pending   []Packet
 }
 
 func Open(address, account string, realmID uint8, sessionKey [auth.SessionKeyLen]byte, timeout time.Duration) (*Connection, error) {
@@ -142,6 +143,10 @@ func (c *Connection) StartPackets() <-chan PacketEvent {
 	c.stream = stream
 	go func() {
 		defer close(stream)
+		for _, packet := range c.pending {
+			stream <- PacketEvent{Packet: packet}
+		}
+		c.pending = nil
 		for {
 			packet, err := c.receive()
 			if err != nil {
@@ -169,6 +174,9 @@ func (c *Connection) expect(opcode uint16) (Packet, error) {
 		}
 		if err := c.housekeep(packet); err != nil {
 			return Packet{}, err
+		}
+		if opcode == LoginVerifyWorld && packet.Opcode != TimeSyncRequest {
+			c.pending = append(c.pending, packet)
 		}
 	}
 	return Packet{}, fmt.Errorf("gave up waiting for opcode %#04x", opcode)

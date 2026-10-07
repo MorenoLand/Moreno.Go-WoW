@@ -40,6 +40,9 @@ type worldEntryResult struct {
 	position  world.WorldPosition
 	character world.Character
 	err       error
+	spells    map[uint32]ui.SpellInfo
+	skills    map[uint32]ui.SpellSkillLine
+	spellErr  error
 }
 
 type sceneLoadResult struct {
@@ -51,16 +54,20 @@ type sceneLoadResult struct {
 }
 
 type clientHost struct {
-	width        float64
-	height       float64
-	startLogin   func(string, string)
-	enterWorld   func(int)
-	sendChat     func(string, string, string, string) error
-	logout       func()
-	quit         func()
-	audio        *audioManager
-	saveAudio    func(string, string)
-	loginRunning bool
+	width         float64
+	height        float64
+	startLogin    func(string, string)
+	enterWorld    func(int)
+	sendChat      func(string, string, string, string) error
+	castSpell     func(uint32, uint64) error
+	cancelCast    func(uint32) error
+	cancelChannel func(uint32) error
+	setAction     func(int, world.ActionButton) error
+	logout        func()
+	quit          func()
+	audio         *audioManager
+	saveAudio     func(string, string)
+	loginRunning  bool
 }
 
 func (h *clientHost) ScreenSize() (float64, float64) { return h.width, h.height }
@@ -142,6 +149,33 @@ func (h *clientHost) Logout() {
 	}
 }
 
+func (h *clientHost) SetActionButton(slot int, action world.ActionButton) error {
+	if h.setAction == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return h.setAction(slot, action)
+}
+
+func (h *clientHost) CastSpell(id uint32, target uint64) error {
+	if h.castSpell == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return h.castSpell(id, target)
+}
+func (h *clientHost) CancelChannel(id uint32) error {
+	if h.cancelChannel == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return h.cancelChannel(id)
+}
+
+func (h *clientHost) CancelCast(id uint32) error {
+	if h.cancelCast == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return h.cancelCast(id)
+}
+
 func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, lastCharacter, configPath string, savedOptions config.Options, debug, rememberMe bool) {
 	if err := window.Init(960, 640, "MorenoWoW"); err != nil {
 		log.Printf("window: %v", err)
@@ -179,6 +213,30 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var activeSession *network.Session
 	var worldPackets <-chan world.PacketEvent
 	worldLoading := false
+	host.cancelChannel = func(id uint32) error {
+		if activeSession == nil {
+			return fmt.Errorf("world session is closed")
+		}
+		return activeSession.CancelChannel(id)
+	}
+	host.setAction = func(slot int, action world.ActionButton) error {
+		if activeSession == nil {
+			return fmt.Errorf("world session is closed")
+		}
+		return activeSession.SetActionButton(slot, action)
+	}
+	host.castSpell = func(id uint32, target uint64) error {
+		if activeSession == nil {
+			return fmt.Errorf("world session is closed")
+		}
+		return activeSession.CastSpell(id, target)
+	}
+	host.cancelCast = func(id uint32) error {
+		if activeSession == nil {
+			return fmt.Errorf("world session is closed")
+		}
+		return activeSession.CancelCast(id)
+	}
 	host.sendChat = func(message, chatType, language, target string) error {
 		if activeSession == nil {
 			return fmt.Errorf("world session is closed")
@@ -202,9 +260,14 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			mapID := character.Map
 			uiEngine.SetLoadingScreen(worldLoadingScreenPath(uiEngine.AssetLoader, mapID), 0)
 		}
+		loader := uiEngine.AssetLoader
 		go func() {
 			position, err := session.EnterWorld(index)
-			worldResults <- worldEntryResult{position: position, character: character, err: err}
+			result := worldEntryResult{position: position, character: character, err: err}
+			if err == nil {
+				result.spells, result.skills, result.spellErr = readWorldSpellCatalog(loader)
+			}
+			worldResults <- result
 		}()
 	}
 	host.startLogin = func(account, password string) {
@@ -428,7 +491,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			model: modelStats, sceneParts: parts, assetCache: len(uiEngine.Cache), mpqArchives: assetStats.Archives,
 			mpqCachedFiles: assetStats.CachedFiles, mpqMissingFiles: assetStats.MissingFiles, audio: host.audio != nil,
 			cursor: wowCursor != nil, modelError: debugModelError, terminalDebug: debug,
-		rendererMats: renderStats.GraphicMats, rendererPanels: renderStats.Panels, rendererOthers: renderStats.Others, worldParts: worldParts,
+			rendererMats: renderStats.GraphicMats, rendererPanels: renderStats.Panels, rendererOthers: renderStats.Others, worldParts: worldParts,
 		}))
 	}
 
@@ -887,6 +950,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					break
 				}
 				worldCharacter = entry.character
+				uiEngine.Rt.ResetGameplay()
+				if entry.spellErr != nil {
+					log.Printf("world spell catalog: %v", entry.spellErr)
+				} else {
+					uiEngine.Rt.SetSpellCatalog(entry.spells, entry.skills)
+				}
 				seedWorldUnits(uiEngine.Rt, worldCharacter)
 				loadingPath := worldLoadingScreenPath(uiEngine.AssetLoader, entry.position.Map)
 				uiEngine.SetLoadingScreen(loadingPath, 0)
@@ -1029,6 +1098,14 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					worldPackets = nil
 					break
 				}
+				if handled, err := applyWorldSpellPacket(uiEngine.Rt, event.Packet, worldCharacter.GUID); handled {
+					if err != nil {
+						log.Printf("world spell packet: %v", err)
+					} else {
+						refresh()
+					}
+					break
+				}
 				switch event.Packet.Opcode {
 				case world.AuraUpdate, world.AuraUpdateAll:
 					all := event.Packet.Opcode == world.AuraUpdateAll
@@ -1082,6 +1159,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						break
 					}
 					models, modelErrors := applyWorldUpdateBlocks(scene, uiEngine.AssetLoader, &worldCreatureCache, worldEntities, blocks, worldCharacter.GUID, worldFloor)
+					if player := worldEntities[worldCharacter.GUID]; player != nil {
+						if uiEngine.Rt.ApplyUnitFields("player", player.fields) {
+							refresh()
+						}
+					}
 					if debug {
 						log.Printf("world update: blocks=%d entities=%d models=%d errors=%d", len(blocks), len(worldEntities), models, len(modelErrors))
 						for _, modelErr := range modelErrors {
@@ -1211,7 +1293,7 @@ func seedWorldUnits(rt *ui.Runtime, character world.Character) {
 	if character.Gender == 1 {
 		sex = 3
 	}
-	rt.SetUnit("player", ui.UnitInfo{Exists: true, Name: character.Name, Level: int(character.Level), RaceID: int(character.Race), RaceFile: raceModelName(character.Race), RaceName: raceName(character.Race), ClassID: int(character.Class), ClassFile: className(character.Class), ClassName: className(character.Class), Sex: sex, Health: 1, HealthMax: 1, Power: 1, PowerMax: 1, PowerToken: "MANA", Connected: true, Player: true, Visible: true})
+	rt.SetUnit("player", ui.UnitInfo{GUID: character.GUID, Exists: true, Name: character.Name, Level: int(character.Level), RaceID: int(character.Race), RaceFile: raceModelName(character.Race), RaceName: raceName(character.Race), ClassID: int(character.Class), ClassFile: className(character.Class), ClassName: className(character.Class), Sex: sex, Health: 1, HealthMax: 1, Power: 1, PowerMax: 1, PowerToken: "MANA", Connected: true, Player: true, Visible: true})
 	if character.PetDisplayID != 0 {
 		rt.SetUnit("pet", ui.UnitInfo{Exists: true, Name: "", Level: int(character.PetLevel), Health: 1, HealthMax: 1, Power: 1, PowerMax: 1, PowerToken: "MANA", Connected: true, Visible: true})
 	} else {

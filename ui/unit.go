@@ -13,6 +13,7 @@ import (
 // Interface\CharacterFrame\TemporaryPortrait-%s-%s with Sex then RaceFile
 // (listfile: TemporaryPortrait-Male-Human.blp).
 type UnitInfo struct {
+	GUID       uint64
 	Exists     bool
 	Name       string
 	Server     string
@@ -76,6 +77,50 @@ func (rt *Runtime) ClearUnit(unit string) {
 		return
 	}
 	delete(rt.units, strings.ToLower(strings.TrimSpace(unit)))
+}
+
+func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
+	info := rt.unitInfo(unit)
+	if info == nil {
+		return false
+	}
+	old := *info
+	if value, ok := fields[0x17]; ok {
+		info.PowerType = int(value >> 24)
+		tokens := []string{"MANA", "RAGE", "FOCUS", "ENERGY", "HAPPINESS", "RUNES", "RUNIC_POWER"}
+		if info.PowerType < len(tokens) {
+			info.PowerToken = tokens[info.PowerType]
+		}
+	}
+	if value, ok := fields[0x18]; ok {
+		info.Health = int(value)
+		info.Dead = value == 0
+	}
+	if value, ok := fields[0x20]; ok {
+		info.HealthMax = int(value)
+	}
+	if info.PowerType >= 0 && info.PowerType < 7 {
+		if value, ok := fields[uint16(0x19+info.PowerType)]; ok {
+			info.Power = int(value)
+		}
+		if value, ok := fields[uint16(0x21+info.PowerType)]; ok {
+			info.PowerMax = int(value)
+		}
+	}
+	if value, ok := fields[0x36]; ok {
+		info.Level = int(value)
+	}
+	changed := false
+	for _, entry := range []struct {
+		Event   string
+		Changed bool
+	}{{"UNIT_HEALTH", old.Health != info.Health}, {"UNIT_MAXHEALTH", old.HealthMax != info.HealthMax}, {"UNIT_DISPLAYPOWER", old.PowerType != info.PowerType}, {"UNIT_" + info.PowerToken, old.Power != info.Power}, {"UNIT_MAX" + info.PowerToken, old.PowerMax != info.PowerMax}, {"UNIT_LEVEL", old.Level != info.Level}} {
+		if entry.Changed {
+			changed = true
+			rt.FireEvent(entry.Event, lua.LString(unit))
+		}
+	}
+	return changed
 }
 
 func (rt *Runtime) SetUnitAuras(unit string, auras []AuraInfo) {

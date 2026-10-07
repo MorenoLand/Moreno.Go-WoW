@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	lua "github.com/yuin/gopher-lua"
 )
@@ -19,7 +20,9 @@ func (e ScriptError) Error() string { return e.Source + ": " + e.Message }
 // Runtime owns the Lua state, widget registry, virtual template registry,
 // cvar store, and glue event dispatch for one interface session.
 type Runtime struct {
-	L *lua.LState
+	L        *lua.LState
+	started  time.Time
+	gameplay gameplayState
 
 	widgets           map[string]*widget
 	virtuals          map[string]*xmlNode
@@ -147,6 +150,7 @@ type Font struct {
 func NewRuntime(host Host) *Runtime {
 	rt := &Runtime{
 		L:                 lua.NewState(lua.Options{SkipOpenLibs: false}),
+		started:           time.Now(),
 		widgets:           make(map[string]*widget),
 		virtuals:          make(map[string]*xmlNode),
 		fonts:             make(map[string]*Font),
@@ -164,6 +168,7 @@ func NewRuntime(host Host) *Runtime {
 	registerWidgetMethods(rt.L, rt)
 	registerGlueAPI(rt)
 	registerUnitAPI(rt)
+	registerGameplayAPI(rt)
 	registerStringHelpers(rt.L)
 	return rt
 }
