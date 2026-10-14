@@ -72,6 +72,20 @@ func (rt *Runtime) SetUnit(unit string, info UnitInfo) {
 	}
 }
 
+// SetTarget replaces the "target" unit and fires PLAYER_TARGET_CHANGED; a nil
+// info clears it.
+func (rt *Runtime) SetTarget(info *UnitInfo) {
+	if rt == nil {
+		return
+	}
+	if info == nil {
+		rt.ClearUnit("target")
+	} else {
+		rt.SetUnit("target", *info)
+	}
+	rt.FireEvent("PLAYER_TARGET_CHANGED")
+}
+
 func (rt *Runtime) ClearUnit(unit string) {
 	if rt == nil || rt.units == nil {
 		return
@@ -135,6 +149,14 @@ func (rt *Runtime) SetUnitAuras(unit string, auras []AuraInfo) {
 	if rt.widgets["BuffFrame"] != nil {
 		rt.FireEvent("UNIT_AURA", lua.LString(strings.ToLower(strings.TrimSpace(unit))))
 	}
+}
+
+// UnitGUID returns the GUID stored for a unit token, or zero.
+func (rt *Runtime) UnitGUID(unit string) uint64 {
+	if info := rt.unitInfo(unit); info != nil && info.Exists {
+		return info.GUID
+	}
+	return 0
 }
 
 func (rt *Runtime) unitInfo(unit string) *UnitInfo {
@@ -523,7 +545,12 @@ func registerUnitAPI(rt *Runtime) {
 	reg("UnitIsUnit", func(L *lua.LState) int {
 		a := strings.ToLower(L.OptString(1, ""))
 		b := strings.ToLower(L.OptString(2, ""))
-		L.Push(lua.LBool(a != "" && a == b))
+		same := a != "" && a == b
+		if !same {
+			ga, gb := rt.UnitGUID(a), rt.UnitGUID(b)
+			same = ga != 0 && ga == gb
+		}
+		L.Push(lua.LBool(same))
 		return 1
 	})
 	reg("UnitIsDead", func(L *lua.LState) int {

@@ -62,6 +62,7 @@ const (
 
 const (
 	ObjectScaleField         uint16 = 0x04
+	UnitTargetField          uint16 = 0x12
 	UnitBytes0Field          uint16 = 0x17
 	UnitDisplayIDField       uint16 = 0x43
 	UnitNativeDisplayIDField uint16 = 0x44

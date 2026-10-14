@@ -772,7 +772,6 @@ func registerGlueAPI(rt *Runtime) {
 	reg("SetUIVisibility", func(L *lua.LState) int { return 0 })
 	reg("SpellStopCasting", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
 	reg("SpellStopTargeting", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
-	reg("ClearTarget", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
 	reg("UnitIsDead", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
 	reg("UnitIsCharmed", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
 	reg("Screenshot", func(L *lua.LState) int {

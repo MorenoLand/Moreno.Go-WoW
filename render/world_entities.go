@@ -345,6 +345,36 @@ func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureT
 	return nil
 }
 
+// syncWorldTarget derives the "target" unit from the player's replicated
+// UNIT_FIELD_TARGET (two uint32 halves) and refreshes its vitals. Name and
+// race/class data need query responses and are not populated here.
+func syncWorldTarget(rt *ui.Runtime, entities map[uint64]*worldEntity, player *worldEntity) bool {
+	if rt == nil || player == nil {
+		return false
+	}
+	guid := uint64(player.fields[world.UnitTargetField]) | uint64(player.fields[world.UnitTargetField+1])<<32
+	entity := entities[guid]
+	current := rt.UnitGUID("target")
+	if guid == 0 || entity == nil {
+		if current != 0 {
+			rt.SetTarget(nil)
+			return true
+		}
+		return false
+	}
+	changed := false
+	if current != guid {
+		info := ui.UnitInfo{GUID: guid, Exists: true, Connected: true, Visible: true,
+			Player: entity.objectType == world.ObjectTypePlayer, PowerToken: "MANA"}
+		rt.SetTarget(&info)
+		changed = true
+	}
+	if rt.ApplyUnitFields("target", entity.fields) {
+		changed = true
+	}
+	return changed
+}
+
 func applyWorldUpdateBlocks(scene *core.Node, loader *ui.Loader, tables *worldCreatureTables, entities map[uint64]*worldEntity, blocks []world.UpdateBlock, ownGUID uint64, floor func(float32, float32, float32) (float32, bool)) (int, []error) {
 	created := 0
 	errors := make([]error, 0)

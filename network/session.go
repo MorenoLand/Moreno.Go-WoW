@@ -145,6 +145,12 @@ func (s *Session) CastSpell(id uint32, target uint64) error {
 	}
 	return s.connection.CastSpell(id, target)
 }
+func (s *Session) SetSelection(guid uint64) error {
+	if s == nil || s.connection == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return s.connection.SetSelection(guid)
+}
 func (s *Session) CancelChannel(id uint32) error {
 	if s == nil || s.connection == nil {
 		return fmt.Errorf("world session is closed")

@@ -20,6 +20,7 @@ const (
 	CancelCastOpcode      ClientOpcode = 0x012F
 	SetActionButtonOpcode ClientOpcode = 0x0128
 	CancelChannelOpcode   ClientOpcode = 0x013B
+	SetSelectionOpcode    ClientOpcode = 0x013D
 )
 
 type KnownSpell struct {
@@ -219,6 +220,16 @@ func (c *Connection) SetActionButton(slot int, action ActionButton) error {
 	body[0] = byte(slot)
 	binary.LittleEndian.PutUint32(body[1:], action.ID|uint32(action.Type)<<24)
 	return c.send(SetActionButtonOpcode, body)
+}
+
+// SetSelection sends CMSG_SET_SELECTION: a bare unpacked GUID (zero clears).
+func (c *Connection) SetSelection(guid uint64) error {
+	if c == nil || c.conn == nil {
+		return fmt.Errorf("world connection is closed")
+	}
+	body := make([]byte, 8)
+	binary.LittleEndian.PutUint64(body, guid)
+	return c.send(SetSelectionOpcode, body)
 }
 
 func (c *Connection) CancelChannel(id uint32) error {

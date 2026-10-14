@@ -47,6 +47,12 @@ type WorldActionHost interface {
 	SetActionButton(slot int, action world.ActionButton) error
 }
 
+// WorldTargetHost sends CMSG_SET_SELECTION; the authoritative "target" unit is
+// derived from the server's replicated UNIT_FIELD_TARGET, not set locally.
+type WorldTargetHost interface {
+	SetSelection(guid uint64) error
+}
+
 type activeSpellCast struct {
 	ID         uint32
 	Count      uint8
@@ -283,9 +289,29 @@ func (rt *Runtime) cast(id uint32, unit string) error {
 	}
 	return host.CastSpell(id, target)
 }
+
+// selectUnit asks the server to select the unit behind a Lua unit token.
+func (rt *Runtime) selectUnit(unit string) bool {
+	host, ok := rt.Host.(WorldTargetHost)
+	if !ok {
+		return false
+	}
+	guid := uint64(0)
+	if unit != "" {
+		info := rt.unitInfo(unit)
+		if info == nil || !info.Exists || info.GUID == 0 {
+			return false
+		}
+		guid = info.GUID
+	}
+	return host.SetSelection(guid) == nil
+}
+
 func registerGameplayAPI(rt *Runtime) {
 	L := rt.L
 	reg := func(name string, fn lua.LGFunction) { L.SetGlobal(name, L.NewFunction(fn)) }
+	reg("TargetUnit", func(L *lua.LState) int { rt.selectUnit(L.OptString(1, "")); return 0 })
+	reg("ClearTarget", func(L *lua.LState) int { L.Push(lua.LBool(rt.selectUnit(""))); return 1 })
 	reg("SpellIsTargeting", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("SpellCanTargetItem", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("GetSpellAutocast", func(L *lua.LState) int { L.Push(lua.LFalse); L.Push(lua.LFalse); return 2 })

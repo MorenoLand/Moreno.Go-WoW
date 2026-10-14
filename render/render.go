@@ -61,6 +61,7 @@ type clientHost struct {
 	sendChat      func(string, string, string, string) error
 	castSpell     func(uint32, uint64) error
 	cancelCast    func(uint32) error
+	setSelection  func(uint64) error
 	cancelChannel func(uint32) error
 	setAction     func(int, world.ActionButton) error
 	logout        func()
@@ -162,6 +163,12 @@ func (h *clientHost) CastSpell(id uint32, target uint64) error {
 	}
 	return h.castSpell(id, target)
 }
+func (h *clientHost) SetSelection(guid uint64) error {
+	if h.setSelection == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return h.setSelection(guid)
+}
 func (h *clientHost) CancelChannel(id uint32) error {
 	if h.cancelChannel == nil {
 		return fmt.Errorf("world session is closed")
@@ -230,6 +237,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			return fmt.Errorf("world session is closed")
 		}
 		return activeSession.CastSpell(id, target)
+	}
+	host.setSelection = func(guid uint64) error {
+		if activeSession == nil {
+			return fmt.Errorf("world session is closed")
+		}
+		return activeSession.SetSelection(guid)
 	}
 	host.cancelCast = func(id uint32) error {
 		if activeSession == nil {
@@ -1161,6 +1174,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					models, modelErrors := applyWorldUpdateBlocks(scene, uiEngine.AssetLoader, &worldCreatureCache, worldEntities, blocks, worldCharacter.GUID, worldFloor)
 					if player := worldEntities[worldCharacter.GUID]; player != nil {
 						if uiEngine.Rt.ApplyUnitFields("player", player.fields) {
+							refresh()
+						}
+						if syncWorldTarget(uiEngine.Rt, worldEntities, player) {
 							refresh()
 						}
 					}
