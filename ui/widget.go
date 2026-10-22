@@ -1722,7 +1722,17 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 						L.RaiseError("go panic in method %s on %s(%q): %v", name, w.objectType(), w.name, r)
 					}
 				}()
-				return fn(L, w)
+				if isReadOnlyMethodName(name) || w.kind == kindModel || w.kind == kindModelFFX {
+					// Reads change nothing, and model frames are drawn in 3D
+					// from their own state, not by a software repaint.
+					return fn(L, w)
+				}
+				before := w.visual()
+				results := fn(L, w)
+				if w.visual() != before {
+					rt.scriptDirty = true
+				}
+				return results
 			}))
 			return 1
 		}

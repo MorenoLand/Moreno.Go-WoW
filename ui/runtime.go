@@ -20,6 +20,11 @@ func (e ScriptError) Error() string { return e.Source + ": " + e.Message }
 // Runtime owns the Lua state, widget registry, virtual template registry,
 // cvar store, and glue event dispatch for one interface session.
 type Runtime struct {
+	// scriptDirty is set when a script changed something a software UI repaint
+	// would show (a widget's alpha, visibility, size, text, texture, colour,
+	// anchors or value). UIEngine.Update reports it so animations driven by
+	// OnUpdate scripts are repainted without every setter forcing one.
+	scriptDirty bool
 	L        *lua.LState
 	started  time.Time
 	gameplay gameplayState

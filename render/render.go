@@ -460,6 +460,13 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}()
 			return true
 		}
+		// The login script builds its scene over its first few updates, and the
+		// first full UI render below blocks for most of a second. Running those
+		// ticks now (script time barely moves) lets the scene's models load
+		// alongside that render instead of after it.
+		for tick := 0; tick < 4; tick++ {
+			eng.Update(0.001)
+		}
 		setSceneModel()
 		initialUI := eng.Render(960, 640)
 		uiMapTex = texture.NewTexture2DFromRGBA(image.NewRGBA(image.Rect(0, 0, 1, 1)))
@@ -896,6 +903,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				}
 			}
 			updateElapsed := elapsed
+			introHolding := false
 			if introGate && !worldMode {
 				if sceneModel != nil && !sceneLoadPending {
 					introFramesDrawn++
@@ -904,10 +912,14 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					// Opens after the scene has been drawn a few times, or after
 					// a while if it never loads, so the fade can never hang.
 					introGate = false
+					if debug {
+						log.Printf("intro: scene drawn %d frames, login fade starts %.2fs after launch", introFramesDrawn, time.Since(introStarted).Seconds())
+					}
 				} else if sceneModel != nil || sceneLoadPending || len(uiEngine.VisibleGlueSceneModels()) > 0 {
 					// Frames still count (the script's timers step per update),
 					// but script time barely advances until the scene is up.
 					updateElapsed = math.Min(elapsed, 0.001)
+					introHolding = true
 				} else if elapsed > 0.05 {
 					updateElapsed = 0.05
 				}
@@ -922,7 +934,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				sceneCharacterModel.SetRotation(0, sceneCharacterFacing*math.Pi/180, 0)
 			}
 			lastUpdate = now
-			if movieChanged || sceneChanged {
+			if (movieChanged && !introHolding) || sceneChanged {
 				refresh()
 			} else if minimapChanged {
 				refreshMinimapOnly()

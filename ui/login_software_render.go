@@ -245,6 +245,7 @@ func (eng *UIEngine) Update(elapsed float64) bool {
 		return false
 	}
 	statusChanged := false
+	eng.Rt.scriptDirty = false
 	if eng.statusTTL > 0 {
 		eng.statusTTL -= elapsed
 		if eng.statusTTL <= 0 {
@@ -279,7 +280,7 @@ func (eng *UIEngine) Update(elapsed float64) bool {
 			update(child)
 		}
 	}
-	return statusChanged || eng.updateMovie(elapsed)
+	return statusChanged || eng.Rt.scriptDirty || eng.updateMovie(elapsed)
 }
 
 func (eng *UIEngine) drawMovieFrame(canvas *image.RGBA, dst image.Rectangle, frame image.Image) {
@@ -1169,13 +1170,12 @@ func (eng *UIEngine) layoutRect(w *widget, parent Rect) Rect {
 	return rect
 }
 
+// glueParentRect is the glue root's rectangle. The original's GlueParent_OnLoad
+// anchors it at 16:9 inside a wider screen, leaving bars; this client lets it
+// span the whole screen (and GlueParent:GetSize() says so), so the login scene,
+// its fade-in cover and the controls all stretch to fit the window.
 func (eng *UIEngine) glueParentRect() Rect {
-	if eng.screen.H() <= 0 || eng.screen.W()/eng.screen.H() <= 16.0/9.0 {
-		return eng.screen
-	}
-	width := eng.screen.H() * 16.0 / 9.0
-	margin := (eng.screen.W() - width) / 2
-	return Rect{X0: margin, Y0: 0, X1: eng.screen.W() - margin, Y1: eng.screen.H()}
+	return eng.screen
 }
 
 func (eng *UIEngine) paintButtonState(w *widget, rect Rect, paint func(*widget, Rect)) {
