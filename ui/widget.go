@@ -505,6 +505,9 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			width := w.width
 			if width <= 0 && (w.name == "GlueParent" || w.name == "UIParent") && rt.Host != nil {
 				width, _ = rt.Host.ScreenSize()
+				if w.name == "GlueParent" {
+					width, _ = rt.glueParentSize()
+				}
 			}
 			L.Push(lua.LNumber(width))
 			return 1
@@ -516,6 +519,9 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			height := w.height
 			if height <= 0 && (w.name == "GlueParent" || w.name == "UIParent") && rt.Host != nil {
 				_, height = rt.Host.ScreenSize()
+				if w.name == "GlueParent" {
+					_, height = rt.glueParentSize()
+				}
 			}
 			L.Push(lua.LNumber(height))
 			return 1
@@ -524,6 +530,9 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			width, height := w.width, w.height
 			if (width <= 0 || height <= 0) && (w.name == "GlueParent" || w.name == "UIParent") && rt.Host != nil {
 				hostWidth, hostHeight := rt.Host.ScreenSize()
+				if w.name == "GlueParent" {
+					hostWidth, hostHeight = rt.glueParentSize()
+				}
 				if width <= 0 {
 					width = hostWidth
 				}
@@ -1572,6 +1581,40 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.modelPosition[0] = float64(L.CheckNumber(2))
 			w.modelPosition[1] = float64(L.CheckNumber(3))
 			w.modelPosition[2] = float64(L.CheckNumber(4))
+			return 0
+		},
+		// Model frame getters, as in Wow.exe's Model method table: GetPosition
+		// (FUN_00960fc0) returns the three values given to SetPosition,
+		// GetFacing (FUN_00961040) and GetModelScale (FUN_00961090) one float
+		// each, GetModel (FUN_009605d0) the loaded model's name, and
+		// ClearModel (FUN_00960620) unloads it.
+		"GetPosition": func(L *lua.LState, w *widget) int {
+			L.Push(lua.LNumber(w.modelPosition[0]))
+			L.Push(lua.LNumber(w.modelPosition[1]))
+			L.Push(lua.LNumber(w.modelPosition[2]))
+			return 3
+		},
+		"GetFacing": func(L *lua.LState, w *widget) int {
+			L.Push(lua.LNumber(w.modelFacing))
+			return 1
+		},
+		"GetModelScale": func(L *lua.LState, w *widget) int {
+			scale := w.modelScale
+			if scale == 0 {
+				scale = 1 // the frame's default, set by its constructor
+			}
+			L.Push(lua.LNumber(scale))
+			return 1
+		},
+		"GetModel": func(L *lua.LState, w *widget) int {
+			if w.modelFile == "" {
+				return 0
+			}
+			L.Push(lua.LString(w.modelFile))
+			return 1
+		},
+		"ClearModel": func(L *lua.LState, w *widget) int {
+			w.modelFile = ""
 			return 0
 		},
 		"AdvanceTime": func(L *lua.LState, w *widget) int { return 0 },

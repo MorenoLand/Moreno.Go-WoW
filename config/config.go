@@ -23,6 +23,22 @@ type Options struct {
 	BackgroundPath string       `json:"background_path"` // Path to a static background image (JPEG/PNG) to use as the login screen scene. Leave empty to use the gradient fallback.
 	RememberMe     bool         `json:"remember_me"`
 	Audio          AudioOptions `json:"audio"`
+	// WindowWidth and WindowHeight are the window size at the last exit, in
+	// pixels (0 = the default). The glue scripts size their scenes from the
+	// screen size when they load, as the original does from its saved
+	// resolution, so the client opens at the size it was last used at.
+	WindowWidth  int `json:"window_width,omitempty"`
+	WindowHeight int `json:"window_height,omitempty"`
+}
+
+// WindowSize is the size to open the window at: the saved one when it is
+// plausible, otherwise the default.
+func (options Options) WindowSize() (int, int) {
+	const defaultWidth, defaultHeight = 960, 640
+	if options.WindowWidth < 640 || options.WindowHeight < 480 || options.WindowWidth > 8192 || options.WindowHeight > 8192 {
+		return defaultWidth, defaultHeight
+	}
+	return options.WindowWidth, options.WindowHeight
 }
 
 type AudioOptions struct {

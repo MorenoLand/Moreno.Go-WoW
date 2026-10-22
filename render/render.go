@@ -184,7 +184,8 @@ func (h *clientHost) CancelCast(id uint32) error {
 }
 
 func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, lastCharacter, configPath string, savedOptions config.Options, debug, rememberMe bool) {
-	if err := window.Init(960, 640, "MorenoWoW"); err != nil {
+	startWidth, startHeight := savedOptions.WindowSize()
+	if err := window.Init(startWidth, startHeight, "MorenoWoW"); err != nil {
 		log.Printf("window: %v", err)
 		return
 	}
@@ -212,7 +213,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	cam := camera.New(1)
 	resetSceneCamera(cam)
 	scene.Add(cam)
-	host := &clientHost{width: 960, height: 640}
+	host := &clientHost{width: float64(startWidth), height: float64(startHeight)}
 	results := make(chan loginResult, 1)
 	worldResults := make(chan worldEntryResult, 1)
 	sceneResults := make(chan sceneLoadResult, 1)
@@ -303,6 +304,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 
 	var uiImage *gui.Image
 	var uiTex *texture.Texture2D
+	glueLayers := newGlueLayerStack(scene)
 	var uiMapImage *gui.Image
 	var uiMapTex *texture.Texture2D
 	var uiChatImage *gui.Image
@@ -318,8 +320,17 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	sceneModelKey := ""
 	sceneRequestKey := ""
 	sceneLoadPending := false
+	// The login script fades in from black ("to hide the setting up frame")
+	// over a second of script time. That time must not run while the 3D scene
+	// is still loading or has not been drawn yet, or the fade ends on a black
+	// frame and the scene pops in afterwards. introFramesDrawn counts frames the
+	// first scene has been on screen; the gate opens after a few.
+	introGate := true
+	introFramesDrawn := 0
+	introStarted := time.Now()
 	var sceneLoadMu sync.Mutex
 	sceneCameraDiagonalFOV := float32(0)
+	sceneCameraFrameFraction := float32(1)
 	debugModelLoadMS := float64(0)
 	debugUIRenderMS := float64(0)
 	debugModelError := ""
@@ -339,7 +350,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var glueCharacters []world.Character
 	var setSceneModel func() bool
 	if dataPath != "" {
-		eng, err = ui.LoadUIEngineFromMPQ(dataPath, clientConfig.Locale, backgroundPath)
+		// The scripts see the window's size while they load (GetScreenWidth /
+		// GlueParent:GetSize()), so load at the size the window really has.
+		loadWidth, loadHeight := win.GetSize()
+		eng, err = ui.LoadUIEngineFromMPQSized(dataPath, clientConfig.Locale, backgroundPath, float64(loadWidth), float64(loadHeight))
 	} else if root := resolveInterfaceRoot(dataPath, interfacePath); root != "" {
 		eng, err = ui.LoadUIEngine(filepath.Join(root, "GlueXML"), filepath.Join(root, "FrameXML"), filepath.Join(root, "Interface-tree"), backgroundPath)
 	}
@@ -383,7 +397,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 			path := uiEngine.CurrentModelPath()
 			sceneModels := append([]ui.GlueSceneModel(nil), uiEngine.VisibleGlueSceneModels()...)
-			sceneKey := uiEngine.VisibleGlueSceneKey()
+			sceneKey := ui.GlueSceneStructureKey(sceneModels)
 			characterKey := ""
 			var selectedCharacter world.Character
 			selectedIndex := uiEngine.SelectedCharacterIndex()
@@ -396,6 +410,13 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 			requestKey := fmt.Sprintf("%s\x00%s\x00%s", path, sceneKey, characterKey)
 			if requestKey == sceneRequestKey && (sceneModel != nil || sceneLoadPending || path == "" && len(sceneModels) == 0) {
+				if sceneModel != nil && !sceneLoadPending {
+					// Same structure: follow the script's per-frame changes in place.
+					if fraction, changed := applyGlueSceneState(sceneModel, sceneModels, cam.Aspect()); changed && fraction != sceneCameraFrameFraction {
+						sceneCameraFrameFraction = fraction
+						setSceneCameraFOV(cam, sceneCameraDiagonalFOV, fraction)
+					}
+				}
 				return false
 			}
 			if debug {
@@ -418,6 +439,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 			resetSceneCamera(cam)
 			sceneCameraDiagonalFOV = 0
+			sceneCameraFrameFraction = 1
 			sceneModelPath, sceneModelKey = path, sceneKey
 			sceneRequestKey = requestKey
 			debugModelError = ""
@@ -557,14 +579,28 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		}
 		uiStarted := time.Now()
 		var uiFrame *image.RGBA
+		layeredGlue := false
 		if worldMode {
+			glueLayers.hide()
+			uiImage.SetVisible(true)
 			if panelOnly {
 				uiFrame = uiEngine.RenderWorldDebugPanel(width, height)
 			} else {
 				uiFrame = uiEngine.RenderWorld(width, height)
 			}
 		} else {
-			uiFrame = uiEngine.Render(width, height)
+			back, planes := uiEngine.RenderLayers(width, height)
+			if back == nil && len(planes) == 1 && planes[0].Blend == ui.GlueBlendNormal {
+				uiFrame = planes[0].Image
+				glueLayers.hide()
+				uiImage.SetVisible(true)
+			} else {
+				// The UI stacking order puts something behind the scene models
+				// (e.g. the login scene's background) or blends over them.
+				layeredGlue = true
+				glueLayers.show(back, planes, width, height)
+				uiImage.SetVisible(false)
+			}
 			if uiMapImage != nil {
 				uiMapImage.SetVisible(false)
 			}
@@ -574,11 +610,13 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		}
 		// Reuse one GPU texture and upload pixels in place. Recreating a
 		// Texture2D every UI paint forced a full delete/alloc + material rebind.
-		if uiTex == nil {
-			uiTex = texture.NewTexture2DFromRGBA(uiFrame)
-			uiImage.SetTexture(uiTex)
-		} else {
-			uiTex.SetFromRGBA(uiFrame)
+		if !layeredGlue {
+			if uiTex == nil {
+				uiTex = texture.NewTexture2DFromRGBA(uiFrame)
+				uiImage.SetTexture(uiTex)
+			} else {
+				uiTex.SetFromRGBA(uiFrame)
+			}
 		}
 		debugUIRenderMS = time.Since(uiStarted).Seconds() * 1000
 		uiImage.SetSize(float32(width), float32(height))
@@ -649,7 +687,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 			delete(worldEntities, guid)
 		}
-		gl.ClearColor(.04, .06, .1, 1)
+		gl.ClearColor(0, 0, 0, 1) // the glue frame starts from opaque black (Wow.exe FUN_0040a270)
 		refresh()
 	}
 
@@ -663,7 +701,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				cam.SetNear(0.2)
 				cam.SetFar(6000)
 			} else {
-				setSceneCameraFOV(cam, sceneCameraDiagonalFOV)
+				setSceneCameraFOV(cam, sceneCameraDiagonalFOV, sceneCameraFrameFraction)
+				applyGlueSceneAspect(sceneModel, cam.Aspect())
 			}
 		}
 		refresh()
@@ -749,7 +788,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		})
 	}
 	onResize("", nil)
-	gl.ClearColor(.04, .06, .1, 1)
+	gl.ClearColor(0, 0, 0, 1) // the glue frame starts from opaque black (Wow.exe FUN_0040a270)
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
@@ -856,7 +895,24 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					worldSky.SetPositionVec(&cameraPosition)
 				}
 			}
-			movieChanged := uiEngine.Update(elapsed)
+			updateElapsed := elapsed
+			if introGate && !worldMode {
+				if sceneModel != nil && !sceneLoadPending {
+					introFramesDrawn++
+				}
+				if introFramesDrawn >= 3 || time.Since(introStarted) > 8*time.Second {
+					// Opens after the scene has been drawn a few times, or after
+					// a while if it never loads, so the fade can never hang.
+					introGate = false
+				} else if sceneModel != nil || sceneLoadPending || len(uiEngine.VisibleGlueSceneModels()) > 0 {
+					// Frames still count (the script's timers step per update),
+					// but script time barely advances until the scene is up.
+					updateElapsed = math.Min(elapsed, 0.001)
+				} else if elapsed > 0.05 {
+					updateElapsed = 0.05
+				}
+			}
+			movieChanged := uiEngine.Update(updateElapsed)
 			sceneChanged := false
 			if !worldMode && setSceneModel != nil {
 				sceneChanged = setSceneModel()
@@ -905,7 +961,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				sceneModel = loaded.model
 				scene.Add(sceneModel)
 				sceneCameraDiagonalFOV = loaded.fov
+				sceneCameraFrameFraction = glueSceneFrameFraction(sceneModel)
 				configureSceneCamera(cam, sceneModel)
+				applyGlueSceneAspect(sceneModel, cam.Aspect())
 				sceneCharacterFacing = loaded.characterFacing
 				if loaded.characterModel != nil {
 					sceneCharacterModel = loaded.characterModel
@@ -1096,6 +1154,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				uiEngine.SetWorldLoading(false)
 				sceneModelPath = ""
 				uiEngine.ClearLoadingScreen()
+				glueLayers.hide()
 				if uiImage != nil {
 					uiImage.SetVisible(true)
 				}
@@ -1235,11 +1294,27 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 		}
 		gl.Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
-		if renderErr := r.Render(scene, cam); renderErr != nil && debug {
-			log.Printf("render: %v", renderErr)
+		drawn := false
+		if !worldMode && sceneModel != nil {
+			frameWidth, frameHeight := win.GetSize()
+			var renderErr error
+			if drawn, renderErr = glueLayers.renderGlueScene(r, gl, scene, cam, sceneModel, sceneCameraDiagonalFOV, frameWidth, frameHeight); renderErr != nil && debug {
+				log.Printf("render: %v", renderErr)
+			}
+		}
+		if !drawn {
+			if renderErr := r.Render(scene, cam); renderErr != nil && debug {
+				log.Printf("render: %v", renderErr)
+			}
 		}
 		win.SwapBuffers()
 		win.PollEvents()
+	}
+	if width, height := win.GetSize(); width >= 640 && height >= 480 && (width != savedOptions.WindowWidth || height != savedOptions.WindowHeight) {
+		savedOptions.WindowWidth, savedOptions.WindowHeight = width, height
+		if saveErr := config.Save(configPath, savedOptions); saveErr != nil && debug {
+			log.Printf("saving window size: %v", saveErr)
+		}
 	}
 	if worldModel != nil {
 		scene.Remove(worldModel)
@@ -1391,7 +1466,7 @@ func configureSceneCamera(cam *camera.Camera, model *core.Node) {
 	}
 	cam.SetPositionVec(&info.position)
 	cam.LookAt(&info.target, math32.NewVector3(0, 1, 0))
-	setSceneCameraFOV(cam, info.fov)
+	setSceneCameraFOV(cam, info.fov, glueSceneFrameFraction(model))
 	if info.near > 0 {
 		cam.SetNear(info.near)
 	}
@@ -1411,9 +1486,18 @@ func configureWorldCamera(cam *camera.Camera, position world.WorldPosition) {
 	cam.LookAt(target, math32.NewVector3(0, 0, 1))
 }
 
-func setSceneCameraFOV(cam *camera.Camera, fov float32) {
+// setSceneCameraFOV sets the vertical FOV from the camera's diagonal FOV. The
+// original draws a Model frame's scene inside the frame rectangle, so when that
+// rectangle is shorter than the window (frameFraction < 1, e.g. the 16:9 login
+// scene in a 4:3 window) the window needs a proportionally larger vertical FOV
+// for the rectangle to keep the original framing.
+func setSceneCameraFOV(cam *camera.Camera, fov, frameFraction float32) {
 	if cam == nil || fov <= 0 || cam.Aspect() <= 0 {
 		return
 	}
-	cam.SetFov(math32.RadToDeg(fov / math32.Sqrt(cam.Aspect()*cam.Aspect()+1)))
+	vertical := fov / math32.Sqrt(cam.Aspect()*cam.Aspect()+1)
+	if frameFraction > 0 && frameFraction != 1 {
+		vertical = 2 * math32.Atan(math32.Tan(vertical/2)/frameFraction)
+	}
+	cam.SetFov(math32.RadToDeg(vertical))
 }

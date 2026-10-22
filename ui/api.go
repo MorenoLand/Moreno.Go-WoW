@@ -114,6 +114,29 @@ type CreatePreviewState struct {
 	Facing          float32
 }
 
+// glueScreenSize is the glue screen in UI units: 768 high, 768 * aspect wide.
+// The aspect is the window's (the original takes it from the gxResolution
+// setting when widescreen is on, and 4:3 otherwise).
+func (rt *Runtime) glueScreenSize() (float64, float64) {
+	width, height := 1024.0, 768.0
+	if rt != nil && rt.Host != nil {
+		if pixelWidth, pixelHeight := rt.Host.ScreenSize(); pixelWidth > 0 && pixelHeight > 0 {
+			width = 768 * pixelWidth / pixelHeight
+		}
+	}
+	return width, height
+}
+
+// glueParentSize is the glue root frame's size in UI units. The original's
+// GlueParent_OnLoad anchors the root inside the screen at 16:9 when the screen
+// is wider, which leaves bars either side of the scene. This client reports the
+// whole screen instead, so scenes sized from GlueParent (the login scene's 16:9
+// frame) scale up to cover a wide window and crop a little top and bottom,
+// rather than stopping short of it.
+func (rt *Runtime) glueParentSize() (float64, float64) {
+	return rt.glueScreenSize()
+}
+
 func registerGlueAPI(rt *Runtime) {
 	L := rt.L
 	for name, values := range map[string][3]float64{"TOOLTIP_DEFAULT_COLOR": {0.6, 0.6, 0.6}, "TOOLTIP_DEFAULT_BACKGROUND_COLOR": {0.1, 0.1, 0.1}} {
@@ -579,6 +602,12 @@ func registerGlueAPI(rt *Runtime) {
 	// Screen geometry.
 	screen := func() (float64, float64) {
 		if rt.Host != nil {
+			// Before the world UI exists (the glue screens) the original
+			// reports UI units: 768 high and 768 * aspect wide (Wow.exe
+			// FUN_004dcc20 / FUN_004dcc70), not the window's pixels.
+			if rt.widgets["UIParent"] == nil {
+				return rt.glueScreenSize()
+			}
 			return rt.Host.ScreenSize()
 		}
 		return 1280, 960
@@ -665,6 +694,26 @@ func registerGlueAPI(rt *Runtime) {
 			rt.Host.PlayMusic(L.CheckString(1))
 		}
 		return 0
+	})
+	// PlayMusic and StopMusic are the in-game music calls (the original plays
+	// the file, and stops whatever music is playing); scripts use them on the
+	// glue screens as well.
+	reg("PlayMusic", func(L *lua.LState) int {
+		if rt.Host != nil && !rt.suppressSound {
+			rt.Host.PlayMusic(L.CheckString(1))
+		}
+		return 0
+	})
+	reg("StopMusic", func(L *lua.LState) int {
+		if rt.Host != nil {
+			rt.Host.StopMusic()
+		}
+		return 0
+	})
+	// time() is the Unix time in seconds, as the client's Lua exposes it.
+	reg("time", func(L *lua.LState) int {
+		L.Push(lua.LNumber(time.Now().Unix()))
+		return 1
 	})
 	reg("StopGlueMusic", func(L *lua.LState) int {
 		if rt.Host != nil {

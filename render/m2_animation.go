@@ -22,6 +22,7 @@ type m2AnimatedMesh struct {
 }
 
 type m2Animation struct {
+	boneMatrices     []m2BoneMatrix
 	model            *parsedM2
 	skin             parsedSkin
 	meshes           []*m2AnimatedMesh
@@ -95,6 +96,19 @@ func (animation *m2Animation) SetSequence(index int) {
 	animation.idleBase = index
 	animation.variationEnabled = false
 	animation.playingVariation = false
+}
+
+// SetAnimationID plays the animation with the given animation id, which is
+// what a Model frame's SetSequence takes (ids from AnimationData, not an index
+// into the model's sequence list). An id the model has no animation for leaves
+// the current animation playing.
+func (animation *m2Animation) SetAnimationID(id int) {
+	if animation == nil || animation.model == nil || id < 0 || id > 0xffff {
+		return
+	}
+	if index := m2SequenceIndex(animation.model, uint16(id)); index >= 0 {
+		animation.SetSequence(index)
+	}
 }
 
 func defaultM2Sequence(model *parsedM2) int {
@@ -274,12 +288,13 @@ func (animation *m2Animation) Update(elapsed float64) []uint32 {
 		animation.model.bones[index].scale = bone.scale
 	}
 	updateM2AnimatedValues(animation.model, animation.sequence, uint32(animation.clock), uint32(animation.globalClock))
+	animation.boneMatrices = buildM2BoneMatrices(bones, animation.boneMatrices)
 	for _, animatedMesh := range animation.meshes {
 		if animatedMesh == nil || animatedMesh.part == nil || len(animatedMesh.part.vertexRefs) != len(animatedMesh.part.positions)/3 {
 			continue
 		}
 		for index, ref := range animatedMesh.part.vertexRefs {
-			posed := poseM2VertexWithBones(animation.model, animation.skin, ref.local, ref.vertex, ref.boneComboIndex, bones)
+			posed := poseM2VertexWithMatrices(ref.vertex, animation.boneMatrices)
 			position := modelVector(posed.position)
 			normal := modelVector(posed.normal)
 			animatedMesh.part.positions.Set(index*3, position[0], position[1], position[2])

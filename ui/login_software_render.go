@@ -50,6 +50,11 @@ type UIEngine struct {
 	layerPool        []*image.RGBA
 	layerDepth       int
 	paintCanvas      *image.RGBA
+	layered          bool
+	splitReached     bool
+	planes           []*glueLayerPlane
+	curPlane         *glueLayerPlane
+	planePool        []*image.RGBA
 	worldBaseCanvas  *image.RGBA
 	movieFile        string
 	movieImage       image.Image
@@ -132,7 +137,14 @@ func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, er
 }
 
 func LoadUIEngineFromMPQ(dataPath, locale, bgImagePath string) (*UIEngine, error) {
-	rt := NewRuntime(&hostScreen{w: 960, h: 640})
+	return LoadUIEngineFromMPQSized(dataPath, locale, bgImagePath, 960, 640)
+}
+
+// LoadUIEngineFromMPQSized loads the glue UI as if the window were
+// width x height pixels, which the scripts see through GetScreenWidth/Height
+// and GlueParent:GetSize() while they load.
+func LoadUIEngineFromMPQSized(dataPath, locale, bgImagePath string, width, height float64) (*UIEngine, error) {
+	rt := NewRuntime(&hostScreen{w: width, h: height})
 	l, err := NewMPQLoader(dataPath, locale, rt)
 	if err != nil {
 		rt.Close()
@@ -311,6 +323,7 @@ func (eng *UIEngine) loadBLP(path string) image.Image {
 		return nil
 	}
 	eng.Cache[path] = img
+	registerStaticTexture(img)
 	return img
 }
 
@@ -318,6 +331,35 @@ func (eng *UIEngine) Render(screenWidth, screenHeight int) *image.RGBA {
 	eng.worldActive = false
 	eng.worldRenderScale = 1
 	return eng.render(screenWidth, screenHeight, eng.Rt.widgets["GlueParent"], true)
+}
+
+// RenderLayers renders the glue UI split around its scene models. back holds
+// what the UI stacking order puts behind the 3D scene (for example the login
+// scene's background texture) and is nil when nothing is behind it; front goes
+// over the scene. Without any scene model front is the whole UI, as Render.
+func (eng *UIEngine) RenderLayers(screenWidth, screenHeight int) (back *image.RGBA, planes []GluePlane) {
+	eng.worldActive = false
+	eng.worldRenderScale = 1
+	eng.layered = true
+	defer func() { eng.layered = false }()
+	front := eng.render(screenWidth, screenHeight, eng.Rt.widgets["GlueParent"], true)
+	if !eng.splitReached {
+		return nil, []GluePlane{{Image: front, Blend: GlueBlendNormal}}
+	}
+	for _, plane := range eng.planes {
+		if plane.blend == GlueBlendAdd {
+			// Painted additively onto an empty canvas, so the colour channels
+			// already hold the contribution; a full alpha lets the GL additive
+			// blend apply it once.
+			for index := 3; index < len(plane.img.Pix); index += 4 {
+				plane.img.Pix[index] = 255
+			}
+		}
+		if !glueLayerPlaneEmpty(plane) {
+			planes = append(planes, GluePlane{Image: plane.img, Blend: plane.blend})
+		}
+	}
+	return eng.paintCanvas, planes
 }
 
 func (eng *UIEngine) RenderWorld(screenWidth, screenHeight int) *image.RGBA {
@@ -432,6 +474,12 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 		clear(eng.paintCanvas.Pix)
 	}
 	canvas := eng.paintCanvas
+	eng.splitReached = false
+	eng.curPlane = nil
+	for _, plane := range eng.planes {
+		eng.planePool = append(eng.planePool, plane.img)
+	}
+	eng.planes = eng.planes[:0]
 	if eng.rects == nil {
 		eng.rects = make(map[*widget]Rect)
 	} else {
@@ -683,6 +731,17 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 		if painting[w] {
 			return
 		}
+		if eng.layered {
+			// Scene models sit in the UI stacking order: what was painted before
+			// the first one belongs behind the 3D scene, the rest in front of it.
+			if !eng.splitReached && (w.kind == kindModel || w.kind == kindModelFFX) && w.modelFile != "" {
+				eng.splitReached = true
+				eng.curPlane = nil
+			}
+			if eng.splitReached && (target == eng.paintCanvas || eng.isPlaneImage(target)) {
+				target = eng.planeFor(frontBlend(w), target.Bounds()).img
+			}
+		}
 		painting[w] = true
 		defer delete(painting, w)
 		alpha := w.alpha
@@ -693,12 +752,65 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 		if alpha <= 0 {
 			return
 		}
+		// A model frame draws no 2D pixels, so there is nothing to fade; its
+		// rectangle is still laid out, because the 3D scene is drawn into it.
+		if (w.kind == kindModel || w.kind == kindModelFFX) && len(w.children) == 0 {
+			eng.layoutRect(w, parent)
+			return
+		}
+		// A texture only touches its own rectangle, so the fade and the
+		// composite stay inside it instead of walking the whole window.
+		region := target.Bounds()
+		if w.kind == kindTexture && len(w.children) == 0 && !legacyFullCanvasPaint {
+			scaled := screenScaledRect(eng.layoutRect(w, parent), uiScale)
+			region = ScreenRect(scaled, float64(target.Bounds().Dy())).Intersect(target.Bounds())
+			if region.Empty() {
+				return
+			}
+		}
 		layer := eng.acquireLayer(target.Bounds())
 		paintWidget(layer, w, parent)
-		for index := 3; index < len(layer.Pix); index += 4 {
-			layer.Pix[index] = uint8(float64(layer.Pix[index]) * alpha)
+		var fade [256]uint8
+		for value := range fade {
+			fade[value] = uint8(float64(value) * alpha)
 		}
-		draw.Draw(target, target.Bounds(), layer, layer.Bounds().Min, draw.Over)
+		additive := w.kind == kindTexture && (strings.EqualFold(w.blendMode, "ADD") || strings.EqualFold(w.alphaMode, "ADD"))
+		// The layer is premultiplied RGBA, so fading it scales every channel;
+		// scaling only alpha left the colour at full strength. A faded additive
+		// texture then adds its faded colour to what is there; it does not blend
+		// over it.
+		for y := region.Min.Y; y < region.Max.Y; y++ {
+			offset := layer.PixOffset(region.Min.X, y)
+			row := layer.Pix[offset : offset+region.Dx()*4]
+			var targetRow []byte
+			if additive {
+				targetRow = target.Pix[target.PixOffset(region.Min.X, y):][:region.Dx()*4]
+			}
+			for index := 0; index+3 < len(row); index += 4 {
+				if row[index+3] == 0 {
+					continue
+				}
+				row[index] = fade[row[index]]
+				row[index+1] = fade[row[index+1]]
+				row[index+2] = fade[row[index+2]]
+				row[index+3] = fade[row[index+3]]
+				if additive {
+					for channel := 0; channel < 3; channel++ {
+						sum := int(targetRow[index+channel]) + int(row[index+channel])
+						if sum > 255 {
+							sum = 255
+						}
+						targetRow[index+channel] = uint8(sum)
+					}
+					if row[index+3] > targetRow[index+3] {
+						targetRow[index+3] = row[index+3]
+					}
+				}
+			}
+		}
+		if !additive {
+			draw.Draw(target, region, layer, region.Min, draw.Over)
+		}
 		eng.releaseLayer()
 	}
 
@@ -713,10 +825,27 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 			}
 		}
 	}
+	// With a split, the debug panel and the transparent-pixel fixup go on the
+	// normal front plane; otherwise on the single canvas as before.
+	output := canvas
+	if eng.layered && eng.splitReached {
+		output = eng.planeFor(GlueBlendNormal, bounds).img
+	}
 	if drawBackground && eng.sceneBackground {
-		for index := 3; index < len(canvas.Pix); index += 4 {
-			if canvas.Pix[index] == 0 {
-				canvas.Pix[index] = 1
+		targets := []*image.RGBA{output}
+		if eng.layered && eng.splitReached {
+			targets = targets[:0]
+			for _, plane := range eng.planes {
+				if plane.blend == GlueBlendNormal {
+					targets = append(targets, plane.img)
+				}
+			}
+		}
+		for _, target := range targets {
+			for index := 3; index < len(target.Pix); index += 4 {
+				if target.Pix[index] == 0 {
+					target.Pix[index] = 1
+				}
 			}
 		}
 	}
@@ -727,10 +856,10 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 		copy(eng.worldBaseCanvas.Pix, canvas.Pix)
 	}
 	if eng.debugPanel.visible {
-		eng.drawDebugPanel(canvas, face, faceLg)
+		eng.drawDebugPanel(output, face, faceLg)
 	}
 
-	return canvas
+	return output
 }
 
 func (eng *UIEngine) updateScrollFrames() {
@@ -1187,6 +1316,19 @@ func editCursorIndex(face font.Face, text []rune, position float64) int {
 	return len(text)
 }
 
+// editCaretBand is the vertical extent of the caret and selection: one font
+// line tall, centred on the text rectangle, never taller than it. (It used to
+// span the whole rectangle minus a fixed margin, which overshot the box.)
+func editCaretBand(face font.Face, text image.Rectangle) (top, bottom int) {
+	metrics := face.Metrics()
+	height := (metrics.Ascent + metrics.Descent).Ceil()
+	if height < 1 || height > text.Dy() {
+		height = text.Dy()
+	}
+	top = text.Min.Y + (text.Dy()-height)/2
+	return top, top + height
+}
+
 func (eng *UIEngine) drawEditText(canvas *image.RGBA, face, faceLg font.Face, w *widget, rect Rect, screenHeight float64) {
 	text := editDisplayText(w)
 	textWidget := eng.editTextWidget(w)
@@ -1203,7 +1345,8 @@ func (eng *UIEngine) drawEditText(canvas *image.RGBA, face, faceLg font.Face, w 
 		origin := eng.editTextOrigin(textFace, text, dst, textWidget)
 		startWidth := font.MeasureString(textFace, string([]rune(text)[:start])).Ceil()
 		endWidth := font.MeasureString(textFace, string([]rune(text)[:end])).Ceil()
-		selection := image.Rect(origin+startWidth, dst.Min.Y+2, origin+endWidth, dst.Max.Y-2)
+		top, bottom := editCaretBand(textFace, dst)
+		selection := image.Rect(origin+startWidth, top, origin+endWidth, bottom)
 		draw.Draw(canvas, selection, &image.Uniform{C: color.RGBA{R: 35, G: 100, B: 180, A: 180}}, image.Point{}, draw.Over)
 	}
 	if text != "" {
@@ -1214,7 +1357,8 @@ func (eng *UIEngine) drawEditText(canvas *image.RGBA, face, faceLg font.Face, w 
 		origin := eng.editTextOrigin(textFace, text, dst, textWidget)
 		width := font.MeasureString(textFace, string([]rune(text)[:clampCursor(w.cursor, len([]rune(text)))])).Ceil()
 		caretX := origin + width + 1
-		caret := image.Rect(caretX, dst.Min.Y+4, caretX+1, dst.Max.Y-4)
+		top, bottom := editCaretBand(textFace, dst)
+		caret := image.Rect(caretX, top, caretX+1, bottom)
 		draw.Draw(canvas, caret, &image.Uniform{C: color.RGBA{R: 255, G: 220, B: 80, A: 255}}, image.Point{}, draw.Over)
 	}
 }
@@ -1243,13 +1387,21 @@ func (eng *UIEngine) drawTextureModColor(canvas *image.RGBA, r Rect, c rgba) {
 	red := clampImageChannel(c.r)
 	green := clampImageChannel(c.g)
 	blue := clampImageChannel(c.b)
+	// A lookup table per channel gives the same rounded result as computing it
+	// for every pixel.
+	var lutR, lutG, lutB [256]uint8
+	for value := range lutR {
+		lutR[value] = uint8(math.Round(float64(value) * (1 - alpha + red*alpha)))
+		lutG[value] = uint8(math.Round(float64(value) * (1 - alpha + green*alpha)))
+		lutB[value] = uint8(math.Round(float64(value) * (1 - alpha + blue*alpha)))
+	}
 	for y := dst.Min.Y; y < dst.Max.Y; y++ {
 		offset := canvas.PixOffset(dst.Min.X, y)
-		for x := dst.Min.X; x < dst.Max.X; x++ {
-			canvas.Pix[offset] = uint8(math.Round(float64(canvas.Pix[offset]) * (1 - alpha + red*alpha)))
-			canvas.Pix[offset+1] = uint8(math.Round(float64(canvas.Pix[offset+1]) * (1 - alpha + green*alpha)))
-			canvas.Pix[offset+2] = uint8(math.Round(float64(canvas.Pix[offset+2]) * (1 - alpha + blue*alpha)))
-			offset += 4
+		row := canvas.Pix[offset : offset+dst.Dx()*4]
+		for index := 0; index+2 < len(row); index += 4 {
+			row[index] = lutR[row[index]]
+			row[index+1] = lutG[row[index+1]]
+			row[index+2] = lutB[row[index+2]]
 		}
 	}
 }
@@ -2135,6 +2287,19 @@ func childDrawOrderLess(first, second *widget) bool {
 	if isCharacterSelectButton(first) && isCharacterSelectButton(second) && isHighlighted(first) != isHighlighted(second) {
 		return isHighlighted(first) && !isHighlighted(second)
 	}
+	// A frame's regions are drawn with the frame at the frame's own strata, so
+	// they come before a child frame placed in a higher strata (a LOW
+	// LoginScene's textures lie under its MEDIUM model frames) whatever the
+	// region's own default strata says. Other orderings are unchanged.
+	if firstRegion, secondRegion := isRegionWidget(first), isRegionWidget(second); firstRegion != secondRegion {
+		region, frame := first, second
+		if secondRegion {
+			region, frame = second, first
+		}
+		if region.parent != nil && frame.frameStrata > region.parent.frameStrata {
+			return region == first
+		}
+	}
 	if first.frameStrata != second.frameStrata {
 		return first.frameStrata < second.frameStrata
 	}
@@ -2142,6 +2307,10 @@ func childDrawOrderLess(first, second *widget) bool {
 		return first.frameLevel < second.frameLevel
 	}
 	return first.layerLevel < second.layerLevel
+}
+
+func isRegionWidget(w *widget) bool {
+	return w != nil && (w.kind == kindTexture || w.kind == kindFontString)
 }
 
 func childrenAlreadyOrdered(children []*widget) bool {
@@ -2276,6 +2445,7 @@ func (eng *UIEngine) tintBackdropImage(path string, source image.Image, tint rgb
 	}
 	imageData := tintImage(source, tint)
 	eng.Cache[key] = imageData
+	registerStaticTexture(imageData)
 	return imageData
 }
 
@@ -2630,6 +2800,11 @@ func drawSubMode(canvas *image.RGBA, img image.Image, r Rect, screenHeight float
 }
 
 func drawSubModeFilter(canvas *image.RGBA, img image.Image, r Rect, screenHeight float64, tc [4]float64, additive bool) {
+	if full := ScreenRect(r, screenHeight); full.Dx() > 0 && full.Dy() > 0 {
+		if onCanvas := full.Intersect(canvas.Bounds()); !onCanvas.Empty() && drawCachedTexture(canvas, img, full, onCanvas, tc, additive) {
+			return
+		}
+	}
 	srcImg, ok := resolveTextureSubRGBA(img, tc)
 	if !ok {
 		return

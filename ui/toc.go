@@ -224,10 +224,16 @@ func (l *Loader) Close() error {
 // read resolves and reads an interface file.
 func (l *Loader) read(interfacePath string) ([]byte, error) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.mpq != nil {
-		return l.mpq.ReadFile(interfacePath)
+	set := l.mpq
+	l.mu.Unlock()
+	if set != nil {
+		// The MPQ set synchronises its own lookup caches; the read and
+		// decompression run outside the loader lock so concurrent callers
+		// (the scene worker and the main thread) overlap.
+		return set.ReadFile(interfacePath)
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	path, err := l.resolve(interfacePath)
 	if err != nil {
 		return nil, err
@@ -237,10 +243,13 @@ func (l *Loader) read(interfacePath string) ([]byte, error) {
 
 func (l *Loader) readAsset(interfacePath string) ([]byte, error) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.mpq != nil {
-		return l.mpq.ReadFile(interfacePath)
+	set := l.mpq
+	l.mu.Unlock()
+	if set != nil {
+		return set.ReadFile(interfacePath)
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	path, err := l.resolveAt(l.assetRoot, interfacePath)
 	if err != nil {
 		return nil, err

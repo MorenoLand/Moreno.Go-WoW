@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	commonmpq "github.com/MorenoLand/GScript.Go-Common/MPQ"
 )
@@ -69,9 +70,14 @@ type mpqFileRef struct {
 	entry   commonmpq.MPQEntry
 }
 
+// mpqSet resolves names across the archives. ReadFile may be called from
+// several goroutines: mu guards only the lookup caches below, and the archive
+// reads themselves (ReadAt on the open archives, local buffers) run unlocked so
+// reads and decompression can overlap.
 type mpqSet struct {
 	archives   []*mpqArchive
 	locale     uint16
+	mu         sync.Mutex
 	files      map[string]mpqFileRef
 	loose      map[string]string
 	looseRoots []string
@@ -134,10 +140,14 @@ func (set *mpqSet) Close() error {
 
 func (set *mpqSet) ReadFile(name string) ([]byte, error) {
 	name = normalizeMPQPath(name)
-	if ref, ok := set.files[name]; ok {
+	set.mu.Lock()
+	ref, cached := set.files[name]
+	_, knownMissing := set.missing[name]
+	set.mu.Unlock()
+	if cached {
 		return ref.archive.common.ReadEntry(ref.entry)
 	}
-	if _, ok := set.missing[name]; ok {
+	if knownMissing {
 		return nil, os.ErrNotExist
 	}
 	var lastReadErr error
@@ -152,22 +162,31 @@ func (set *mpqSet) ReadFile(name string) ([]byte, error) {
 			lastReadErr = err
 			continue
 		}
+		set.mu.Lock()
 		set.files[name] = mpqFileRef{archive: archive, entry: entry}
+		set.mu.Unlock()
 		return data, nil
 	}
-	if path, ok := set.loose[name]; ok {
-		return os.ReadFile(path)
+	set.mu.Lock()
+	loosePath, isLoose := set.loose[name]
+	set.mu.Unlock()
+	if isLoose {
+		return os.ReadFile(loosePath)
 	}
 	for _, root := range set.looseRoots {
 		if path, ok := resolveLoosePath(root, name); ok {
+			set.mu.Lock()
 			set.loose[name] = path
+			set.mu.Unlock()
 			return os.ReadFile(path)
 		}
 	}
 	if lastReadErr != nil {
 		return nil, lastReadErr
 	}
+	set.mu.Lock()
 	set.missing[name] = struct{}{}
+	set.mu.Unlock()
 	return nil, os.ErrNotExist
 }
 
