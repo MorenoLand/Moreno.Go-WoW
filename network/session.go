@@ -151,6 +151,12 @@ func (s *Session) SetSelection(guid uint64) error {
 	}
 	return s.connection.SetSelection(guid)
 }
+func (s *Session) SendMovement(opcode world.ClientOpcode, mover uint64, info world.MovementInfo) error {
+	if s == nil || s.connection == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return s.connection.SendMovement(opcode, mover, info)
+}
 func (s *Session) CancelChannel(id uint32) error {
 	if s == nil || s.connection == nil {
 		return fmt.Errorf("world session is closed")

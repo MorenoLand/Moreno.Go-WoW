@@ -325,6 +325,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	debugModelError := ""
 	worldMode := false
 	var worldCamera *worldCameraController
+	var worldMovement *worldMovementReporter
 	var worldPlayer *core.Node
 	var worldModel *core.Node
 	var worldSky *core.Node
@@ -612,6 +613,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		}
 		worldMode = false
 		worldCamera = nil
+		worldMovement = nil
 		worldPackets = nil
 		worldLoading = false
 		if uiEngine != nil {
@@ -797,6 +799,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			minimapChanged := false
 			if worldMode && worldCamera != nil {
 				worldCamera.update(elapsed, cam, worldPlayer)
+				worldMovement.update(time.Now(), worldCamera)
 				minimapChanged = uiEngine.SetWorldMinimapPosition(worldMapName, worldCamera.position[0], worldCamera.position[1])
 				advanceWorldEntities(worldEntities, elapsed, worldFloor)
 				if worldPlayer != nil {
@@ -1061,6 +1064,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					}
 				}
 				worldCamera = newWorldCameraController(entry.position)
+				worldMovement = newWorldMovementReporter(worldCharacter.GUID, func(opcode world.ClientOpcode, info world.MovementInfo) error {
+					if activeSession == nil {
+						return fmt.Errorf("world session is closed")
+					}
+					return activeSession.SendMovement(opcode, worldCharacter.GUID, info)
+				})
 				if collision, ok := loaded.UserData().(worldSceneCollision); ok {
 					worldCamera.setGround(collision.ground)
 					worldCamera.setFloor(collision.floor)

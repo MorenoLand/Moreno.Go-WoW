@@ -2762,17 +2762,29 @@ func copyTextureRect(dst *image.RGBA, img image.Image, l, tp, rt, bm int, flipX,
 		}
 		return
 	}
-	for y := 0; y < height; y++ {
-		sourceY := tp + y
-		if flipY {
-			sourceY = bm - 1 - y
-		}
-		for x := 0; x < width; x++ {
-			sourceX := l + x
-			if flipX {
-				sourceX = rt - 1 - x
+	// Non-RGBA sources (BLP decodes to *image.NRGBA) convert through draw.Draw,
+	// which has native fast paths, instead of a per-pixel dst.Set(img.At())
+	// that allocates a color.Color for every pixel on every draw. Flips are
+	// applied to the converted rows afterwards.
+	draw.Draw(dst, image.Rect(0, 0, width, height), img, image.Point{X: l, Y: tp}, draw.Src)
+	if flipX {
+		for y := 0; y < height; y++ {
+			row := dst.Pix[dst.PixOffset(0, y):]
+			for left, right := 0, width-1; left < right; left, right = left+1, right-1 {
+				for c := 0; c < 4; c++ {
+					row[left*4+c], row[right*4+c] = row[right*4+c], row[left*4+c]
+				}
 			}
-			dst.Set(x, y, img.At(sourceX, sourceY))
+		}
+	}
+	if flipY {
+		scratch := make([]byte, width*4)
+		for top, bottom := 0, height-1; top < bottom; top, bottom = top+1, bottom-1 {
+			a := dst.Pix[dst.PixOffset(0, top) : dst.PixOffset(0, top)+width*4]
+			b := dst.Pix[dst.PixOffset(0, bottom) : dst.PixOffset(0, bottom)+width*4]
+			copy(scratch, a)
+			copy(a, b)
+			copy(b, scratch)
 		}
 	}
 }

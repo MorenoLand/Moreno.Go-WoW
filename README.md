@@ -10,7 +10,11 @@ Any separately supplied game data remains outside this repository and must be us
 
 ## Status
 
-Initial G3N renderer bootstrap. Interfaces and behavior may change as the client develops.
+**Work in progress.** This client is under active development and is not yet playable end to end. Interfaces and behavior may change as the client develops.
+
+- Implemented: login and character screens from the original GlueXML, world entry, replicated entities, server-backed spells and action bars, target selection, and basic movement packets.
+- Not yet implemented: jumping and falling, swimming and flying, inventory and items, quests, loot, vendors, trading, groups, and most of the gameplay Lua API.
+- Not yet verified against a live server: combat, casting acceptance, action-bar persistence, and movement.
 
 ## Running
 

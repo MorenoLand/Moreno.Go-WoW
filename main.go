@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime/pprof"
 
 	"github.com/MorenoLand/Moreno.WoW/config"
 	"github.com/MorenoLand/Moreno.WoW/network"
@@ -44,6 +45,7 @@ func main() {
 	}
 	password := os.Getenv("WOW_PASSWORD")
 	debug := false
+	cpuProfile := ""
 	timeout := network.DefaultConfig().Timeout
 	flag.StringVar(&options.AuthAddress, "auth", options.AuthAddress, "auth server address")
 	flag.StringVar(&options.Account, "account", options.Account, "account name")
@@ -55,12 +57,26 @@ func main() {
 	flag.BoolVar(&debug, "debug", false, "write session status to the terminal")
 	flag.StringVar(&options.InterfacePath, "interface", options.InterfacePath, "loose Interface data root")
 	flag.StringVar(&options.BackgroundPath, "background", options.BackgroundPath, "optional login background image")
+	flag.StringVar(&cpuProfile, "cpuprofile", "", "write a CPU profile to this file until the client exits")
 	flag.BoolVar(&options.RememberMe, "remember-me", options.RememberMe, "remember the password in the OS credential store")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: MorenoWoW [options]")
 		flag.VisitAll(func(option *flag.Flag) { fmt.Fprintf(os.Stderr, "  --%s\t%s\n", option.Name, option.Usage) })
 	}
 	flag.Parse()
+	if cpuProfile != "" {
+		file, err := os.Create(cpuProfile)
+		if err != nil {
+			log.Fatalf("cpu profile: %v", err)
+		}
+		if err := pprof.StartCPUProfile(file); err != nil {
+			log.Fatalf("cpu profile: %v", err)
+		}
+		defer func() {
+			pprof.StopCPUProfile()
+			file.Close()
+		}()
+	}
 	authFlagSet := false
 	flag.Visit(func(option *flag.Flag) {
 		if option.Name == "auth" {
