@@ -300,6 +300,7 @@ func (eng *UIEngine) Update(elapsed float64) bool {
 		statusChanged = true
 	}
 	caretChanged := eng.updateCaretBlink(elapsed)
+	eng.Rt.updateStateDrivers(elapsed)
 	movieChanged := eng.updateMovie(elapsed)
 	return statusChanged || caretChanged || eng.Rt.scriptDirty || movieChanged
 }
@@ -338,9 +339,14 @@ func (eng *UIEngine) loadBLP(path string) image.Image {
 		eng.Cache[path] = nil
 		return nil
 	}
-	img, err := DecodeBLP(data)
+	var img image.Image
+	if len(data) >= 3 && string(data[:3]) == "BLP" {
+		img, err = DecodeBLP(data)
+	} else {
+		img, err = decodeTGA(data)
+	}
 	if err != nil {
-		log.Printf("DecodeBLP %s: %v", path, err)
+		log.Printf("decode %s: %v", path, err)
 		eng.Cache[path] = nil
 		return nil
 	}
@@ -654,6 +660,11 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 					img = eng.loadBLP(w.textureFile)
 				}
 				if img != nil {
+					if tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0 && w.name != "MinimapMap" {
+						// A script set the rectangle to nothing (SetTexCoord(0, 0, 0, 0)); that shows
+						// no texels, not the whole file.
+						break
+					}
 					if tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0 {
 						tc = [4]float64{0, 1, 0, 1}
 					}
@@ -1286,6 +1297,13 @@ func (eng *UIEngine) layoutRect(w *widget, parent Rect) Rect {
 		w.renderRect = rect
 		w.hasRenderRect = true
 		return rect
+	}
+	// A texture given no size and at most one anchor is as large as its file.
+	if w.kind == kindTexture && w.textureFile != "" && w.width == 0 && w.height == 0 && len(w.points) <= 1 {
+		if img := eng.loadBLP(w.textureFile); img != nil {
+			w.width, w.height = float64(img.Bounds().Dx()), float64(img.Bounds().Dy())
+			w.naturalSize = true
+		}
 	}
 	rect := resolveRect(w, parentRect, func(name string) (Rect, bool) {
 		target := eng.Rt.widgets[name]

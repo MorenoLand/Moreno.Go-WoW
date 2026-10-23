@@ -90,9 +90,8 @@ end`, "@world-ui-button-side.lua") {
 	if !eng.Rt.Execute(`
 if Minimap and not MinimapMap then
     MinimapMap = MinimapBackdrop:CreateTexture("MinimapMap", "BACKGROUND")
-    MinimapMap:SetWidth(140)
-    MinimapMap:SetHeight(140)
-    MinimapMap:SetPoint("CENTER", Minimap, "CENTER", 0, 0)
+    -- The map fills the Minimap frame, whatever size a script gives it.
+    MinimapMap:SetAllPoints(Minimap)
 end
 if Minimap_Update then
     Minimap_Update()
@@ -169,6 +168,10 @@ func (eng *UIEngine) loadAddOn(name string) (bool, string) {
 		}
 		return false, "ADDON_LOAD_FAILED"
 	}
+	if eng.Rt.addonTOCs == nil {
+		eng.Rt.addonTOCs = make(map[string][]byte)
+	}
+	eng.Rt.addonTOCs[key] = data
 	for _, dependency := range addonDependencies(data) {
 		if loaded, reason := eng.loadAddOn(dependency); !loaded {
 			return false, "ADDON_DEP_" + strings.ToUpper(reason)
@@ -197,8 +200,9 @@ func (eng *UIEngine) loadUserAddOns() {
 	// The secure handler functions need the restricted environment, which this
 	// client has none of; user add-ons that call them get functions that do nothing.
 	if len(eng.UserAddOns) > 0 {
+		registerStateDriverAPI(eng.Rt)
 		eng.Rt.Execute(`
-for _, name in ipairs({"SecureHandlerExecute", "SecureHandlerSetFrameRef", "SecureHandlerWrapScript", "SecureHandlerUnwrapScript"}) do
+for _, name in ipairs({"SecureHandlerWrapScript", "SecureHandlerUnwrapScript"}) do
 	_G[name] = function() end
 end
 `, "@secure-handlers.lua")

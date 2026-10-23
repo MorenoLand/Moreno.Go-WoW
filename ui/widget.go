@@ -119,6 +119,9 @@ type widget struct {
 	multiLine, numeric                   bool
 	zoom                                 int
 	zoomSet                              bool
+	frameRefs                            map[string]*widget // SetFrameRef handles
+	secureEnv                            *lua.LTable        // globals shared by a secure handler's snippets
+	naturalSize                          bool               // sized from its texture file because no size was given
 	blinkSpeed                           float64
 	blinkSet                             bool
 	name                                 string
@@ -1429,6 +1432,9 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"SetTexture": func(L *lua.LState, w *widget) int {
+			if w.naturalSize {
+				w.width, w.height, w.naturalSize = 0, 0, false
+			}
 			if L.Get(2).Type() == lua.LTString {
 				w.textureFile = L.CheckString(2)
 			} else if L.Get(2).Type() == lua.LTNumber && L.GetTop() >= 5 {

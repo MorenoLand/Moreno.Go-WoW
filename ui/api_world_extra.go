@@ -188,6 +188,30 @@ func registerUnitReactionAPI(rt *Runtime) {
 		L.Push(lua.LNil)
 		return 1
 	})
+	// UnitSelectionColor is the colour a unit's name and target frame take from how
+	// it stands to the player: hostile red, neutral yellow, friendly green (blue
+	// for a friendly player).
+	reg("UnitSelectionColor", func(L *lua.LState) int {
+		unit := L.OptString(1, "")
+		info := known(unit)
+		red, green, blue := float64(1), float64(1), float64(0)
+		switch r := reaction(unit, "player"); {
+		case info == nil:
+		case r != 0 && r <= 2:
+			red, green, blue = 1, 0, 0
+		case r == 3:
+			red, green, blue = 1, 0.5, 0
+		case r >= 5 && info.Player:
+			red, green, blue = 0.4, 0.4, 1
+		case r >= 5:
+			red, green, blue = 0, 1, 0
+		}
+		L.Push(lua.LNumber(red))
+		L.Push(lua.LNumber(green))
+		L.Push(lua.LNumber(blue))
+		L.Push(lua.LNumber(1))
+		return 4
+	})
 	reg("UnitCanAttack", func(L *lua.LState) int {
 		a, b := L.OptString(1, ""), L.OptString(2, "")
 		r := reaction(a, b)

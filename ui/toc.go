@@ -207,7 +207,10 @@ func (l *Loader) ReadAsset(path string) ([]byte, error) {
 	if err == nil {
 		return data, nil
 	}
-	return l.readAsset(path + ".blp")
+	if data, err := l.readAsset(path + ".blp"); err == nil {
+		return data, nil
+	}
+	return l.readAsset(path + ".tga")
 }
 
 func (l *Loader) ReadFile(path string) ([]byte, error) { return l.read(path) }

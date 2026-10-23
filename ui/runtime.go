@@ -21,11 +21,11 @@ func (e ScriptError) Error() string { return e.Source + ": " + e.Message }
 // cvar store, and glue event dispatch for one interface session.
 type Runtime struct {
 	mapArrowTextures []*widget
-	inventory       inventoryState
-	clearItemCursor func()
-	worldMap worldMapState
-	bindings *bindingTable
-	animatingGroups map[*widget]bool
+	inventory        inventoryState
+	clearItemCursor  func()
+	worldMap         worldMapState
+	bindings         *bindingTable
+	animatingGroups  map[*widget]bool
 	// scriptDirty is set when a script changed something a software UI repaint
 	// would show (a widget's alpha, visibility, size, text, texture, colour,
 	// anchors or value). UIEngine.Update reports it so animations driven by
@@ -36,17 +36,21 @@ type Runtime struct {
 	addonTables map[string]*lua.LTable
 	// addonMethods are the per-type method tables add-ons extend; loggedIn is
 	// whether PLAYER_LOGIN has been sent.
-	addonMethods map[string]*lua.LTable
-	loggedIn     bool
+	addonMethods      map[string]*lua.LTable
+	loggedIn          bool
+	playerFacing      float32
+	stateDrivers      []*stateDriver
+	stateDriverClock  float64
+	addonTOCs         map[string][]byte
 	widgetMethodIndex *lua.LTable
 	// loadRoot is the XML entry of the TOC being loaded (empty for a Lua entry).
 	loadRoot string
 	// onMinimapZoom tells the engine the Minimap frame's zoom changed.
 	onMinimapZoom func()
-	L        *lua.LState
-	started  time.Time
-	gameplay gameplayState
-	combat   combatState
+	L             *lua.LState
+	started       time.Time
+	gameplay      gameplayState
+	combat        combatState
 
 	widgets           map[string]*widget
 	virtuals          map[string]*xmlNode

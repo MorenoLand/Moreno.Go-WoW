@@ -421,11 +421,32 @@ func (rt *Runtime) extraWidgetMethods() map[string]func(L *lua.LState, w *widget
 			}
 			return 0
 		},
-		"GetZoom":             func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(w.zoomLevel())); return 1 },
-		"SetHorizTile":        func(L *lua.LState, w *widget) int { w.horizTile = luaTruthy(L, 2); return 0 },
-		"SetVertTile":         func(L *lua.LState, w *widget) int { w.vertTile = luaTruthy(L, 2); return 0 },
-		"SetFrameRef":         noop,
-		"Execute":             noop,
+		"GetZoom":      func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(w.zoomLevel())); return 1 },
+		"SetHorizTile": func(L *lua.LState, w *widget) int { w.horizTile = luaTruthy(L, 2); return 0 },
+		"SetVertTile":  func(L *lua.LState, w *widget) int { w.vertTile = luaTruthy(L, 2); return 0 },
+		"SetFrameRef": func(L *lua.LState, w *widget) int {
+			if target, ok := L.Get(3).(*lua.LUserData); ok {
+				if ref, ok := target.Value.(*widget); ok {
+					if w.frameRefs == nil {
+						w.frameRefs = make(map[string]*widget)
+					}
+					w.frameRefs[L.CheckString(2)] = ref
+				}
+			}
+			return 0
+		},
+		"GetFrameRef": func(L *lua.LState, w *widget) int {
+			if ref := w.frameRefs[L.CheckString(2)]; ref != nil {
+				L.Push(ref.luaValue(L))
+				return 1
+			}
+			L.Push(lua.LNil)
+			return 1
+		},
+		"Execute": func(L *lua.LState, w *widget) int {
+			rt.runSecureSnippet(w, L.CheckString(2), "", "")
+			return 0
+		},
 		"WrapScript":          noop,
 		"UnwrapScript":        noop,
 		"GetZoomLevels":       func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(minimapZoomLevels)); return 1 },

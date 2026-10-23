@@ -569,6 +569,7 @@ func registerSetupFullscreenScale(rt *Runtime) {
 // SetPlayerMapFacing records the player's facing (radians, counter-clockwise
 // from north) and turns the world map's player arrow to match.
 func (rt *Runtime) SetPlayerMapFacing(radians float32) {
+	rt.playerFacing = radians
 	for _, arrow := range rt.mapArrowTextures {
 		arrow.rotation = float64(radians)
 	}
