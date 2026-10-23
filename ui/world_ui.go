@@ -4,76 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"strings"
 
 	lua "github.com/yuin/gopher-lua"
 )
 
-var worldUIFiles = []string{
-	`Interface\FrameXML\GlobalStrings.lua`,
-	`Interface\FrameXML\Constants.lua`,
-	`Interface\FrameXML\Fonts.xml`,
-	`Interface\FrameXML\FontStyles.xml`,
-	`Interface\FrameXML\Localization.xml`,
-	`Interface\FrameXML\BasicControls.xml`,
-	`Interface\FrameXML\UIPanelTemplates.lua`,
-	`Interface\FrameXML\UIPanelTemplates.xml`,
-	`Interface\FrameXML\UIMenu.xml`,
-	`Interface\FrameXML\UIDropDownMenu.xml`,
-	`Interface\FrameXML\AutoComplete.lua`,
-	`Interface\FrameXML\UIParent.xml`,
-	`Interface\FrameXML\ChatFrame.xml`,
-	`Interface\FrameXML\FloatingChatFrame.xml`,
-	`Interface\FrameXML\GameTooltip.xml`,
-	`Interface\FrameXML\AutoComplete.xml`,
-	`Interface\FrameXML\MoneyFrame.lua`,
-	`Interface\FrameXML\MoneyFrame.xml`,
-	`Interface\FrameXML\MoneyInputFrame.lua`,
-	`Interface\FrameXML\MoneyInputFrame.xml`,
-	`Interface\FrameXML\ItemButtonTemplate.xml`,
-	`Interface\FrameXML\ClassTrainerFrameTemplates.xml`,
-	`Interface\FrameXML\StaticPopup.lua`,
-	`Interface\FrameXML\StaticPopup.xml`,
-	`Interface\FrameXML\VideoOptionsFrame.xml`,
-	`Interface\FrameXML\AudioOptionsFrame.xml`,
-	`Interface\FrameXML\InterfaceOptionsFrame.xml`,
-	`Interface\FrameXML\InterfaceOptionsPanels.lua`,
-	`Interface\FrameXML\InterfaceOptionsPanels.xml`,
-	`Interface\FrameXML\GameMenuFrame.xml`,
-	`Interface\FrameXML\TextStatusBar.lua`,
-	`Interface\FrameXML\TextStatusBar.xml`,
-	`Interface\FrameXML\MainMenuBar.xml`,
-	`Interface\FrameXML\MainMenuBarMicroButtons.xml`,
-	`Interface\FrameXML\SecureTemplates.xml`,
-	`Interface\FrameXML\Cooldown.xml`,
-	`Interface\FrameXML\ActionButtonTemplate.xml`,
-	`Interface\FrameXML\ActionBarFrame.xml`,
-	`Interface\FrameXML\Minimap.xml`,
-	`Interface\FrameXML\UnitFrame.xml`,
-	`Interface\FrameXML\UnitPopup.xml`,
-	`Interface\FrameXML\CombatFeedback.xml`,
-	`Interface\FrameXML\VoiceChat.xml`,
-	`Interface\FrameXML\ReadyCheck.xml`,
-	`Interface\FrameXML\PlayerFrame.xml`,
-	`Interface\FrameXML\CastingBarFrame.xml`,
-	`Interface\FrameXML\TargetFrame.xml`,
-	`Interface\FrameXML\PartyFrameTemplates.xml`,
-	`Interface\FrameXML\PetFrame.xml`,
-	`Interface\FrameXML\BuffFrame.xml`,
-	`Interface\FrameXML\PartyFrame.xml`,
-	`Interface\FrameXML\MultiActionBars.xml`,
-	`Interface\FrameXML\WorldStateFrame.xml`,
-	`Interface\FrameXML\CharacterFrameTemplates.xml`,
-	`Interface\FrameXML\CharacterFrame.xml`,
-	`Interface\FrameXML\HybridScrollFrame.lua`,
-	`Interface\FrameXML\HybridScrollFrame.xml`,
-	`Interface\FrameXML\PaperDollFrame.xml`,
-	`Interface\FrameXML\SpellBookFrame.xml`,
-	`Interface\FrameXML\QuestFrameTemplates.xml`,
-	`Interface\FrameXML\QuestLogFrame.xml`,
-}
-
 func (eng *UIEngine) LoadWorldUI() error {
+	eng.Rt.onMinimapZoom = eng.applyMinimapZoom
 	if eng.worldUIReady {
 		return nil
 	}
@@ -87,22 +25,28 @@ func (eng *UIEngine) LoadWorldUI() error {
 			eng.Rt.SetCVar("uiScale", fmt.Sprintf("%.6f", height/768))
 		}
 	}
-	for _, path := range worldUIFiles {
-		if (path == `Interface\FrameXML\VideoOptionsFrame.xml` && eng.Rt.widgets["VideoOptionsFrame"] != nil) || (path == `Interface\FrameXML\AudioOptionsFrame.xml` && eng.Rt.widgets["AudioOptionsFrame"] != nil) {
-			continue
-		}
-		if path == `Interface\FrameXML\GameTooltip.xml` && eng.Rt.L.GetGlobal("GameTooltip") == lua.LNil {
-			if !eng.Rt.Execute(`GameTooltip = CreateFrame("Frame", "GameTooltip", UIParent); GameTooltip:Hide();`, "@world-ui-tooltip.lua") {
-				return fmt.Errorf("initialize GameTooltip: %v", eng.Rt.ScriptErrors())
-			}
-		}
-		if err := eng.AssetLoader.LoadInterfaceFile(path); err != nil {
-			return fmt.Errorf("load world UI %s: %w", path, err)
+	// The world UI always has a player unit; FrameXML reads its race and class
+	// while it loads.
+	if info := eng.Rt.unitInfo("player"); info == nil || !info.Exists {
+		if !eng.Rt.SeedPlayerUnitFromGlue() {
+			eng.Rt.SetUnit("player", UnitInfo{Exists: true, Name: "Player", Level: 1, RaceID: 1, RaceFile: "Human", RaceName: "Human", ClassID: 1, ClassFile: "WARRIOR", ClassName: "Warrior", Sex: 2, Health: 1, HealthMax: 1, Power: 1, PowerMax: 1, PowerType: 1, PowerToken: "RAGE", Connected: true, Player: true, Visible: true})
 		}
 	}
+	if err := eng.AssetLoader.LoadTOCFiltered(`Interface\FrameXML\FrameXML.toc`, nil, func(path string) bool {
+		// The glue screens already created the options frames; the world UI reuses them.
+		return (path == `Interface\FrameXML\VideoOptionsFrame.xml` && eng.Rt.widgets["VideoOptionsFrame"] != nil) ||
+			(path == `Interface\FrameXML\AudioOptionsFrame.xml` && eng.Rt.widgets["AudioOptionsFrame"] != nil)
+	}); err != nil {
+		return fmt.Errorf("load world UI: %w", err)
+	}
+	eng.loadBindings()
 	if err := eng.loadCombatLogAddon(); err != nil {
 		return err
 	}
+	if err := eng.loadStartupAddOns(); err != nil {
+		return err
+	}
+	eng.loadUserAddOns()
 	eng.worldRoot = eng.Rt.widgets["UIParent"]
 	if eng.worldRoot == nil {
 		return fmt.Errorf("world UI did not create UIParent")
@@ -144,60 +88,6 @@ end`, "@world-ui-button-side.lua") {
 		return fmt.Errorf("set world chat button side: %v", eng.Rt.ScriptErrors())
 	}
 	if !eng.Rt.Execute(`
-if not StaticPopup_Visible then
-    function StaticPopup_Visible()
-        return nil;
-    end
-end
-if not UpdateMicroButtons then
-    function UpdateMicroButtons()
-    end
-end
-if not Disable_BagButtons then
-    function Disable_BagButtons()
-    end
-end
-if not Enable_BagButtons then
-    function Enable_BagButtons()
-    end
-end
-if not VoiceChat_Toggle then
-    function VoiceChat_Toggle()
-    end
-end
-for _, name in ipairs({
-    "MainMenuMicroButton_SetPushed",
-    "MainMenuMicroButton_SetNormal",
-    "PVPMicroButton_SetPushed",
-    "PVPMicroButton_SetNormal",
-    "UpdateSpells",
-    "ShowTextStatusBarText",
-    "HideTextStatusBarText",
-    "ShowWatchedReputationBarText",
-    "HideWatchedReputationBarText",
-    "SetButtonPulse",
-}) do
-    if type(_G[name]) ~= "function" then
-        _G[name] = function()
-        end
-    end
-end
-if not WatchFrame then
-    WatchFrame = {showObjectives = true}
-elseif WatchFrame.showObjectives == nil then
-    WatchFrame.showObjectives = true
-end
-if not table.wipe then
-    function table.wipe(value)
-        for key in pairs(value) do
-            value[key] = nil
-        end
-    end
-end
-if not PlayerFrameAlternateManaBar then
-    PlayerFrameAlternateManaBar = CreateFrame("StatusBar", "PlayerFrameAlternateManaBar", UIParent)
-    PlayerFrameAlternateManaBar:Hide()
-end
 if Minimap and not MinimapMap then
     MinimapMap = MinimapBackdrop:CreateTexture("MinimapMap", "BACKGROUND")
     MinimapMap:SetWidth(140)
@@ -210,46 +100,15 @@ end
 if TemporaryEnchantFrame_Hide then
     TemporaryEnchantFrame_Hide()
 end
-for _, name in ipairs({
-    "GameTooltip",
-    "Minimap",
-    "MinimapCluster",
-    "HelpFrame",
-    "VideoOptionsFrame",
-    "AudioOptionsFrame",
-    "InterfaceOptionsFrame",
-    "MultiCastFlyoutFrame",
-    "OpacityFrame",
-    "CharacterFrame",
-    "SpellBookFrame",
-    "QuestLogFrame",
-    "PVPParentFrame",
-    "FriendsFrame",
-    "LFDParentFrame",
-    "PlayerTalentFrame",
-    "AchievementFrame",
-    "KeyRingButton",
-    "ChannelFrameAutoJoin",
-    "VoiceChatTalkers",
-}) do
-    if not _G[name] then
-        local frame = CreateFrame("Frame", name, UIParent);
-        frame:Hide();
-    end
-end
-`, "@world-ui-game-menu-stubs.lua") {
-		return fmt.Errorf("initialize game menu stubs: %v", eng.Rt.ScriptErrors())
+`, "@world-ui-minimap.lua") {
+		return fmt.Errorf("initialize minimap: %v", eng.Rt.ScriptErrors())
+
 	}
-	for _, addon := range []string{"Blizzard_BindingUI", "Blizzard_MacroUI"} {
-		path := `Interface\AddOns\` + addon + `\` + addon + `.toc`
-		if _, err := eng.AssetLoader.ReadFile(path); err == nil {
-			if loaded, reason := eng.loadAddOn(addon); !loaded {
-				return fmt.Errorf("load world UI %s: %s", path, reason)
-			}
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("probe world UI %s: %w", path, err)
-		}
-	}
+	eng.Rt.FireEvent("VARIABLES_LOADED")
+	eng.Rt.loggedIn = true
+	eng.Rt.FireEvent("PLAYER_LOGIN")
+	eng.Rt.FireEvent("PLAYER_ENTERING_WORLD")
+	eng.Rt.FireEvent("UNIT_DISPLAYPOWER", lua.LString("player"))
 	// Drop glue-screen keyboard focus (e.g. AccountLoginAccountEdit) so the
 	// first world ESC runs TOGGLEGAMEMENU instead of only clearing focus.
 	eng.Rt.setFocus(nil)
@@ -299,20 +158,21 @@ func (eng *UIEngine) loadAddOn(name string) (bool, string) {
 	if eng.Rt.loadedAddOns[key] {
 		return true, ""
 	}
-	tocs := map[string]string{
-		"blizzard_bindingui": `Interface\AddOns\Blizzard_BindingUI\Blizzard_BindingUI.toc`,
-		"blizzard_combatlog": `Interface\AddOns\Blizzard_CombatLog\Blizzard_CombatLog.toc`,
-		"blizzard_macroui":   `Interface\AddOns\Blizzard_MacroUI\Blizzard_MacroUI.toc`,
-	}
-	toc, ok := tocs[key]
-	if !ok {
+	if (!strings.HasPrefix(key, "blizzard_") && !eng.isUserAddOn(key)) || strings.ContainsAny(key, `\/.`) {
 		return false, "ADDON_NOT_FOUND"
 	}
-	if _, err := eng.AssetLoader.ReadFile(toc); err != nil {
+	toc := `Interface\AddOns\` + strings.TrimSpace(name) + `\` + strings.TrimSpace(name) + `.toc`
+	data, err := eng.AssetLoader.ReadFile(toc)
+	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return false, "ADDON_NOT_FOUND"
 		}
 		return false, "ADDON_LOAD_FAILED"
+	}
+	for _, dependency := range addonDependencies(data) {
+		if loaded, reason := eng.loadAddOn(dependency); !loaded {
+			return false, "ADDON_DEP_" + strings.ToUpper(reason)
+		}
 	}
 	if err := eng.AssetLoader.LoadTOC(toc, nil); err != nil {
 		return false, "ADDON_LOAD_FAILED"
@@ -320,6 +180,34 @@ func (eng *UIEngine) loadAddOn(name string) (bool, string) {
 	eng.Rt.loadedAddOns[key] = true
 	eng.Rt.FireEvent("ADDON_LOADED", lua.LString(name))
 	return true, ""
+}
+
+func (eng *UIEngine) isUserAddOn(key string) bool {
+	for _, name := range eng.UserAddOns {
+		if strings.EqualFold(strings.TrimSpace(name), key) {
+			return true
+		}
+	}
+	return false
+}
+
+// loadUserAddOns loads the configured user add-ons; one that is missing or
+// fails does not stop the others or the interface.
+func (eng *UIEngine) loadUserAddOns() {
+	// The secure handler functions need the restricted environment, which this
+	// client has none of; user add-ons that call them get functions that do nothing.
+	if len(eng.UserAddOns) > 0 {
+		eng.Rt.Execute(`
+for _, name in ipairs({"SecureHandlerExecute", "SecureHandlerSetFrameRef", "SecureHandlerWrapScript", "SecureHandlerUnwrapScript"}) do
+	_G[name] = function() end
+end
+`, "@secure-handlers.lua")
+	}
+	for _, name := range eng.UserAddOns {
+		if loaded, reason := eng.loadAddOn(name); !loaded {
+			log.Printf("add-on %s: %s", name, reason)
+		}
+	}
 }
 
 func (eng *UIEngine) SetWorldLoading(loading bool) {
@@ -460,3 +348,66 @@ func (eng *UIEngine) GameMenuShown() bool {
 	}
 	return true
 }
+
+// blizzardAddOns are the interface add-ons that ship with the client.
+var blizzardAddOns = []string{
+	"Blizzard_AchievementUI", "Blizzard_ArenaUI", "Blizzard_AuctionUI", "Blizzard_BarberShopUI", "Blizzard_BattlefieldMinimap",
+	"Blizzard_BindingUI", "Blizzard_Calendar", "Blizzard_CombatLog", "Blizzard_CombatText", "Blizzard_FeedbackUI", "Blizzard_GMChatUI",
+	"Blizzard_GMSurveyUI", "Blizzard_GlyphUI", "Blizzard_GuildBankUI", "Blizzard_InspectUI", "Blizzard_ItemSocketingUI", "Blizzard_MacroUI",
+	"Blizzard_RaidUI", "Blizzard_TalentUI", "Blizzard_TimeManager", "Blizzard_TokenUI", "Blizzard_TradeSkillUI", "Blizzard_TrainerUI",
+}
+
+// addonTOCField reads a "## Key: value" line of a TOC.
+func addonTOCField(toc []byte, key string) string {
+	for _, line := range strings.Split(string(toc), "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, bomPrefix))
+		if !strings.HasPrefix(line, "##") {
+			continue
+		}
+		separator := strings.IndexByte(line, ':')
+		if separator < 0 {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(line[2:separator]), key) {
+			return strings.TrimSpace(line[separator+1:])
+		}
+	}
+	return ""
+}
+
+func addonDependencies(toc []byte) []string {
+	value := addonTOCField(toc, "Dependencies")
+	if value == "" {
+		value = addonTOCField(toc, "RequiredDeps")
+	}
+	var names []string
+	for _, name := range strings.Split(value, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// loadStartupAddOns loads the interface add-ons that are not load-on-demand,
+// as the client does before the world UI is first shown.
+func (eng *UIEngine) loadStartupAddOns() error {
+	for _, name := range blizzardAddOns {
+		toc, err := eng.AssetLoader.ReadFile(`Interface\AddOns\` + name + `\` + name + `.toc`)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("probe add-on %s: %w", name, err)
+		}
+		if lod := addonTOCField(toc, "LoadOnDemand"); lod == "1" {
+			continue
+		}
+		if loaded, reason := eng.loadAddOn(name); !loaded {
+			return fmt.Errorf("load add-on %s: %s", name, reason)
+		}
+	}
+	return nil
+}
+
+const bomPrefix = "\xEF\xBB\xBF"

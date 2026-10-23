@@ -43,6 +43,10 @@ type worldEntity struct {
 	node          *core.Node
 	displayID     uint32
 	attemptedID   uint32
+	mount         *worldMountRig
+	modelPath     string
+	extra         worldCreatureExtra
+	equipment     *worldEquipment
 }
 
 func (tables *worldCreatureTables) definition(loader *ui.Loader, displayID, nativeDisplayID uint32) (worldCreatureDefinition, error) {
@@ -139,7 +143,12 @@ func wrapWorldModel(model *core.Node, position world.WorldPosition, scale float3
 	if info, ok := model.UserData().(glueModelInfo); ok {
 		root.SetUserData(info)
 		offsetX, offsetY, offsetZ := float32(0), float32(0), float32(0)
-		if info.hasStand {
+		if info.modelScale > 0 && info.modelScale != 1 {
+			// A model built for the character screens is scaled to fit and centred
+			// on its box, with attachment 0 as its stand point. In the world it
+			// is its true size with its own origin (the feet) at the position.
+			model.SetScale(1, 1, 1)
+		} else if info.hasStand {
 			offsetX, offsetY, offsetZ = -info.standPosition.X, info.standPosition.Z, -info.standPosition.Y
 		} else if info.modelBottom < 0 {
 			offsetZ = -info.modelBottom
@@ -325,6 +334,7 @@ func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureT
 		}
 		entity.node = wrapWorldModel(model, entity.movement.Position, worldEntityScale(entity, definition.displayScale, definition.modelScale))
 		entity.displayID = modelID
+		entity.modelPath, entity.extra = definition.path, definition.extra
 		scene.Add(entity.node)
 	}
 	if entity.node != nil {
@@ -341,38 +351,10 @@ func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureT
 			}
 			info.animation.SetMotion(motion)
 		}
+		syncWorldPlayerMount(scene, loader, tables, &entity.mount, entity.fields)
+		syncWorldEquipment(loader, entity.node, &entity.equipment, entity.modelPath, entity, entity.extra)
 	}
 	return nil
-}
-
-// syncWorldTarget derives the "target" unit from the player's replicated
-// UNIT_FIELD_TARGET (two uint32 halves) and refreshes its vitals. Name and
-// race/class data need query responses and are not populated here.
-func syncWorldTarget(rt *ui.Runtime, entities map[uint64]*worldEntity, player *worldEntity) bool {
-	if rt == nil || player == nil {
-		return false
-	}
-	guid := uint64(player.fields[world.UnitTargetField]) | uint64(player.fields[world.UnitTargetField+1])<<32
-	entity := entities[guid]
-	current := rt.UnitGUID("target")
-	if guid == 0 || entity == nil {
-		if current != 0 {
-			rt.SetTarget(nil)
-			return true
-		}
-		return false
-	}
-	changed := false
-	if current != guid {
-		info := ui.UnitInfo{GUID: guid, Exists: true, Connected: true, Visible: true,
-			Player: entity.objectType == world.ObjectTypePlayer, PowerToken: "MANA"}
-		rt.SetTarget(&info)
-		changed = true
-	}
-	if rt.ApplyUnitFields("target", entity.fields) {
-		changed = true
-	}
-	return changed
 }
 
 func applyWorldUpdateBlocks(scene *core.Node, loader *ui.Loader, tables *worldCreatureTables, entities map[uint64]*worldEntity, blocks []world.UpdateBlock, ownGUID uint64, floor func(float32, float32, float32) (float32, bool)) (int, []error) {
@@ -384,6 +366,7 @@ func applyWorldUpdateBlocks(scene *core.Node, loader *ui.Loader, tables *worldCr
 				scene.Remove(entity.node)
 				entity.node.Dispose()
 			}
+			entity.mount.dispose(scene)
 			delete(entities, guid)
 		}
 	}

@@ -20,14 +20,33 @@ func (e ScriptError) Error() string { return e.Source + ": " + e.Message }
 // Runtime owns the Lua state, widget registry, virtual template registry,
 // cvar store, and glue event dispatch for one interface session.
 type Runtime struct {
+	mapArrowTextures []*widget
+	inventory       inventoryState
+	clearItemCursor func()
+	worldMap worldMapState
+	bindings *bindingTable
+	animatingGroups map[*widget]bool
 	// scriptDirty is set when a script changed something a software UI repaint
 	// would show (a widget's alpha, visibility, size, text, texture, colour,
 	// anchors or value). UIEngine.Update reports it so animations driven by
 	// OnUpdate scripts are repainted without every setter forcing one.
 	scriptDirty bool
+	// chunkArgs are the arguments the file being loaded is called with.
+	chunkArgs   []lua.LValue
+	addonTables map[string]*lua.LTable
+	// addonMethods are the per-type method tables add-ons extend; loggedIn is
+	// whether PLAYER_LOGIN has been sent.
+	addonMethods map[string]*lua.LTable
+	loggedIn     bool
+	widgetMethodIndex *lua.LTable
+	// loadRoot is the XML entry of the TOC being loaded (empty for a Lua entry).
+	loadRoot string
+	// onMinimapZoom tells the engine the Minimap frame's zoom changed.
+	onMinimapZoom func()
 	L        *lua.LState
 	started  time.Time
 	gameplay gameplayState
+	combat   combatState
 
 	widgets           map[string]*widget
 	virtuals          map[string]*xmlNode
@@ -65,6 +84,8 @@ type Runtime struct {
 	// auto-sizing is enabled. The UI engine installs this so GetWidth/GetHeight
 	// match the original client's immediate post-SetText metrics.
 	measureText func(w *widget)
+	// layoutOf resolves a widget's rectangle in UI units on demand.
+	layoutOf func(w *widget) (Rect, bool)
 
 	// validateMovie probes a cinematic path the way native StartMovie does.
 	validateMovie func(file string, volume float64) bool
@@ -154,12 +175,13 @@ type Font struct {
 // method tables. Callers must Close it when done.
 func NewRuntime(host Host) *Runtime {
 	rt := &Runtime{
-		L:                 lua.NewState(lua.Options{SkipOpenLibs: false}),
+		L:                 lua.NewState(lua.Options{SkipOpenLibs: false, CallStackSize: 2048, RegistrySize: 1024 * 64, RegistryMaxSize: 1024 * 1024 * 4, RegistryGrowStep: 1024 * 32}),
 		started:           time.Now(),
 		widgets:           make(map[string]*widget),
 		virtuals:          make(map[string]*xmlNode),
 		fonts:             make(map[string]*Font),
 		units:             make(map[string]*UnitInfo),
+		animatingGroups:   make(map[*widget]bool),
 		loadedAddOns:      make(map[string]bool),
 		events:            make(map[string][]*widget),
 		cvars:             make(map[string]string),
@@ -174,7 +196,24 @@ func NewRuntime(host Host) *Runtime {
 	registerGlueAPI(rt)
 	registerUnitAPI(rt)
 	registerGameplayAPI(rt)
+	registerUnitExtras(rt)
 	registerStringHelpers(rt.L)
+	registerLuaExtensions(rt)
+	registerWorldMapAPI(rt)
+	registerWorldMapArrow(rt)
+	registerSetupFullscreenScale(rt)
+	registerBindingAPI(rt)
+	registerItemAPI(rt)
+	registerWorldExtraAPI(rt)
+	registerUnitReactionAPI(rt)
+	registerCombatAPI(rt)
+	registerAuraCancelAPI(rt)
+	registerAddonSupportAPI(rt)
+	registerWorldAPIDefaults(rt)
+	registerWorldMapDefaults(rt)
+	registerSurveyedAPIDefaults(rt)
+	registerAddOnAPIDefaults(rt)
+	separateStringMetatable(rt.L)
 	return rt
 }
 
@@ -281,7 +320,10 @@ func (rt *Runtime) doChunk(source, chunkName string) error {
 		return err
 	}
 	rt.L.Push(fn)
-	if err := rt.L.PCall(0, lua.MultRet, rt.errorHandler()); err != nil {
+	for _, arg := range rt.chunkArgs {
+		rt.L.Push(arg)
+	}
+	if err := rt.L.PCall(len(rt.chunkArgs), lua.MultRet, rt.errorHandler()); err != nil {
 		return err
 	}
 	return nil
@@ -306,7 +348,42 @@ func (rt *Runtime) errorHandler() *lua.LFunction {
 // the file they came from.
 func (rt *Runtime) doFileBody(source, interfacePath string) bool {
 	chunk := "@" + interfacePath
+	source = strings.TrimPrefix(source, "\ufeff")
+	if name, ok := addonOfPath(interfacePath); ok {
+		// An add-on's files are called with its name and a table every one of
+		// its files shares.
+		rt.chunkArgs = []lua.LValue{lua.LString(name), rt.addonTable(name)}
+		defer func() { rt.chunkArgs = nil }()
+	}
 	return rt.Execute(source, chunk)
+}
+
+// addonOfPath is the add-on folder an interface path lies in, if any.
+func addonOfPath(interfacePath string) (string, bool) {
+	normalized := strings.ReplaceAll(interfacePath, "/", "\\")
+	const prefix = `interface\addons\`
+	if len(normalized) <= len(prefix) || !strings.EqualFold(normalized[:len(prefix)], prefix) {
+		return "", false
+	}
+	rest := normalized[len(prefix):]
+	if slash := strings.IndexByte(rest, '\\'); slash > 0 {
+		return rest[:slash], true
+	}
+	return "", false
+}
+
+// addonTable is the table the files of an add-on share through `...`.
+func (rt *Runtime) addonTable(name string) *lua.LTable {
+	if rt.addonTables == nil {
+		rt.addonTables = make(map[string]*lua.LTable)
+	}
+	key := strings.ToLower(name) + "|" + rt.loadRoot
+	if table := rt.addonTables[key]; table != nil {
+		return table
+	}
+	table := rt.L.NewTable()
+	rt.addonTables[key] = table
+	return table
 }
 
 // fireHandler invokes a widget script handler if set, with only the widget
@@ -409,6 +486,34 @@ var _ = fmt.Sprintf
 
 // sprintf formats using the Lua string.format-compatible subset of Go
 // verbs used by the interface scripts (%s, %d, %f, and %.Nf).
-func sprintf(format string, args []interface{}) string {
-	return fmt.Sprintf(format, args...)
+
+// separateStringMetatable gives the string metatable an __index that is not
+// the string table itself. gopher-lua points string.__index at string, which
+// makes the table cyclic; Wow's string table has no such field, and FrameXML
+// walks it recursively when it builds the restricted environment.
+func separateStringMetatable(L *lua.LState) {
+	stringTable, ok := L.GetGlobal("string").(*lua.LTable)
+	if !ok {
+		return
+	}
+	index := L.NewTable()
+	meta := L.NewTable()
+	meta.RawSetString("__index", stringTable)
+	L.SetMetatable(index, meta)
+	stringTable.RawSetString("__index", index)
+}
+
+// luaFormat runs string.format over the arguments from index first, as
+// SetFormattedText does.
+func (rt *Runtime) luaFormat(L *lua.LState, first int) string {
+	format := L.GetField(L.GetGlobal("string"), "format")
+	top := L.GetTop()
+	L.Push(format)
+	for index := first; index <= top; index++ {
+		L.Push(L.Get(index))
+	}
+	L.Call(top-first+1, 1)
+	result := L.Get(-1).String()
+	L.Pop(1)
+	return result
 }

@@ -3,6 +3,7 @@ package render
 import (
 	"math"
 
+	"github.com/MorenoLand/Moreno.WoW/ui"
 	"github.com/g3n/engine/gls"
 	"github.com/g3n/engine/math32"
 )
@@ -64,11 +65,7 @@ func (animation *m2Animation) SetMotion(id uint16) {
 	if animation.motionID == id && animation.sequence >= 0 && animation.sequence < len(animation.model.sequences) {
 		return
 	}
-	sequence := m2SequenceIndex(animation.model, id)
-	if sequence < 0 {
-		id = 0
-		sequence = m2SequenceIndex(animation.model, id)
-	}
+	sequence, id := m2SequenceWithFallback(animation.model, id)
 	if sequence < 0 || sequence == animation.sequence && animation.motionID == id {
 		return
 	}
@@ -435,4 +432,35 @@ func (animation *m2Animation) fillPoseBones(bones []m2Bone, timeMS, globalTimeMS
 		bones[index] = bone
 	}
 	return bones
+}
+
+// m2AnimationFallbacks maps an animation id to the one AnimationData.dbc says
+// to play when a model has no sequence for it (flyers have no "fly forward",
+// say, and fall back to run).
+var m2AnimationFallbacks map[uint16]uint16
+
+func readAnimationFallbacks(loader *ui.Loader) map[uint16]uint16 {
+	result := make(map[uint16]uint16)
+	readWorldDBCRows(loader, `DBFilesClient\AnimationData.dbc`, 6, func(row []uint32) {
+		if row[5] != 0 && row[5] != row[0] {
+			result[uint16(row[0])] = uint16(row[5])
+		}
+	})
+	return result
+}
+
+// m2SequenceWithFallback finds the sequence for an animation id, following the
+// fallback chain, and the id actually used.
+func m2SequenceWithFallback(model *parsedM2, id uint16) (int, uint16) {
+	for steps := 0; steps < 8; steps++ {
+		if index := m2SequenceIndex(model, id); index >= 0 {
+			return index, id
+		}
+		next, ok := m2AnimationFallbacks[id]
+		if !ok {
+			break
+		}
+		id = next
+	}
+	return m2SequenceIndex(model, 0), 0
 }

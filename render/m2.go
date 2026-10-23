@@ -216,6 +216,7 @@ type m2Camera struct {
 type m2SceneLight struct {
 	enabled          bool
 	omni             bool
+	world            bool // lit by the world atmosphere instead of baked vertex light
 	direction        [3]float32
 	ambientIntensity float32
 	ambient          [3]float32
@@ -239,6 +240,7 @@ type glueModelInfo struct {
 	near          float32
 	hasStand      bool
 	modelBottom   float32
+	modelTop      float32 // highest point of the model in its own units, before any fit scale
 	stats         glueModelStats
 	particles     *m2ParticleSystem
 	animation     *m2Animation
@@ -339,11 +341,19 @@ func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model 
 		geom.AddVBO(alphaVBO)
 		geom.AddVBO(combinerVBO)
 		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
+		var meshMaterial material.IMaterial = mat
+		shaderName := "morenowow_m2"
 		if part.material.blend == 1 {
-			mat.SetShader("morenowow_m2_alpha_key")
-		} else {
-			mat.SetShader("morenowow_m2")
+			shaderName = "morenowow_m2_alpha_key"
 		}
+		if light.world {
+			worldMat := newWorldMaterial()
+			worldMat.lit = true
+			worldMat.noFog = !worldFoggedBlending(m2MaterialBlending(part.material.blend))
+			mat, meshMaterial = worldMat.Standard, worldMat
+			shaderName = strings.Replace(shaderName, "morenowow_", "morenowow_world_", 1)
+		}
+		mat.SetShader(shaderName)
 		mat.SetShaderUnique(false)
 		if part.material.flags&0x04 != 0 {
 			mat.SetSide(material.SideDouble)
@@ -390,7 +400,7 @@ func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model 
 				mat.AddTexture(tex)
 			}
 		}
-		mesh := graphic.NewMesh(geom, mat)
+		mesh := graphic.NewMesh(geom, meshMaterial)
 		mesh.SetRenderOrder(m2RenderOrder(part))
 		root.Add(mesh)
 		animatedMeshes = append(animatedMeshes, &m2AnimatedMesh{part: part, positionVBO: positionVBO, normalVBO: normalVBO, uvVBO: uvVBO, uv2VBO: uv2VBO, colorVBO: colorVBO, alphaVBO: alphaVBO, light: light, baseUVs: append(math32.ArrayF32(nil), part.uvs...), baseUVs2: append(math32.ArrayF32(nil), part.uvs2...), textureTransformIndices: append([]int(nil), part.textureTransformIndices...)})
@@ -406,8 +416,12 @@ func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model 
 	root.SetPosition(-center[0]*scale, -center[1]*scale, -center[2]*scale)
 	root.SetScale(scale, scale, scale)
 	modelBottom := float32(math.MaxFloat32)
+	modelTop := float32(-math.MaxFloat32)
 	for _, part := range parts {
 		for index := 1; index < len(part.positions); index += 3 {
+			if top := part.positions[index]; top > modelTop {
+				modelTop = top
+			}
 			if bottom := (part.positions[index] - center[1]) * scale; bottom < modelBottom {
 				modelBottom = bottom
 			}
@@ -420,7 +434,7 @@ func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model 
 		stats.particlePoints = particles.pointCount
 	}
 	animation := buildM2Animation(&model, skin, animatedMeshes, modelPath)
-	info := glueModelInfo{stats: stats, particles: particles, animation: animation, modelScale: scale, modelBottom: modelBottom}
+	info := glueModelInfo{stats: stats, particles: particles, animation: animation, modelScale: scale, modelBottom: modelBottom, modelTop: modelTop}
 	for _, attachment := range model.attachments {
 		if attachment.id == 0 {
 			point := modelPoint(attachment.position, center, scale)
@@ -900,7 +914,11 @@ func m2RenderOrder(part *m2Part) int {
 	if part.material.blend < 2 {
 		return -100 + part.renderOrder
 	}
-	return int(part.priorityPlane)*1000000 + int(part.materialLayer)*10000 + int(part.material.blend)*100 + part.renderOrder
+	order := int(part.priorityPlane)*1000000 + int(part.materialLayer)*10000 + int(part.material.blend)*100 + part.renderOrder
+	if (part.priorityPlane == 6 && part.renderOrder >= 49 && part.renderOrder <= 50) || (part.priorityPlane == 9 && part.renderOrder >= 47 && part.renderOrder <= 48) {
+		order -= 2 * part.renderOrder
+	}
+	return order
 }
 
 func m2MaterialBlending(raw uint16) material.Blending {

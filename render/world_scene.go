@@ -20,19 +20,22 @@ import (
 )
 
 const (
-	worldTileSize        = 1600.0 / 3.0
-	worldChunkSize       = worldTileSize / 16.0
-	worldUnitSize        = worldChunkSize / 8.0
-	worldHeightCount     = 145
-	worldStreamRadius    = 1
-	worldCollisionCell   = 32.0
-	worldFloorNormalZ    = 0.5
-	worldBodyRadius      = 0.55
-	worldBodyHeight      = 2.0
-	worldStepHeight      = 0.8
-	worldMaxGroundSnap   = 5.0
-	worldObjectDistance  = worldTileSize * 0.5
-	worldWMODoodadBudget = 128
+	worldTileSize       = 1600.0 / 3.0
+	worldChunkSize      = worldTileSize / 16.0
+	worldUnitSize       = worldChunkSize / 8.0
+	worldHeightCount    = 145
+	worldStreamRadius   = 1
+	worldCollisionCell  = 32.0
+	worldFloorNormalZ   = 0.5
+	worldBodyRadius     = 0.55
+	worldBodyHeight     = 2.0
+	worldStepHeight     = 0.8
+	worldMaxGroundSnap  = 5.0
+	worldObjectDistance = worldTileSize * 0.5
+	// worldTileObjectDistance is how far from a tile centre its placed objects are
+	// built: the whole tile.
+	worldTileObjectDistance = worldTileSize * 0.75
+	worldWMODoodadBudget    = 128
 )
 
 type worldADT struct {
@@ -53,9 +56,11 @@ type worldADTChunk struct {
 	holes     uint16
 	position  [3]float32
 	heights   [worldHeightCount]float32
+	normals   [worldHeightCount][3]int8
 	texture   int
 	layers    []worldADTLayer
 	alphaMaps [][]byte
+	liquids   []worldLiquidSheet
 }
 
 type worldADTLayer struct {
@@ -120,6 +125,7 @@ type worldWMOTriangle struct {
 }
 
 type worldWMOGroup struct {
+	flags     uint32
 	vertices  []float32
 	normals   []float32
 	uvs       []float32
@@ -132,10 +138,13 @@ type worldWMOGroup struct {
 type worldWMOMeshKey struct {
 	material   worldWMOMaterial
 	batchFlags uint8
+	// outdoor groups are lit by the sun and sky; indoor ones keep their baked colours.
+	outdoor bool
 }
 
 type worldWMOMeshBuilder struct {
 	positions math32.ArrayF32
+	normals   math32.ArrayF32
 	uvs       math32.ArrayF32
 	colors    math32.ArrayF32
 	indices   math32.ArrayU32
@@ -171,6 +180,9 @@ type worldSceneCollision struct {
 	solids       []worldCollisionMesh
 	cells        map[[2]int][]worldCollisionRef
 	terrainCells map[[2]int][]int
+	liquid       *worldLiquidAnimator
+	// owned are textures made for this tile alone, released when it unloads.
+	owned []*texture.Texture2D
 }
 
 type worldCollisionRef struct {
@@ -183,6 +195,7 @@ type worldCollisionTriangle struct {
 	normal   [3]float32
 	min, max [3]float32
 	noCamera bool
+	mopy     uint8
 }
 
 type worldCollisionMesh struct {
@@ -234,6 +247,7 @@ type worldSceneAssetCache struct {
 	opaqueAlpha        *texture.Texture2D
 	wmoModels          map[string]worldWMORoot
 	m2Parts            map[string]map[string]*m2Part
+	liquid             *worldLiquidAnimator
 }
 
 func newWorldSceneAssetCache() *worldSceneAssetCache {
@@ -241,7 +255,7 @@ func newWorldSceneAssetCache() *worldSceneAssetCache {
 		textures: make(map[string]*texture.Texture2D), placeholder: texture.NewTexture2DFromRGBA(worldPlaceholderTexture()),
 		terrainPlaceholder: texture.NewTexture2DFromRGBA(worldSolidTexture(color.RGBA{R: 255, G: 255, B: 255, A: 255})),
 		zeroAlpha:          texture.NewTexture2DFromRGBA(worldAlphaTexture(nil, false)), opaqueAlpha: texture.NewTexture2DFromRGBA(worldAlphaTexture(nil, true)),
-		wmoModels: make(map[string]worldWMORoot), m2Parts: make(map[string]map[string]*m2Part),
+		wmoModels: make(map[string]worldWMORoot), m2Parts: make(map[string]map[string]*m2Part), liquid: newWorldLiquidAnimator(),
 	}
 }
 
@@ -343,7 +357,7 @@ func (collision worldSceneCollision) move(from, to [3]float32) [3]float32 {
 	if deltaX == 0 && deltaY == 0 {
 		return to
 	}
-	if _, normal, ok := collision.terrain(to[0], to[1]); ok && normal[2] < worldFloorNormalZ {
+	if height, normal, ok := collision.terrain(to[0], to[1]); ok && normal[2] < worldFloorNormalZ && from[2] >= height-1 {
 		uphillX, uphillY := -normal[0], -normal[1]
 		lengthSquared := uphillX*uphillX + uphillY*uphillY
 		if lengthSquared > 0 {
@@ -534,53 +548,35 @@ func loadWorldTerrainProgress(loader *ui.Loader, position world.WorldPosition, p
 	root := core.NewNode()
 	info := worldSceneInfo{mapName: mapName, tileX: tileX, tileY: tileY}
 	cache := newWorldSceneAssetCache()
-	collisionChunks := make([]worldADTChunk, 0, 256*(worldStreamRadius*2+1)*(worldStreamRadius*2+1))
-	collisionSolids := make([]worldCollisionMesh, 0)
-	requestedTiles := (worldStreamRadius*2 + 1) * (worldStreamRadius*2 + 1)
-	for offsetY := -worldStreamRadius; offsetY <= worldStreamRadius; offsetY++ {
-		for offsetX := -worldStreamRadius; offsetX <= worldStreamRadius; offsetX++ {
+	streamer := newWorldTerrainStreamer(loader, mapName, position, bigAlpha, cache, root)
+	// Only the tile the player stands on is loaded before the world opens; the
+	// streamer brings in its neighbours, nearest first, while the player looks
+	// around.
+	requestedTiles := 1
+	for offsetY := 0; offsetY <= 0; offsetY++ {
+		for offsetX := 0; offsetX <= 0; offsetX++ {
 			neighborX, neighborY := tileX+offsetX, tileY+offsetY
 			if neighborX < 0 || neighborX >= 64 || neighborY < 0 || neighborY >= 64 {
-				continue
-			}
-			path := fmt.Sprintf(`World\Maps\%s\%s_%d_%d.adt`, mapName, mapName, neighborX, neighborY)
-			data, readErr := loader.ReadFile(path)
-			if readErr != nil {
-				if neighborX == tileX && neighborY == tileY {
-					return nil, worldSceneInfo{}, fmt.Errorf("read %s: %w", path, readErr)
-				}
-				continue
-			}
-			adt, parseErr := parseWorldADTWithAlpha(data, bigAlpha)
-			if parseErr != nil {
-				if neighborX == tileX && neighborY == tileY {
-					return nil, worldSceneInfo{}, fmt.Errorf("parse %s: %w", path, parseErr)
-				}
 				continue
 			}
 			if progress != nil {
 				progress(0.1 + 0.8*float64(info.tiles)/float64(requestedTiles))
 			}
-			tileRoot, tileInfo, buildErr := buildWorldTerrainProgressWithCache(loader, adt, position, cache, nil)
-			if buildErr != nil {
+			tile, loadErr := streamer.loadTile(neighborX, neighborY)
+			if loadErr != nil {
 				if neighborX == tileX && neighborY == tileY {
-					return nil, worldSceneInfo{}, fmt.Errorf("build %s: %w", path, buildErr)
+					return nil, worldSceneInfo{}, loadErr
 				}
 				continue
 			}
-			root.Add(tileRoot)
+			streamer.adopt([2]int{neighborX, neighborY}, tile)
 			info.tiles++
-			info.chunks += tileInfo.chunks
-			info.vertices += tileInfo.vertices
-			info.triangles += tileInfo.triangles
-			info.textures += tileInfo.textures
-			info.wmoMeshes += tileInfo.wmoMeshes
-			info.m2Meshes += tileInfo.m2Meshes
-			collision, ok := tileRoot.UserData().(worldSceneCollision)
-			if ok {
-				collisionChunks = append(collisionChunks, collision.chunks...)
-				collisionSolids = append(collisionSolids, collision.solids...)
-			}
+			info.chunks += tile.info.chunks
+			info.vertices += tile.info.vertices
+			info.triangles += tile.info.triangles
+			info.textures += tile.info.textures
+			info.wmoMeshes += tile.info.wmoMeshes
+			info.m2Meshes += tile.info.m2Meshes
 		}
 	}
 	if info.tiles == 0 || info.chunks == 0 {
@@ -589,7 +585,9 @@ func loadWorldTerrainProgress(loader *ui.Loader, position world.WorldPosition, p
 	if progress != nil {
 		progress(1)
 	}
-	root.SetUserData(newWorldSceneCollision(collisionChunks, collisionSolids))
+	streamer.rebuildCollision(true)
+	streamer.start()
+	root.SetUserData(streamer)
 	return root, info, nil
 }
 
@@ -760,7 +758,7 @@ func parseWorldADT(data []byte) (worldADT, error) {
 func parseWorldADTWithAlpha(data []byte, bigAlpha bool) (worldADT, error) {
 	result := worldADT{bigAlpha: bigAlpha}
 	var main []byte
-	var mmdx, mmid, mddf, mwmo, mwid, modf []byte
+	var mmdx, mmid, mddf, mwmo, mwid, modf, mh2o []byte
 	for offset := 0; offset < len(data); {
 		id, _, payload, _, next, ok := worldChunk(data, offset)
 		if !ok {
@@ -787,6 +785,8 @@ func parseWorldADTWithAlpha(data []byte, bigAlpha bool) (worldADT, error) {
 			mwid = payload
 		case "MODF":
 			modf = payload
+		case "MH2O":
+			mh2o = payload
 		}
 		offset = next
 	}
@@ -800,6 +800,7 @@ func parseWorldADTWithAlpha(data []byte, bigAlpha bool) (worldADT, error) {
 	result.m2Placements = parseWorldM2Placements(mddf, result.m2Names)
 	result.wmoNames = parseWorldOffsetNames(mwmo, mwid)
 	result.wmoPlacements = parseWorldWMOPlacements(modf, result.wmoNames)
+	liquids := parseWorldLiquids(mh2o)
 	for index := 0; index < 256; index++ {
 		base := index * 16
 		chunkOffset := int(binary.LittleEndian.Uint32(main[base : base+4]))
@@ -808,6 +809,7 @@ func parseWorldADTWithAlpha(data []byte, bigAlpha bool) (worldADT, error) {
 		}
 		chunk, ok := parseWorldMCNK(data, chunkOffset, index%16, index/16, result.textures, result.bigAlpha)
 		if ok {
+			chunk.liquids = liquids[index]
 			result.chunks = append(result.chunks, chunk)
 		}
 	}
@@ -974,7 +976,7 @@ func parseWorldWMOGroup(data []byte) (worldWMOGroup, error) {
 	if len(mogp) < 68 {
 		return worldWMOGroup{}, fmt.Errorf("MOGP is short")
 	}
-	group := worldWMOGroup{}
+	group := worldWMOGroup{flags: binary.LittleEndian.Uint32(mogp[8:12])}
 	for offset := 68; offset < len(mogp); {
 		id, _, payload, _, next, ok := worldChunk(mogp, offset)
 		if !ok {
@@ -1031,7 +1033,7 @@ func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.World
 	for _, placement := range adt.m2Placements {
 		origin := worldWMOPosition(placement.position)
 		dx, dy := origin[0]-position.X, origin[1]-position.Y
-		if dx*dx+dy*dy > worldObjectDistance*worldObjectDistance {
+		if dx*dx+dy*dy > worldTileObjectDistance*worldTileObjectDistance {
 			continue
 		}
 		parts, ok := cache.m2Parts[placement.path]
@@ -1104,11 +1106,13 @@ func buildWorldM2BatchedMesh(loader *ui.Loader, builder *worldM2MeshBuilder, tex
 	if len(builder.part.uvSets) > 1 && len(builder.uvs2) > 0 {
 		geom.AddVBO(gls.NewVBO(builder.uvs2).AddCustomAttrib("VertexTexcoord2", 2))
 	}
-	mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
+	mat := newWorldMaterial()
+	mat.lit = true
+	mat.noFog = !worldFoggedBlending(m2MaterialBlending(builder.part.material.blend))
 	if builder.part.material.blend == 1 {
-		mat.SetShader("morenowow_m2_alpha_key")
+		mat.SetShader("morenowow_world_m2_alpha_key")
 	} else {
-		mat.SetShader("morenowow_m2")
+		mat.SetShader("morenowow_world_m2")
 	}
 	mat.SetShaderUnique(false)
 	if builder.part.material.flags&0x04 != 0 {
@@ -1206,11 +1210,13 @@ func buildWorldM2Instance(loader *ui.Loader, parts map[string]*m2Part, textures 
 		if len(part.uvSets) > 1 {
 			geom.AddVBO(gls.NewVBO(part.uvs2).AddCustomAttrib("VertexTexcoord2", 2))
 		}
-		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
+		mat := newWorldMaterial()
+		mat.lit = true
+		mat.noFog = !worldFoggedBlending(m2MaterialBlending(part.material.blend))
 		if part.material.blend == 1 {
-			mat.SetShader("morenowow_m2_alpha_key")
+			mat.SetShader("morenowow_world_m2_alpha_key")
 		} else {
-			mat.SetShader("morenowow_m2")
+			mat.SetShader("morenowow_world_m2")
 		}
 		mat.SetShaderUnique(false)
 		if part.material.flags&0x04 != 0 {
@@ -1319,7 +1325,7 @@ func worldCharacterModelPath(character world.Character) string {
 }
 
 func buildWorldPlayer(loader *ui.Loader, character world.Character, position world.WorldPosition) (*core.Node, error) {
-	model, err := loadGlueCharacterModel(loader, character)
+	model, err := loadCharacterModel(loader, character, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1403,12 +1409,12 @@ func worldWMOPlacementInRange(placement worldWMOPlacement, position world.WorldP
 	if maxX-minX < 0.001 && maxY-minY < 0.001 {
 		origin := worldWMOPosition(placement.position)
 		dx, dy := origin[0]-position.X, origin[1]-position.Y
-		return dx*dx+dy*dy <= worldObjectDistance*worldObjectDistance
+		return dx*dx+dy*dy <= worldTileObjectDistance*worldTileObjectDistance
 	}
 	closestX := float32(math.Max(float64(minX), math.Min(float64(position.X), float64(maxX))))
 	closestY := float32(math.Max(float64(minY), math.Min(float64(position.Y), float64(maxY))))
 	dx, dy := closestX-position.X, closestY-position.Y
-	return dx*dx+dy*dy <= worldObjectDistance*worldObjectDistance
+	return dx*dx+dy*dy <= worldTileObjectDistance*worldTileObjectDistance
 }
 
 func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, model worldWMORoot, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) ([]*graphic.Mesh, []worldCollisionMesh) {
@@ -1424,6 +1430,22 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 			continue
 		}
 		collisionMesh := worldCollisionMesh{triangles: make([]worldCollisionTriangle, 0, len(group.indices)/3)}
+		// Detail geometry (gears, railings) never blocks unless a group is nothing but
+		// detail; collision hulls and rendered solids do.
+		blocks := func(triangle int) bool {
+			if triangle >= len(group.triangles) {
+				return true
+			}
+			flags := group.triangles[triangle].flags
+			return flags == 0 || flags&0x08 != 0 || (flags&0x20 != 0 && flags&0x04 == 0)
+		}
+		anyBlocking := false
+		for triangle := 0; triangle < len(group.indices)/3; triangle++ {
+			if blocks(triangle) {
+				anyBlocking = true
+				break
+			}
+		}
 		for triangleIndex := 0; triangleIndex+2 < len(group.indices); triangleIndex += 3 {
 			point := func(index uint16) ([3]float32, bool) {
 				at := int(index) * 3
@@ -1431,6 +1453,9 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 					return [3]float32{}, false
 				}
 				return transformWorldWMOPoint([3]float32{group.vertices[at], group.vertices[at+1], group.vertices[at+2]}, placement), true
+			}
+			if anyBlocking && !blocks(triangleIndex/3) {
+				continue
 			}
 			a, aok := point(group.indices[triangleIndex])
 			b, bok := point(group.indices[triangleIndex+1])
@@ -1440,6 +1465,9 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 			}
 			noCamera := triangleIndex/3 < len(group.triangles) && group.triangles[triangleIndex/3].flags&0x01 != 0
 			if triangle, valid := worldCollisionTriangleFromPoints(a, b, c, noCamera); valid {
+				if triangleIndex/3 < len(group.triangles) {
+					triangle.mopy = group.triangles[triangleIndex/3].flags
+				}
 				collisionMesh.triangles = append(collisionMesh.triangles, triangle)
 			}
 		}
@@ -1459,10 +1487,10 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 			if int(batch.material) < len(model.materials) {
 				materialInfo = model.materials[batch.material]
 			}
-			key := worldWMOMeshKey{material: materialInfo, batchFlags: batch.flags}
+			key := worldWMOMeshKey{material: materialInfo, batchFlags: batch.flags, outdoor: group.flags&0x8 != 0 && group.flags&0x2000 == 0}
 			builder := builders[key]
 			if builder == nil {
-				builder = &worldWMOMeshBuilder{positions: math32.NewArrayF32(0, len(group.vertices)), uvs: math32.NewArrayF32(0, len(group.vertices)/3*2), colors: math32.NewArrayF32(0, len(group.vertices)), indices: math32.NewArrayU32(0, batch.count)}
+				builder = &worldWMOMeshBuilder{positions: math32.NewArrayF32(0, len(group.vertices)), normals: math32.NewArrayF32(0, len(group.vertices)), uvs: math32.NewArrayF32(0, len(group.vertices)/3*2), colors: math32.NewArrayF32(0, len(group.vertices)), indices: math32.NewArrayU32(0, batch.count)}
 				builders[key] = builder
 			}
 			base, exists := bases[key]
@@ -1472,6 +1500,11 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 				for index := 0; index+2 < len(group.vertices); index += 3 {
 					point := transformWorldWMOPoint([3]float32{group.vertices[index], group.vertices[index+1], group.vertices[index+2]}, placement)
 					builder.positions.Append(point[0], point[1], point[2])
+					normal := [3]float32{0, 0, 1}
+					if index+2 < len(group.normals) {
+						normal = transformWorldWMONormal([3]float32{group.normals[index], group.normals[index+1], group.normals[index+2]}, placement)
+					}
+					builder.normals.Append(normal[0], normal[1], normal[2])
 					uvIndex := index / 3 * 2
 					if uvIndex+1 < len(group.uvs) {
 						builder.uvs.Append(group.uvs[uvIndex], group.uvs[uvIndex+1])
@@ -1515,8 +1548,11 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 		geom.SetIndices(builder.indices)
 		geom.AddVBO(gls.NewVBO(builder.positions).AddAttrib(gls.VertexPosition))
 		geom.AddVBO(gls.NewVBO(builder.uvs).AddAttrib(gls.VertexTexcoord))
+		geom.AddVBO(gls.NewVBO(builder.normals).AddAttrib(gls.VertexNormal))
 		geom.AddVBO(gls.NewVBO(builder.colors).AddAttrib(gls.VertexColor))
-		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
+		mat := newWorldMaterial()
+		mat.noFog = key.material.blend == 3 || key.material.blend == 4
+		mat.lit = key.outdoor
 		shader := "morenowow_world_wmo"
 		if key.material.blend == 1 {
 			shader = "morenowow_world_wmo_alpha_key"
@@ -1627,6 +1663,11 @@ func parseWorldMCNK(data []byte, offset, fallbackX, fallbackY int, textures []st
 	}
 	for index := range chunk.heights {
 		chunk.heights[index] = math.Float32frombits(binary.LittleEndian.Uint32(mcvt[index*4 : index*4+4]))
+	}
+	if mcnr, found := worldSubChunk(data, offset, int(binary.LittleEndian.Uint32(payload[0x18:0x1c])), "MCNR"); found && len(mcnr) >= worldHeightCount*3 {
+		for index := range chunk.normals {
+			chunk.normals[index] = [3]int8{int8(mcnr[index*3]), int8(mcnr[index*3+1]), int8(mcnr[index*3+2])}
+		}
 	}
 	layers := int(binary.LittleEndian.Uint32(payload[0x0c:0x10]))
 	if layers > 4 {
@@ -1746,7 +1787,9 @@ func buildWorldSky() *core.Node {
 	root := core.NewNode()
 	root.SetRotation(math.Pi/2, 0, 0)
 	geom := geometry.NewSphere(2400, 64, 32)
-	mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
+	mat := newWorldMaterial()
+	mat.sky = true
+	mat.lit = true
 	mat.SetShader("morenowow_world_sky")
 	mat.SetShaderUnique(true)
 	mat.SetSide(material.SideDouble)
@@ -1768,6 +1811,7 @@ func buildWorldTerrainProgress(loader *ui.Loader, adt worldADT, position world.W
 func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache, progress func(float64)) (*core.Node, worldSceneInfo, error) {
 	root := core.NewNode()
 	info := worldSceneInfo{textures: len(adt.textures)}
+	var owned []*texture.Texture2D
 	for chunkIndex, chunk := range adt.chunks {
 		positions := math32.NewArrayF32(0, worldHeightCount*3)
 		normals := math32.NewArrayF32(0, worldHeightCount*3)
@@ -1775,7 +1819,7 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 		for index := 0; index < worldHeightCount; index++ {
 			point := worldHeightPoint(chunk, index)
 			positions.Append(point[0], point[1], point[2])
-			normals.Append(0, 0, 1)
+			normals.Append(worldChunkNormal(chunk, index))
 			pair, within := index/17, index%17
 			row, col := pair*2, within
 			if within >= 9 {
@@ -1817,10 +1861,14 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 		} else {
 			layerIndices[0] = chunk.texture
 		}
-		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
+		mat := newWorldMaterial()
+		mat.lit = true
 		mat.SetShader("morenowow_world_terrain")
 		mat.SetShaderUnique(false)
 		mat.SetSide(material.SideDouble)
+		// Terrain is the backmost surface: objects and decals lying on it must win
+		// the depth test at any distance and view angle.
+		mat.SetPolygonOffset(2, 4)
 		mat.SetUseLights(material.UseLightNone)
 		layerCount := len(chunk.layers)
 		if layerCount == 0 {
@@ -1853,6 +1901,7 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 					alphaTexture = cache.opaqueAlpha
 				} else {
 					alphaTexture = texture.NewTexture2DFromRGBA(worldAlphaTexture(chunk.alphaMaps[index], false))
+					owned = append(owned, alphaTexture)
 				}
 			}
 			mat.AddTexture(alphaTexture)
@@ -1875,6 +1924,9 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 	if info.chunks == 0 {
 		return nil, worldSceneInfo{}, fmt.Errorf("ADT produced no drawable chunks")
 	}
+	for _, mesh := range buildWorldLiquids(loader, adt.chunks, cache.liquid) {
+		root.Add(mesh)
+	}
 	wmoRoot, wmoCount, wmoSolids := buildWorldWMOInstances(loader, adt, position, cache)
 	if wmoRoot != nil {
 		root.Add(wmoRoot)
@@ -1891,7 +1943,9 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 	if progress != nil {
 		progress(0.98)
 	}
-	root.SetUserData(newWorldSceneCollision(adt.chunks, wmoSolids))
+	tileCollision := newWorldSceneCollision(adt.chunks, wmoSolids)
+	tileCollision.owned = owned
+	root.SetUserData(tileCollision)
 	return root, info, nil
 }
 
@@ -1956,4 +2010,27 @@ func worldSubChunk(data []byte, chunkOffset, relative int, expected string) ([]b
 	}
 	id, _, payload, _, _, ok := worldChunk(data, chunkOffset+relative)
 	return payload, ok && id == expected
+}
+
+// worldChunkNormal is the terrain normal at a height vertex, from the chunk's
+// MCNR block (signed bytes in world x, y, z order); a chunk without one is flat.
+func worldChunkNormal(chunk worldADTChunk, index int) (float32, float32, float32) {
+	n := chunk.normals[index]
+	x, y, z := float32(n[0])/127, float32(n[1])/127, float32(n[2])/127
+	length := float32(math.Sqrt(float64(x*x + y*y + z*z)))
+	if length < 0.0001 {
+		return 0, 0, 1
+	}
+	return x / length, y / length, z / length
+}
+
+// transformWorldWMONormal turns a group normal the way a placement turns the
+// group's points, without the scale and position.
+func transformWorldWMONormal(normal [3]float32, placement worldWMOPlacement) [3]float32 {
+	roll := float64(placement.rotation[2]) * math.Pi / 180
+	pitch := -float64(placement.rotation[0]) * math.Pi / 180
+	yaw := (float64(placement.rotation[1]) + 180) * math.Pi / 180
+	normal = rotateWorldWMOX(normal, roll)
+	normal = rotateWorldWMOY(normal, pitch)
+	return rotateWorldWMOZ(normal, yaw)
 }

@@ -43,6 +43,12 @@ type worldEntryResult struct {
 	spells    map[uint32]ui.SpellInfo
 	skills    map[uint32]ui.SpellSkillLine
 	spellErr  error
+	mapData   *ui.MapCatalog
+	mapErr    error
+	itemLocal   map[uint32]ui.ItemLocal
+	itemIcons   map[uint32]string
+	itemClasses ui.ItemClassNames
+	itemErr     error
 }
 
 type sceneLoadResult struct {
@@ -62,8 +68,14 @@ type clientHost struct {
 	castSpell     func(uint32, uint64) error
 	cancelCast    func(uint32) error
 	setSelection  func(uint64) error
+	cancelAura    func(uint32) error
+	cancelMount   func() error
+	startAttack   func(uint64) error
+	stopAttack    func() error
+	cycleEnemy    func(bool) error
 	cancelChannel func(uint32) error
 	setAction     func(int, world.ActionButton) error
+	session       func() *network.Session
 	logout        func()
 	quit          func()
 	audio         *audioManager
@@ -169,6 +181,36 @@ func (h *clientHost) SetSelection(guid uint64) error {
 	}
 	return h.setSelection(guid)
 }
+func (h *clientHost) CancelAura(spellID uint32) error {
+	if h.cancelAura == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return h.cancelAura(spellID)
+}
+func (h *clientHost) CancelMount() error {
+	if h.cancelMount == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return h.cancelMount()
+}
+func (h *clientHost) StartAttack(guid uint64) error {
+	if h.startAttack == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return h.startAttack(guid)
+}
+func (h *clientHost) StopAttack() error {
+	if h.stopAttack == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return h.stopAttack()
+}
+func (h *clientHost) CycleEnemy(reverse bool) error {
+	if h.cycleEnemy == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return h.cycleEnemy(reverse)
+}
 func (h *clientHost) CancelChannel(id uint32) error {
 	if h.cancelChannel == nil {
 		return fmt.Errorf("world session is closed")
@@ -227,6 +269,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		}
 		return activeSession.CancelChannel(id)
 	}
+	host.session = func() *network.Session { return activeSession }
 	host.setAction = func(slot int, action world.ActionButton) error {
 		if activeSession == nil {
 			return fmt.Errorf("world session is closed")
@@ -280,6 +323,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			result := worldEntryResult{position: position, character: character, err: err}
 			if err == nil {
 				result.spells, result.skills, result.spellErr = readWorldSpellCatalog(loader)
+				result.mapData, result.mapErr = readWorldMapCatalog(loader)
+				result.itemLocal, result.itemIcons, result.itemClasses, result.itemErr = readWorldItemCatalog(loader)
 			}
 			worldResults <- result
 		}()
@@ -309,6 +354,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var uiMapTex *texture.Texture2D
 	var uiChatImage *gui.Image
 	var uiChatTex *texture.Texture2D
+	var uiCursorImage *gui.Image
+	var uiCursorTex *texture.Texture2D
+	uiCursorKey := ""
+	var playerEquipment *worldEquipment
+	playerModelPath := ""
 	var eng *ui.UIEngine
 	var err error
 	lastUIRefresh := time.Time{}
@@ -336,8 +386,15 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	debugModelError := ""
 	worldMode := false
 	var worldCamera *worldCameraController
+	var worldLiquid *worldLiquidAnimator
+	var worldStreamer *worldTerrainStreamer
+	worldLiquidStart := time.Now()
+	var worldLight *worldLightTables
+	var worldClock worldGameClock
 	var worldMovement *worldMovementReporter
+	var worldMoveNet *worldMovementNet
 	var worldPlayer *core.Node
+	var playerMount *worldMountRig
 	var worldModel *core.Node
 	var worldSky *core.Node
 	worldEntities := make(map[uint64]*worldEntity)
@@ -346,7 +403,91 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	worldCreatureCache := worldCreatureTables{}
 	var worldFloor func(float32, float32, float32) (float32, bool)
 	var worldCharacter world.Character
+	worldNameState := newWorldNames()
+	worldPlates := newWorldNameplates()
+	var worldFactionState *worldFactions
+	worldSend := func(opcode world.ClientOpcode, body []byte) error {
+		if activeSession == nil {
+			return fmt.Errorf("world session is closed")
+		}
+		return activeSession.SendRaw(opcode, body)
+	}
+	var selectTarget func(guid uint64) error
+	host.startAttack = func(guid uint64) error {
+		// The client refuses to attack from a mount before asking the server.
+		if player := worldEntities[worldCharacter.GUID]; player != nil && player.fields[world.UnitMountDisplayIDField] != 0 {
+			uiEngine.Rt.ShowGlobalError("ERR_ATTACK_MOUNTED")
+			return nil
+		}
+		return worldSend(world.AttackSwingOpcode, world.BuildAttackSwing(guid))
+	}
+	host.cancelMount = func() error { return worldSend(world.CancelMountAuraOpcode, nil) }
+	host.cancelAura = func(spellID uint32) error {
+		body := []byte{byte(spellID), byte(spellID >> 8), byte(spellID >> 16), byte(spellID >> 24)}
+		return worldSend(world.CancelAuraOpcode, body)
+	}
+	host.stopAttack = func() error { return worldSend(world.AttackStopOpcode, nil) }
+	host.cycleEnemy = func(reverse bool) error {
+		player := worldEntities[worldCharacter.GUID]
+		if player == nil || worldCamera == nil || activeSession == nil {
+			return nil
+		}
+		targets := worldTabTargets(worldEntities, player, worldFactionState, worldCamera.position, 41)
+		if len(targets) == 0 {
+			return nil
+		}
+		current := uiEngine.Rt.UnitGUID("target")
+		next := 0
+		for index, guid := range targets {
+			if guid == current {
+				next = index + 1
+				if reverse {
+					next = index - 1 + len(targets)
+				}
+				next %= len(targets)
+				break
+			}
+		}
+		return selectTarget(targets[next])
+	}
+	worldCombatState := &worldCombat{names: worldNameState, send: worldSend}
+	// selectTarget tells the server and shows the selection at once; the
+	// server's own UNIT_FIELD_TARGET update then confirms it.
+	selectTarget = func(guid uint64) error {
+		if activeSession == nil {
+			return fmt.Errorf("world session is closed")
+		}
+		if player := worldEntities[worldCharacter.GUID]; player != nil {
+			player.fields[world.UnitTargetField] = uint32(guid)
+			player.fields[world.UnitTargetField+1] = uint32(guid >> 32)
+			syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend)
+		}
+		return activeSession.SetSelection(guid)
+	}
+	host.setSelection = selectTarget
+// selectTarget tells the server and shows the selection at once; the	// server's own UNIT_FIELD_TARGET update then confirms it.	selectTarget := func(guid uint64) error {		if activeSession == nil {			return fmt.Errorf("world session is closed")		}		if player := worldEntities[worldCharacter.GUID]; player != nil {			player.fields[world.UnitTargetField] = uint32(guid)			player.fields[world.UnitTargetField+1] = uint32(guid >> 32)			syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend)		}		return activeSession.SetSelection(guid)	}	host.setSelection = selectTarget
+	var worldPress worldMousePress
+	worldClick := func(button window.MouseButton, x, y float64) {
+		if activeSession == nil || worldCamera == nil {
+			return
+		}
+		width, height := win.GetSize()
+		guid := worldPickEntity(cam, worldEntities, worldCharacter.GUID, x, y, float64(width), float64(height))
+		if guid == 0 {
+			return
+		}
+		_ = selectTarget(guid)
+		entity, player := worldEntities[guid], worldEntities[worldCharacter.GUID]
+		if button != window.MouseButtonRight || entity == nil || player == nil {
+			return
+		}
+		// A right click on something that can be attacked starts the attack.
+		if hostile, _ := worldFactionState.reaction(player.fields[unitFactionField], entity.fields[unitFactionField]); hostile && entity.fields[unitHealthField] > 0 {
+			_ = host.startAttack(guid)
+		}
+	}
 	worldMapName := ""
+	var worldMapID uint32
 	var glueCharacters []world.Character
 	var setSceneModel func() bool
 	if dataPath != "" {
@@ -361,6 +502,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		log.Printf("ui render error: %v", err)
 	} else if eng != nil {
 		uiEngine = eng
+		uiEngine.UserAddOns = savedOptions.Addons
 		defer uiEngine.Close()
 		uiEngine.Rt.Host = host
 		if audio, audioErr := newAudioManager(uiEngine.AssetLoader, debug); audioErr != nil {
@@ -481,6 +623,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		uiChatImage.SetPosition(0, 0)
 		uiChatImage.SetVisible(false)
 		scene.Add(uiChatImage)
+		uiCursorTex = texture.NewTexture2DFromRGBA(image.NewRGBA(image.Rect(0, 0, 1, 1)))
+		uiCursorImage = gui.NewImageFromTex(uiCursorTex)
+		uiCursorImage.SetZLayerDelta(2)
+		uiCursorImage.SetVisible(false)
+		scene.Add(uiCursorImage)
 		uiTex = texture.NewTexture2DFromRGBA(initialUI)
 		uiImage = gui.NewImageFromTex(uiTex)
 		uiImage.SetColor4(&math32.Color4{R: 1, G: 1, B: 1, A: 0})
@@ -546,19 +693,51 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		if version == lastMinimapVersion && uiMapTex != nil {
 			return
 		}
-		mapFrame := uiEngine.RenderWorldMinimap(width, height)
+		mapFrame, mapRegion := uiEngine.RenderWorldMinimapRegion(width, height)
+		if mapFrame == nil {
+			return
+		}
 		if uiMapTex == nil {
 			uiMapTex = texture.NewTexture2DFromRGBA(mapFrame)
 			uiMapImage.SetTexture(uiMapTex)
 		} else {
 			uiMapTex.SetFromRGBA(mapFrame)
 		}
-		uiMapImage.SetSize(float32(width), float32(height))
+		uiMapImage.SetPosition(float32(mapRegion.Min.X), float32(mapRegion.Min.Y))
+		uiMapImage.SetSize(float32(mapRegion.Dx()), float32(mapRegion.Dy()))
 		uiMapImage.SetVisible(true)
 		lastMinimapVersion = version
 	}
+	// The picked up item or spell follows the pointer as its own small image, so
+	// moving it does not repaint the interface.
+	updateCursorIcon := func() {
+		if uiCursorImage == nil || uiEngine == nil || !worldMode {
+			return
+		}
+		size := int(32*uiEngine.UIScale() + 0.5)
+		key, icon := uiEngine.CursorIcon(size)
+		key += fmt.Sprint(size)
+		if icon == nil {
+			uiCursorImage.SetVisible(false)
+			return
+		}
+		if key != uiCursorKey {
+			uiCursorTex.SetFromRGBA(icon)
+			uiCursorKey = key
+			uiCursorImage.SetSize(float32(size), float32(size))
+		}
+		x, y := uiEngine.CursorPosition()
+		uiCursorImage.SetPosition(float32(x)-float32(size)/2, float32(y)-float32(size)/2)
+		uiCursorImage.SetVisible(true)
+	}
 	refreshChat := func(width, height int) {
 		if !worldMode || uiChatImage == nil || uiEngine == nil {
+			return
+		}
+		if !uiEngine.WorldChatFocused() {
+			// Only the edit box being typed in is drawn here; no full-screen canvas
+			// is built or uploaded while it is idle.
+			uiChatImage.SetVisible(false)
 			return
 		}
 		chatFrame := uiEngine.RenderWorldChat(width, height)
@@ -656,9 +835,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		if !worldMode {
 			return
 		}
+		worldPlates.hide()
 		worldMode = false
 		worldCamera = nil
 		worldMovement = nil
+		worldMoveNet = nil
 		worldPackets = nil
 		worldLoading = false
 		if uiEngine != nil {
@@ -682,10 +863,19 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			worldSky.Dispose()
 			worldSky = nil
 		}
+		if worldStreamer != nil {
+			worldStreamer.stop()
+			worldStreamer = nil
+		}
+		worldAtmo = worldAtmosphere{}
 		if worldPlayer != nil {
 			scene.Remove(worldPlayer)
 			worldPlayer.Dispose()
 			worldPlayer = nil
+			if playerMount != nil {
+				playerMount.dispose(scene)
+				playerMount = nil
+			}
 		}
 		for guid, entity := range worldEntities {
 			if entity != nil && entity.node != nil {
@@ -726,24 +916,34 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					refresh()
 				}
 			}
+			updateCursorIcon()
 		})
 		win.Subscribe(window.OnMouseDown, func(_ string, event interface{}) {
 			mouse := event.(*window.MouseEvent)
-			if worldMode && worldCamera != nil && worldCamera.handleMouse(float64(mouse.Xpos), float64(mouse.Ypos), mouse.Button, true) {
+			if worldMode && worldCamera != nil && !uiEngine.PointOverUI(float64(mouse.Xpos), float64(mouse.Ypos)) && worldCamera.handleMouse(float64(mouse.Xpos), float64(mouse.Ypos), mouse.Button, true) {
+				worldPress = worldMousePress{x: float64(mouse.Xpos), y: float64(mouse.Ypos), button: mouse.Button, active: true}
 				return
 			}
 			if uiEngine.HandleMouse(float64(mouse.Xpos), float64(mouse.Ypos), mouse.Button, true) {
 				refresh()
 			}
+			updateCursorIcon()
 		})
 		win.Subscribe(window.OnMouseUp, func(_ string, event interface{}) {
 			mouse := event.(*window.MouseEvent)
-			if worldMode && worldCamera != nil && worldCamera.handleMouse(float64(mouse.Xpos), float64(mouse.Ypos), mouse.Button, false) {
+			if worldMode && worldCamera != nil && worldCamera.dragging && worldCamera.handleMouse(float64(mouse.Xpos), float64(mouse.Ypos), mouse.Button, false) {
+				if worldPress.active && worldPress.button == mouse.Button {
+					worldPress.active = false
+					if math.Hypot(float64(mouse.Xpos)-worldPress.x, float64(mouse.Ypos)-worldPress.y) < worldClickSlop {
+						worldClick(mouse.Button, float64(mouse.Xpos), float64(mouse.Ypos))
+					}
+				}
 				return
 			}
 			if uiEngine.HandleMouse(float64(mouse.Xpos), float64(mouse.Ypos), mouse.Button, false) {
 				refresh()
 			}
+			updateCursorIcon()
 		})
 		win.Subscribe(window.OnScroll, func(_ string, event interface{}) {
 			scroll := event.(*window.ScrollEvent)
@@ -766,8 +966,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		})
 		win.Subscribe(window.OnKeyDown, func(_ string, event interface{}) {
 			key := event.(*window.KeyEvent)
-			if worldMode && worldCamera != nil && worldCamera.handleKey(key.Key, true) {
-				return
+			if worldMode && worldCamera != nil {
+				if command := uiEngine.MovementCommandDown(key.Key, key.Mods); command != "" && worldCamera.handleCommand(command, true) {
+					return
+				}
 			}
 			if key.Key == window.KeyF2 {
 				uiEngine.HandleKeyWithMods(key.Key, key.Mods)
@@ -786,8 +988,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		})
 		win.Subscribe(window.OnKeyUp, func(_ string, event interface{}) {
 			key := event.(*window.KeyEvent)
-			if worldMode && worldCamera != nil && worldCamera.handleKey(key.Key, false) {
-				return
+			if worldMode && worldCamera != nil {
+				if command := uiEngine.MovementCommandUp(key.Key); command != "" {
+					worldCamera.handleCommand(command, false)
+					return
+				}
 			}
 			if uiEngine.HandleKeyUp(key.Key) {
 				refresh()
@@ -845,8 +1050,24 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			minimapChanged := false
 			if worldMode && worldCamera != nil {
 				worldCamera.update(elapsed, cam, worldPlayer)
+				worldLiquid.update(time.Since(worldLiquidStart).Seconds())
+				worldStreamer.update(worldCamera.position[0], worldCamera.position[1])
+				if worldLight != nil {
+					worldAtmo = worldLight.sample(worldMapID, worldCamera.position[0], worldCamera.position[1], worldClock.minuteOfDay(time.Now()))
+				}
 				worldMovement.update(time.Now(), worldCamera)
+				if playerMount != nil && worldPlayer != nil {
+					rider := playerMount.place(worldCamera.position, worldCamera.bodyYaw)
+					worldPlayer.SetPosition(rider[0], rider[1], rider[2])
+					playerMount.update(elapsed, worldMountMotion(worldCamera.flying, worldCamera.isMoving() || worldCamera.velocity[2]*worldCamera.velocity[2] > 0.04, true), func(id uint32) {
+						if host.audio != nil {
+							host.audio.PlaySoundID(id)
+						}
+					})
+				}
 				minimapChanged = uiEngine.SetWorldMinimapPosition(worldMapName, worldCamera.position[0], worldCamera.position[1])
+				uiEngine.Rt.SetPlayerMapPosition(worldMapID, worldCamera.position[0], worldCamera.position[1])
+				uiEngine.Rt.SetPlayerMapFacing(worldCamera.bodyYaw)
 				advanceWorldEntities(worldEntities, elapsed, worldFloor)
 				if worldPlayer != nil {
 					if info, ok := worldPlayer.UserData().(glueModelInfo); ok {
@@ -865,6 +1086,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 							info.particles.Update(elapsed)
 						}
 					}
+					if own := worldEntities[worldCharacter.GUID]; own != nil {
+						syncWorldEquipment(uiEngine.AssetLoader, worldPlayer, &playerEquipment, playerModelPath, own, worldCreatureExtra{})
+					}
+					poseWorldEquipment(worldPlayer, playerEquipment)
 				}
 				for _, entity := range worldEntities {
 					if entity.node == nil {
@@ -879,11 +1104,25 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 							continue
 						}
 					}
+					if entity.mount != nil {
+						position := [3]float32{entity.movement.Position.X, entity.movement.Position.Y, entity.movement.Position.Z}
+						rider := entity.mount.place(position, entity.movement.Position.Orientation)
+						entity.node.SetPosition(rider[0], rider[1], rider[2])
+						flags := entity.movement.MovementFlags
+						entity.mount.update(elapsed, worldMountMotion(flags&world.MovementFlagFlying != 0, worldEntityMoving(entity), true), func(id uint32) {
+							if host.audio != nil {
+								host.audio.PlaySoundID(id)
+							}
+						})
+					}
 					if info, ok := entity.node.UserData().(glueModelInfo); ok {
 						if info.animation != nil {
 							motion := uint16(0)
 							if worldEntityMoving(entity) {
 								motion = worldEntityMotion(entity)
+							}
+							if entity.mount != nil {
+								motion = worldAnimMount
 							}
 							info.animation.SetMotion(motion)
 							for _, soundID := range info.animation.Update(elapsed) {
@@ -896,6 +1135,18 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 							info.particles.Update(elapsed)
 						}
 					}
+					poseWorldEquipment(entity.node, entity.equipment)
+				}
+				if screenWidth, screenHeight := win.GetSize(); screenWidth > 0 && screenHeight > 0 && worldFactionState != nil {
+					playerFaction := uint32(0)
+					if own := worldEntities[worldCharacter.GUID]; own != nil {
+						playerFaction = own.fields[unitFactionField]
+					}
+					worldPlates.update(nameplateInputs{
+						scene: scene, engine: uiEngine, cam: cam, width: float32(screenWidth), height: float32(screenHeight),
+						entities: worldEntities, ownGUID: worldCharacter.GUID, playerNode: worldPlayer, cameraAt: worldCamera.position,
+						names: worldNameState, factions: worldFactionState, send: worldSend, playerFaction: playerFaction,
+					})
 				}
 				if worldSky != nil {
 					cameraPosition := cam.Position()
@@ -1042,6 +1293,18 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				} else {
 					uiEngine.Rt.SetSpellCatalog(entry.spells, entry.skills)
 				}
+				if entry.mapErr != nil {
+					log.Printf("world map catalog: %v", entry.mapErr)
+				} else {
+					uiEngine.Rt.SetMapCatalog(entry.mapData)
+				}
+				uiEngine.Rt.SetPlayerMapPosition(entry.position.Map, entry.position.X, entry.position.Y)
+				if entry.itemErr != nil {
+					log.Printf("world item catalog: %v", entry.itemErr)
+				} else {
+					uiEngine.Rt.SetItemCatalog(entry.itemLocal, entry.itemIcons, entry.itemClasses)
+					worldItemCatalog = entry.itemLocal
+				}
 				seedWorldUnits(uiEngine.Rt, worldCharacter)
 				loadingPath := worldLoadingScreenPath(uiEngine.AssetLoader, entry.position.Map)
 				uiEngine.SetLoadingScreen(loadingPath, 0)
@@ -1087,6 +1350,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					break
 				}
 				worldMapName = info.mapName
+				worldMapID = entry.position.Map
 				if sceneModel != nil {
 					scene.Remove(sceneModel)
 					sceneModel.Dispose()
@@ -1110,10 +1374,19 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					scene.Remove(worldPlayer)
 					worldPlayer.Dispose()
 					worldPlayer = nil
+					if playerMount != nil {
+						playerMount.dispose(scene)
+						playerMount = nil
+					}
 				}
 				worldEntities = make(map[uint64]*worldEntity)
 				worldAuras.reset()
 				worldCreatureCache = worldCreatureTables{}
+				m2AnimationFallbacks = readAnimationFallbacks(uiEngine.AssetLoader)
+				if worldStreamer != nil {
+					worldStreamer.stop()
+					worldStreamer = nil
+				}
 				worldFloor = nil
 				worldModel = loaded
 				scene.Add(worldModel)
@@ -1127,6 +1400,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						}
 					} else {
 						worldPlayer = player
+						playerEquipment, playerModelPath = nil, normalizeModelPath(worldCharacterModelPath(entry.character))
 						scene.Add(worldPlayer)
 						if debug {
 							log.Printf("world: player model children=%d position=%v scale=%v", len(worldPlayer.Children()), worldPlayer.Position(), worldPlayer.Scale())
@@ -1134,17 +1408,30 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					}
 				}
 				worldCamera = newWorldCameraController(entry.position)
+				worldMoveNet = newWorldMovementNet(worldCharacter.GUID, time.Now(), func() *network.Session { return activeSession }, debug)
 				worldMovement = newWorldMovementReporter(worldCharacter.GUID, func(opcode world.ClientOpcode, info world.MovementInfo) error {
 					if activeSession == nil {
 						return fmt.Errorf("world session is closed")
 					}
 					return activeSession.SendMovement(opcode, worldCharacter.GUID, info)
 				})
-				if collision, ok := loaded.UserData().(worldSceneCollision); ok {
+				if streamer, ok := loaded.UserData().(*worldTerrainStreamer); ok {
+					collision := streamer.collision
+					worldStreamer = streamer
 					worldCamera.setGround(collision.ground)
 					worldCamera.setFloor(collision.floor)
 					worldCamera.setMovement(collision.move)
 					worldCamera.setCameraTest(collision.cameraPosition)
+					worldCamera.setLiquid(collision.liquidAt)
+					worldLiquid = streamer.liquid
+					worldLight = readWorldLightTables(uiEngine.AssetLoader)
+					worldFactionState = readWorldFactions(uiEngine.AssetLoader)
+					*worldNameState = *newWorldNames()
+					worldCombatState.rt = uiEngine.Rt
+					worldCombatState.ownGUID = worldCharacter.GUID
+					worldCombatState.entities = func() map[uint64]*worldEntity { return worldEntities }
+					worldCombatState.factions = func() *worldFactions { return worldFactionState }
+					worldAtmo = worldLight.sample(entry.position.Map, entry.position.X, entry.position.Y, worldClock.minuteOfDay(time.Now()))
 					worldFloor = collision.floor
 					if debug {
 						if ground, found := collision.ground(entry.position.X, entry.position.Y); found {
@@ -1191,6 +1478,16 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					worldPackets = nil
 					break
 				}
+				if handled, err := worldCombatState.apply(event.Packet); handled {
+					if err != nil && debug {
+						log.Printf("world combat packet: %v", err)
+					}
+					if player := worldEntities[worldCharacter.GUID]; player != nil {
+						syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend)
+					}
+					refresh()
+					break
+				}
 				if handled, err := applyWorldSpellPacket(uiEngine.Rt, event.Packet, worldCharacter.GUID); handled {
 					if err != nil {
 						log.Printf("world spell packet: %v", err)
@@ -1199,7 +1496,18 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					}
 					break
 				}
+				if worldMoveNet != nil && worldMoveNet.handle(event.Packet, worldCamera, worldMovement, time.Now()) {
+					break
+				}
 				switch event.Packet.Opcode {
+				case world.ItemQuerySingleResponse:
+					template, itemErr := world.ParseItemQueryResponse(event.Packet.Body)
+					if itemErr != nil {
+						log.Printf("world item query: %v", itemErr)
+						break
+					}
+					uiEngine.Rt.SetItemTemplate(template)
+					refresh()
 				case world.AuraUpdate, world.AuraUpdateAll:
 					all := event.Packet.Opcode == world.AuraUpdateAll
 					auraUpdate, auraErr := world.ParseAuraUpdate(event.Packet.Body, all)
@@ -1237,6 +1545,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						lua.LString(message.Channel), lua.LString(""), lua.LString(""),
 						lua.LNumber(0), lua.LNumber(0), lua.LString(message.Channel), lua.LNumber(0), lua.LString(guid))
 					refresh()
+				case world.LoginSetTimeSpeed:
+					if gameTime, timeErr := world.ParseLoginSetTimeSpeed(event.Packet.Body); timeErr == nil {
+						worldClock.set(gameTime, time.Now())
+					} else if debug {
+						log.Printf("world game time: %v", timeErr)
+					}
 				case world.UpdateObject, world.CompressedUpdateObject:
 					var blocks []world.UpdateBlock
 					var parseErr error
@@ -1253,12 +1567,17 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					}
 					models, modelErrors := applyWorldUpdateBlocks(scene, uiEngine.AssetLoader, &worldCreatureCache, worldEntities, blocks, worldCharacter.GUID, worldFloor)
 					if player := worldEntities[worldCharacter.GUID]; player != nil {
+						if worldCamera != nil {
+							worldCamera.syncFromUpdate(player.movement)
+							worldCamera.mounted = syncWorldPlayerMount(scene, uiEngine.AssetLoader, &worldCreatureCache, &playerMount, player.fields)
+						}
 						if uiEngine.Rt.ApplyUnitFields("player", player.fields) {
 							refresh()
 						}
-						if syncWorldTarget(uiEngine.Rt, worldEntities, player) {
+						if syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend) {
 							refresh()
 						}
+						syncWorldInventory(uiEngine.Rt, worldEntities, player)
 					}
 					if debug {
 						log.Printf("world update: blocks=%d entities=%d models=%d errors=%d", len(blocks), len(worldEntities), models, len(modelErrors))
@@ -1294,6 +1613,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 							scene.Remove(entity.node)
 							entity.node.Dispose()
 						}
+						entity.mount.dispose(scene)
 						delete(worldEntities, guid)
 					}
 				}

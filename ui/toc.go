@@ -291,6 +291,11 @@ func normalizePath(p string) string {
 // optional progress callback reports (done, total) after each entry. Entry
 // counting matches the client: non-empty lines that do not start with '#'.
 func (l *Loader) LoadTOC(interfaceTOC string, progress func(done, total int)) error {
+	return l.LoadTOCFiltered(interfaceTOC, progress, nil)
+}
+
+// LoadTOCFiltered loads a TOC, skipping the entries skip reports.
+func (l *Loader) LoadTOCFiltered(interfaceTOC string, progress func(done, total int), skip func(path string) bool) error {
 	data, err := l.read(interfaceTOC)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", interfaceTOC, err)
@@ -311,7 +316,18 @@ func (l *Loader) LoadTOC(interfaceTOC string, progress func(done, total int)) er
 			path = dirOf(interfaceTOC) + entry
 		}
 		path = normalizePath(path)
-		if err := l.LoadInterfaceFile(path); err != nil {
+		if skip != nil && skip(path) {
+			continue
+		}
+		// The files an XML entry includes share one table, apart from the add-on's
+		// other entries (see addonTable).
+		l.rt.loadRoot = ""
+		if strings.HasSuffix(strings.ToLower(path), ".xml") {
+			l.rt.loadRoot = strings.ToLower(path)
+		}
+		err := l.LoadInterfaceFile(path)
+		l.rt.loadRoot = ""
+		if err != nil {
 			return fmt.Errorf("%s: entry %q: %w", interfaceTOC, entry, err)
 		}
 		if progress != nil {
@@ -461,12 +477,28 @@ func (l *Loader) instantiateTopLevel(node *xmlNode, interfacePath string) error 
 }
 
 func isWidgetElement(name string) bool {
-	switch name {
-	case "Frame", "Button", "CheckButton", "EditBox", "Slider", "ScrollFrame", "ScrollingMessageFrame",
-		"SimpleHTML", "Model", "ModelFFX", "MovieFrame", "StatusBar", "Minimap", "Cooldown", "Texture", "FontString":
+	switch strings.ToUpper(name) {
+	case "FRAME", "BUTTON", "CHECKBUTTON", "EDITBOX", "SLIDER", "SCROLLFRAME", "SCROLLINGMESSAGEFRAME",
+		"SIMPLEHTML", "MODEL", "MODELFFX", "MOVIEFRAME", "STATUSBAR", "TEXTURE", "FONTSTRING":
 		return true
 	}
-	return false
+	_, ok := frameTypeNames[strings.ToUpper(name)]
+	return ok
+}
+
+// frameTypeNames are the frame types that behave as a plain Frame in this
+// runtime but report their own type from GetObjectType.
+var frameTypeNames = map[string]string{
+	"MINIMAP":       "Minimap",
+	"COOLDOWN":      "Cooldown",
+	"GAMETOOLTIP":   "GameTooltip",
+	"MESSAGEFRAME":  "MessageFrame",
+	"COLORSELECT":   "ColorSelect",
+	"PLAYERMODEL":   "PlayerModel",
+	"DRESSUPMODEL":  "DressUpModel",
+	"TABARDMODEL":   "TabardModel",
+	"QUESTPOIFRAME": "QuestPOIFrame",
+	"WORLDFRAME":    "WorldFrame",
 }
 
 // buildWidget constructs a widget from its XML node, applying template
@@ -501,11 +533,20 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 		name = resolveParentName(name, parent.nameContext())
 	}
 	w := newWidget(kind, name)
+	w.typeName = frameTypeNames[strings.ToUpper(node.name)]
 	w.parent = parent
 	l.applyWidgetAttrs(w, merged)
-	if parent != nil {
+	// A parent given as an attribute (parent="Name") counts like a nested one.
+	container := parent
+	if container == nil {
+		container = w.parent
+	}
+	if container != nil {
 		if _, ok := merged.attr("frameStrata"); !ok {
-			w.frameStrata = parent.frameStrata
+			w.frameStrata = container.frameStrata
+		}
+		if _, ok := merged.attr("frameLevel"); !ok && w.isScriptableFrame() {
+			w.frameLevel = container.frameLevel + 1
 		}
 	}
 	if parent != nil && parent.kind == kindScrollFrame {
@@ -513,6 +554,14 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 	}
 	if w.parent == nil && w.topLevel {
 		if root := l.rt.lookup("GlueParent"); root != nil {
+			w.parent = root
+			addWidgetChild(root, w)
+		}
+	}
+	// A frame defined without a parent hangs off the world UI's root, as the
+	// client does for FrameXML frames.
+	if w.parent == nil && w.name != "UIParent" && w.name != "WorldFrame" && w.name != "GlueParent" {
+		if root := l.rt.widgets["UIParent"]; root != nil && root != w {
 			w.parent = root
 			addWidgetChild(root, w)
 		}
@@ -588,6 +637,8 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 					l.bindParentKey(w, child, frameEl)
 				}
 			}
+		case "Animations":
+			l.buildAnimations(group, w, interfacePath)
 		case "Scripts":
 			for _, scriptEl := range group.children {
 				handler := scriptEl.name
@@ -636,7 +687,7 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 			w.disabledFont = group.attrDefault("style", "")
 		case "ButtonText":
 			if text := group.attrDefault("text", ""); text != "" {
-				w.text = text
+				w.text = l.xmlText(text)
 			}
 			label := buttonTextNode(group, w, merged)
 			region, err := l.buildRegion(label, w, interfacePath)
@@ -790,7 +841,7 @@ func (l *Loader) buildRegion(node *xmlNode, parent *widget, interfacePath string
 			w.vertexColor = rgba{attrFloat(c, "r", 0), attrFloat(c, "g", 0), attrFloat(c, "b", 0), attrFloat(c, "a", 1)}
 		}
 	} else {
-		w.text = merged.attrDefault("text", "")
+		w.text = l.xmlText(merged.attrDefault("text", ""))
 		w.fontObject = merged.attrDefault("inherits", "")
 		w.justifyH = merged.attrDefault("justifyH", "")
 		w.justifyV = merged.attrDefault("justifyV", "")
@@ -889,7 +940,7 @@ func (l *Loader) applyWidgetAttrs(w *widget, node *xmlNode) {
 		}
 	}
 	if v, ok := node.attr("text"); ok {
-		w.text = v
+		w.text = l.xmlText(v)
 	}
 	if parentName, ok := node.attr("parent"); ok && parentName != "" {
 		if p := l.rt.lookup(parentName); p != nil {
@@ -1207,4 +1258,17 @@ func removeHandler(scripts *xmlNode, handler string) {
 		}
 	}
 	scripts.children = kept
+}
+
+// xmlText is the value of an XML text attribute: the original client looks the
+// attribute up as a global string (text="CHARACTER") when it creates the frame,
+// and keeps the attribute itself when no such string exists.
+func (l *Loader) xmlText(text string) string {
+	if text == "" || l.rt == nil || l.rt.L == nil {
+		return text
+	}
+	if value, ok := l.rt.L.GetGlobal(text).(lua.LString); ok {
+		return string(value)
+	}
+	return text
 }

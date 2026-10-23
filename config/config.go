@@ -22,6 +22,9 @@ type Options struct {
 	InterfacePath  string       `json:"interface_path"`
 	BackgroundPath string       `json:"background_path"` // Path to a static background image (JPEG/PNG) to use as the login screen scene. Leave empty to use the gradient fallback.
 	RememberMe     bool         `json:"remember_me"`
+	// Addons are user add-ons (folders under Interface\AddOns in the data
+	// archives or on disk) loaded into the world interface after the default one.
+	Addons []string `json:"addons,omitempty"`
 	Audio          AudioOptions `json:"audio"`
 	// WindowWidth and WindowHeight are the window size at the last exit, in
 	// pixels (0 = the default). The glue scripts size their scenes from the

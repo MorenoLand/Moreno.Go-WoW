@@ -55,6 +55,12 @@ type charSectionsFields struct {
 }
 
 func loadGlueCharacterModel(loader *ui.Loader, character world.Character) (*core.Node, error) {
+	return loadCharacterModel(loader, character, false)
+}
+
+// loadCharacterModel builds the character; worldLit gives it the world's sun and
+// fog instead of the character screen's fixed lighting.
+func loadCharacterModel(loader *ui.Loader, character world.Character, worldLit bool) (*core.Node, error) {
 	// Character Create builds a GUID-0 preview with race/class/gender only. Native
 	// dresses that preview from CharStartOutfit.dbc (DisplayInfo + InventoryType).
 	if character.GUID == 0 && character.Class != 0 {
@@ -124,7 +130,7 @@ func loadGlueCharacterModel(loader *ui.Loader, character world.Character) (*core
 			overrides[index] = path
 		}
 	}
-	result, err := buildGlueModel(loader, modelPath, model, skin, overrides, preloaded, activeGeosets)
+	result, err := buildGlueModelWithNormalization(loader, modelPath, model, skin, overrides, preloaded, activeGeosets, true, 1, 0, m2SceneLight{world: worldLit})
 	if err != nil {
 		return nil, err
 	}

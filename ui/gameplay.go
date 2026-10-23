@@ -16,6 +16,12 @@ type SpellInfo struct {
 	Cost, PowerType, CastTime           int
 	MinRange, MaxRange                  float64
 	Recipe, Funnel, Interruptible       bool
+	Description, AuraDescription        string
+	Effects                             [3]SpellEffectInfo
+	DurationMS, ProcChance, ProcCharges int
+	StackAmount, BaseLevel, MaxLevel    int
+	SpellLevel, CooldownMS              int
+	CategoryCooldownMS                  int
 }
 type SpellSkillLine struct {
 	ID, Category uint32
@@ -77,6 +83,10 @@ func (rt *Runtime) ResetGameplay() {
 }
 
 func (rt *Runtime) StartSpellCast(cast world.SpellCastHeader) {
+	if cast.TimeMS == 0 {
+		// An instant spell has no cast to show; only its completion is reported.
+		return
+	}
 	now := time.Since(rt.started).Seconds()
 	rt.gameplay.Cast = activeSpellCast{ID: cast.SpellID, Count: cast.Count, Start: now, End: now + float64(cast.TimeMS)/1000}
 	info := rt.gameplay.Catalog[cast.SpellID]
@@ -105,6 +115,10 @@ func (rt *Runtime) UpdateSpellChannel(duration uint32) {
 	rt.FireEvent(event, lua.LString("player"), lua.LString(info.Name), lua.LString(info.Rank))
 }
 func (rt *Runtime) StopSpellCast(id uint32, count uint8, failed bool) {
+	if !failed {
+		info := rt.gameplay.Catalog[id]
+		rt.FireEvent("UNIT_SPELLCAST_SUCCEEDED", lua.LString("player"), lua.LString(info.Name), lua.LString(info.Rank), lua.LNumber(count))
+	}
 	if rt.gameplay.Cast.ID != id || rt.gameplay.Cast.Count != count || rt.gameplay.Cast.Channel {
 		return
 	}
@@ -276,6 +290,9 @@ func (rt *Runtime) cast(id uint32, unit string) error {
 	if id == 0 || !rt.gameplay.Known[id] {
 		return fmt.Errorf("spell is not known")
 	}
+	if id == attackSpellID {
+		return rt.toggleAttack()
+	}
 	host, ok := rt.Host.(WorldSpellHost)
 	if !ok {
 		return fmt.Errorf("world spell transport is unavailable")
@@ -286,6 +303,20 @@ func (rt *Runtime) cast(id uint32, unit string) error {
 	}
 	if info := rt.unitInfo(unit); info != nil {
 		target = info.GUID
+	}
+	spell := rt.gameplay.Catalog[id]
+	player := rt.unitInfo("player")
+	// A helpful spell aimed at something that is not a friend goes to the caster.
+	if spellIsHelpful(spell) && player != nil {
+		if info := rt.unitInfo(unit); info == nil || !info.Exists || !info.Friendly {
+			target = player.GUID
+		}
+	}
+	// The client gets off the mount before casting from it.
+	if player != nil && player.Mounted && !spellIsMount(spell) && spell.Attributes&(spellAttributeCastableWhileMounted|0x40) == 0 {
+		if aura, ok := rt.Host.(WorldAuraHost); ok {
+			_ = aura.CancelMount()
+		}
 	}
 	return host.CastSpell(id, target)
 }
@@ -371,6 +402,9 @@ func registerGameplayAPI(rt *Runtime) {
 		return 1
 	})
 	reg("ClearCursor", func(L *lua.LState) int {
+		if rt.clearItemCursor != nil {
+			rt.clearItemCursor()
+		}
 		rt.gameplay.Cursor = world.ActionButton{}
 		rt.FireEvent("CURSOR_UPDATE")
 		return 0
@@ -661,4 +695,14 @@ func registerGameplayAPI(rt *Runtime) {
 		}
 		return 1
 	})
+}
+
+// SpellEffectInfo is the per-effect data of a Spell.dbc row that tooltip text
+// variables ($s1, $t1, $a1, ...) refer to.
+type SpellEffectInfo struct {
+	Effect, Aura, Misc     int
+	BasePoints, DieSides   int
+	PointsPerLevel, Radius float64
+	PeriodMS, Chain        int
+	Amplitude              float64
 }

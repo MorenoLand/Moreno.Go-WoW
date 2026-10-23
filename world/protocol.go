@@ -542,3 +542,6 @@ func ClassName(class uint8) string {
 		return "Unknown class"
 	}
 }
+
+// Remaining is how many bytes have not been read yet.
+func (r *Reader) Remaining() int { return len(r.data) - r.at }

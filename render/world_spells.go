@@ -49,6 +49,20 @@ func readWorldSpellCatalog(loader *ui.Loader) (map[uint32]ui.SpellInfo, map[uint
 	if icons.fields < 2 || lines.fields < 38 || abilities.fields < 14 || casts.fields < 2 || ranges.fields < 5 {
 		return nil, nil, fmt.Errorf("spell support DBC layout is truncated")
 	}
+	durationDBC, _ := loadCharacterDBC(loader, `DBFilesClient\SpellDuration.dbc`)
+	radiusDBC, _ := loadCharacterDBC(loader, `DBFilesClient\SpellRadius.dbc`)
+	durations := make(map[uint32]int)
+	if durationDBC.fields >= 2 {
+		for row := 0; row < durationDBC.records; row++ {
+			durations[durationDBC.value(row, 0)] = int(int32(durationDBC.value(row, 1)))
+		}
+	}
+	radii := make(map[uint32]float64)
+	if radiusDBC.fields >= 4 {
+		for row := 0; row < radiusDBC.records; row++ {
+			radii[radiusDBC.value(row, 0)] = float64(math.Float32frombits(radiusDBC.value(row, 3)))
+		}
+	}
 	iconPaths := make(map[uint32]string)
 	for row := 0; row < icons.records; row++ {
 		iconPaths[icons.value(row, 0)] = icons.string(row, 1)
@@ -83,6 +97,31 @@ func readWorldSpellCatalog(loader *ui.Loader) (map[uint32]ui.SpellInfo, map[uint
 		for field := 71; field < 74; field++ {
 			if effect := spells.value(row, field); effect == 24 || effect == 114 {
 				info.Recipe = true
+			}
+		}
+		info.Description = spells.string(row, 170)
+		info.AuraDescription = spells.string(row, 187)
+		info.DurationMS = durations[spells.value(row, 40)]
+		info.ProcChance = int(spells.value(row, 35))
+		info.ProcCharges = int(spells.value(row, 36))
+		info.StackAmount = int(spells.value(row, 49))
+		info.MaxLevel = int(spells.value(row, 37))
+		info.BaseLevel = int(spells.value(row, 38))
+		info.SpellLevel = int(spells.value(row, 39))
+		info.CooldownMS = int(spells.value(row, 29))
+		info.CategoryCooldownMS = int(spells.value(row, 30))
+		for effect := 0; effect < 3; effect++ {
+			info.Effects[effect] = ui.SpellEffectInfo{
+				Effect:         int(spells.value(row, 71+effect)),
+				DieSides:       int(int32(spells.value(row, 74+effect))),
+				PointsPerLevel: float64(math.Float32frombits(spells.value(row, 77+effect))),
+				BasePoints:     int(int32(spells.value(row, 80+effect))),
+				Radius:         radii[spells.value(row, 92+effect)],
+				Aura:           int(spells.value(row, 95+effect)),
+				PeriodMS:       int(spells.value(row, 98+effect)),
+				Amplitude:      float64(math.Float32frombits(spells.value(row, 101+effect))),
+				Chain:          int(spells.value(row, 104+effect)),
+				Misc:           int(int32(spells.value(row, 110+effect))),
 			}
 		}
 		info.Funnel = spells.value(row, 6)&0x800 != 0
@@ -138,6 +177,9 @@ func applyWorldSpellPacket(rt *ui.Runtime, packet world.Packet, playerGUID uint6
 			return true, fmt.Errorf("SMSG_CAST_FAILED is truncated")
 		}
 		rt.StopSpellCast(binary.LittleEndian.Uint32(packet.Body[1:5]), packet.Body[0], true)
+		if len(packet.Body) > 5 {
+			rt.ShowSpellFailure(packet.Body[5], rt.UnitPowerToken("player"))
+		}
 	case world.InitialSpells:
 		initial, err := world.ParseInitialSpells(packet.Body)
 		if err != nil {

@@ -24,6 +24,14 @@ import (
 )
 
 type UIEngine struct {
+	// UserAddOns are the user add-ons loaded into the world interface.
+	UserAddOns []string
+	// cursorIconPath and cursorIconImage cache the scaled icon CursorIcon returns.
+	cursorIconPath  string
+	cursorIconImage *image.RGBA
+
+	keyMods window.ModifierKey // modifiers of the key press being handled
+	curScale float64 // effective scale of the widget being painted (1 outside painting)
 	Rt               *Runtime
 	FontObj          *opentype.Font
 	FontObjSm        *opentype.Font
@@ -37,6 +45,8 @@ type UIEngine struct {
 	statusDialogType string
 	rememberMe       bool
 	pressed          *widget
+	presses          map[string]*mousePress
+	dragging         *dragState
 	sliderDragging   *widget
 	selecting        *widget
 	hovered          *widget
@@ -81,6 +91,11 @@ type UIEngine struct {
 	minimapWorldY    float32
 	minimapHasPosition bool
 	minimapVersion   uint64
+	caretOwner      *widget // the edit box whose caret is blinking
+	caretCursor     int
+	caretShown      bool
+	caretTimer      float64
+	minimapU, minimapV float64 // where the player is in the tile composite, 0..1
 }
 
 func LoadUIEngine(glue, frame, assets string, bgImagePath string) (*UIEngine, error) {
@@ -221,6 +236,7 @@ func newUIEngine(rt *Runtime, loader *Loader, bgImagePath string) (*UIEngine, er
 		uiScale:      1,
 	}
 	rt.measureText = eng.measureFontString
+	rt.layoutOf = eng.onDemandRect
 	rt.loadAddOn = eng.loadAddOn
 	return eng, nil
 }
@@ -280,7 +296,12 @@ func (eng *UIEngine) Update(elapsed float64) bool {
 			update(child)
 		}
 	}
-	return statusChanged || eng.Rt.scriptDirty || eng.updateMovie(elapsed)
+	if eng.Rt.tickAnimations(elapsed) {
+		statusChanged = true
+	}
+	caretChanged := eng.updateCaretBlink(elapsed)
+	movieChanged := eng.updateMovie(elapsed)
+	return statusChanged || caretChanged || eng.Rt.scriptDirty || movieChanged
 }
 
 func (eng *UIEngine) drawMovieFrame(canvas *image.RGBA, dst image.Rectangle, frame image.Image) {
@@ -427,6 +448,43 @@ func (eng *UIEngine) RenderWorldMinimap(screenWidth, screenHeight int) *image.RG
 	return canvas
 }
 
+// RenderWorldMinimapRegion draws the minimap into a canvas the size of its
+// own rectangle and returns where on the screen that canvas belongs, so a
+// minimap update does not allocate, clear and upload a whole screen.
+func (eng *UIEngine) RenderWorldMinimapRegion(screenWidth, screenHeight int) (*image.RGBA, image.Rectangle) {
+	full := image.Rect(0, 0, screenWidth, screenHeight)
+	if eng == nil || eng.Rt == nil || eng.minimapImage == nil {
+		return nil, full
+	}
+	mapWidget := eng.Rt.widgets["MinimapMap"]
+	if mapWidget == nil {
+		return nil, full
+	}
+	rect, ok := eng.rects[mapWidget]
+	if !ok {
+		return nil, full
+	}
+	uiScale := eng.uiScale
+	if uiScale <= 0 {
+		uiScale = float64(screenHeight) / 768
+	}
+	scaled := screenScaledRect(rect, uiScale)
+	region := ScreenRect(scaled, float64(screenHeight)).Inset(-2).Intersect(full)
+	if region.Empty() {
+		return nil, full
+	}
+	// The canvas has its own origin: move the rectangle so it lands inside it.
+	shift := float64(region.Dy()-screenHeight) + float64(region.Min.Y)
+	local := Rect{X0: scaled.X0 - float64(region.Min.X), X1: scaled.X1 - float64(region.Min.X), Y0: scaled.Y0 + shift, Y1: scaled.Y1 + shift}
+	tc := [4]float64{mapWidget.texCoordL, mapWidget.texCoordR, mapWidget.texCoordT, mapWidget.texCoordB}
+	if tc[0] == 0 && tc[1] == 0 && tc[2] == 0 && tc[3] == 0 {
+		tc = [4]float64{0, 1, 0, 1}
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, region.Dx(), region.Dy()))
+	eng.drawCircularTexture(canvas, eng.minimapImage, local, float64(region.Dy()), tc, strings.EqualFold(mapWidget.blendMode, "ADD") || strings.EqualFold(mapWidget.alphaMode, "ADD"))
+	return canvas, region
+}
+
 func (eng *UIEngine) RenderWorldChat(screenWidth, screenHeight int) *image.RGBA {
 	canvas := image.NewRGBA(image.Rect(0, 0, screenWidth, screenHeight))
 	if eng == nil || eng.Rt == nil {
@@ -560,6 +618,9 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 	}
 	paintWidget = func(target *image.RGBA, w *widget, parent Rect) {
 		rect := eng.layoutRect(w, parent)
+		previousScale := eng.curScale
+		eng.curScale = effectiveScaleOf(w)
+		defer func() { eng.curScale = previousScale }()
 		if eng.worldActive && w.name == "MinimapMap" {
 			return
 		}
@@ -604,6 +665,10 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 					} else if w.horizTile || w.vertTile {
 						eng.drawTiledTexture(target, img, scaledRect, float64(screenHeight), tc, w.horizTile, w.vertTile, strings.EqualFold(w.blendMode, "ADD") || strings.EqualFold(w.alphaMode, "ADD"))
 					} else {
+						if w.rotation != 0 {
+							drawRotatedTexture(target, img, scaledRect, float64(screenHeight), tc, w.rotation)
+							break
+						}
 						drawSubModeFilter(target, img, scaledRect, float64(screenHeight), tc, strings.EqualFold(w.blendMode, "ADD") || strings.EqualFold(w.alphaMode, "ADD"))
 					}
 				}
@@ -769,7 +834,13 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 				return
 			}
 		}
-		layer := eng.acquireLayer(target.Bounds())
+		if !legacyFullCanvasPaint && region == target.Bounds() {
+			// A frame fades with everything inside it, so only that area needs a layer.
+			if subtree := eng.subtreeRegion(w, parent, uiScale, target.Bounds()); !subtree.Empty() {
+				region = subtree
+			}
+		}
+		layer := eng.acquireLayerRegion(target.Bounds(), region)
 		paintWidget(layer, w, parent)
 		var fade [256]uint8
 		for value := range fade {
@@ -923,6 +994,47 @@ func (eng *UIEngine) acquireLayer(bounds image.Rectangle) *image.RGBA {
 	return layer
 }
 
+// acquireLayerRegion is acquireLayer that clears only region; the caller
+// composites nothing outside it.
+func (eng *UIEngine) acquireLayerRegion(bounds, region image.Rectangle) *image.RGBA {
+	if eng.layerPool == nil {
+		eng.layerPool = make([]*image.RGBA, 0, 2)
+	}
+	if eng.layerDepth == len(eng.layerPool) {
+		eng.layerPool = append(eng.layerPool, image.NewRGBA(bounds))
+	} else if !eng.layerPool[eng.layerDepth].Bounds().Eq(bounds) {
+		eng.layerPool[eng.layerDepth] = image.NewRGBA(bounds)
+	}
+	layer := eng.layerPool[eng.layerDepth]
+	eng.layerDepth++
+	draw.Draw(layer, region.Intersect(bounds), &image.Uniform{C: color.Transparent}, image.Point{}, draw.Src)
+	return layer
+}
+
+// subtreeRegion is the screen area a widget and its shown descendants cover,
+// widened a little for text and borders that overhang their rectangles.
+func (eng *UIEngine) subtreeRegion(w *widget, parent Rect, uiScale float64, bounds image.Rectangle) image.Rectangle {
+	var union image.Rectangle
+	visited := map[*widget]bool{}
+	var visit func(*widget, Rect)
+	visit = func(current *widget, parentRect Rect) {
+		if visited[current] {
+			return
+		}
+		visited[current] = true
+		rect := eng.layoutRect(current, parentRect)
+		union = union.Union(ScreenRect(screenScaledRect(rect, uiScale), float64(bounds.Dy())))
+		for _, child := range current.children {
+			if child != nil && child.shown {
+				visit(child, rect)
+			}
+		}
+	}
+	visit(w, parent)
+	margin := int(48 * uiScale / 1.78)
+	return union.Inset(-margin).Intersect(bounds)
+}
+
 func (eng *UIEngine) releaseLayer() {
 	if eng.layerDepth > 0 {
 		eng.layerDepth--
@@ -1011,6 +1123,9 @@ func (eng *UIEngine) HandleScroll(delta float64) bool {
 	if eng.uiScale <= 0 {
 		return false
 	}
+	if eng.fireMouseWheel(delta) {
+		return true
+	}
 	point := struct{ x, y float64 }{eng.Rt.cursorX / eng.uiScale, (float64(eng.screenHeight) - eng.Rt.cursorY) / eng.uiScale}
 	var target *widget
 	targetArea := math.MaxFloat64
@@ -1066,7 +1181,7 @@ func (eng *UIEngine) prepareText(w *widget, face, faceLg font.Face) {
 	}
 	// Three-piece tabs (ChatFrame*TabMiddle, etc.) are sized by
 	// PanelTemplates_TabResize; do not override their authored width.
-	if w.buttonLabel != nil && w.buttonLabel.textWidth > 0 && eng.Rt.lookup(w.name+"Middle") == nil && w.width < w.buttonLabel.textWidth+50 {
+	if !eng.worldActive && w.buttonLabel != nil && w.buttonLabel.textWidth > 0 && eng.Rt.lookup(w.name+"Middle") == nil && w.width < w.buttonLabel.textWidth+50 {
 		w.width = w.buttonLabel.textWidth + 50
 	}
 }
@@ -1086,6 +1201,10 @@ func (eng *UIEngine) measureFontString(w *widget) {
 }
 
 func (eng *UIEngine) measureFontStringWithFaces(w *widget, face, faceLg font.Face) {
+	// Text is measured in the widget's own units, whatever its scale.
+	previousScale := eng.curScale
+	eng.curScale = 1
+	defer func() { eng.curScale = previousScale }()
 	text := eng.resolveText(w.text)
 	if w.parent != nil && (w.parent.kind == kindButton || w.parent.kind == kindCheckButton) && w.parent.buttonLabel == w && w.parent.text != "" {
 		text = eng.resolveText(w.parent.text)
@@ -1094,6 +1213,20 @@ func (eng *UIEngine) measureFontStringWithFaces(w *widget, face, faceLg font.Fac
 	if fontFace == nil {
 		return
 	}
+	key := textMeasureKey{valid: true, text: text, face: fontFace, scale: eng.uiScale, autoWidth: w.autoTextWidth, explicit: w.explicitWidth, autoHeight: w.autoTextHeight, justify: eng.textJustify(w), width: w.width, height: w.height}
+	if !w.autoTextWidth && w.width > 0 {
+		key.wrap = int(w.width * eng.uiScale)
+	}
+	if w.measured.valid && w.measured == key {
+		return
+	}
+	defer func() {
+		key.width, key.height = w.width, w.height
+		w.measured = key
+		// The key was taken before the size was written back; measure again
+		// from the written values next time only if they differ.
+		w.measured.width, w.measured.height = w.width, w.height
+	}()
 	clean := cleanText(text)
 	var lines []string
 	if !w.autoTextWidth && w.width > 0 {
@@ -1147,7 +1280,8 @@ func (eng *UIEngine) layoutRect(w *widget, parent Rect) Rect {
 	}
 	if w.parent != nil && w.parent.kind == kindScrollFrame && len(w.points) == 0 {
 		shift := w.parent.verticalScroll
-		rect := scaleRect(Rect{X0: parentRect.X0, Y0: parentRect.Y1 - shift - w.height, X1: parentRect.X0 + w.width, Y1: parentRect.Y1 - shift}, w.scale)
+		e := effectiveScaleOf(w)
+		rect := Rect{X0: parentRect.X0, Y0: parentRect.Y1 - (shift+w.height)*e, X1: parentRect.X0 + w.width*e, Y1: parentRect.Y1 - shift*e}
 		eng.rects[w] = rect
 		w.renderRect = rect
 		w.hasRenderRect = true
@@ -1164,6 +1298,11 @@ func (eng *UIEngine) layoutRect(w *widget, parent Rect) Rect {
 		}
 		return eng.layoutRect(target, targetParent), true
 	})
+	if w.unanchoredTopLevelFrame() {
+		// A frame with no anchor points has no position in the original client,
+		// so neither it nor anything anchored to it is drawn.
+		rect = Rect{X0: -1e6, Y0: -1e6, X1: -1e6, Y1: -1e6}
+	}
 	eng.rects[w] = rect
 	w.renderRect = rect
 	w.hasRenderRect = true
@@ -1352,15 +1491,55 @@ func (eng *UIEngine) drawEditText(canvas *image.RGBA, face, faceLg font.Face, w 
 	if text != "" {
 		eng.drawTextAlignedWidget(canvas, textFace, text, screenTextRect, screenHeight, textColor, textWidget)
 	}
-	if eng.Rt.focused == w {
+	if eng.Rt.focused == w && eng.caretShown {
 		dst := ScreenRect(screenTextRect, screenHeight)
 		origin := eng.editTextOrigin(textFace, text, dst, textWidget)
 		width := font.MeasureString(textFace, string([]rune(text)[:clampCursor(w.cursor, len([]rune(text)))])).Ceil()
-		caretX := origin + width + 1
 		top, bottom := editCaretBand(textFace, dst)
-		caret := image.Rect(caretX, top, caretX+1, bottom)
-		draw.Draw(canvas, caret, &image.Uniform{C: color.RGBA{R: 255, G: 220, B: 80, A: 255}}, image.Point{}, draw.Over)
+		// Wow.exe (CSimpleEditBox layout): the caret is a white box one font line
+		// tall and 4 / (768 * sqrt(aspect^2 + 1)) of the screen height wide.
+		aspect := float64(eng.screenWidth) / math.Max(1, float64(eng.screenHeight))
+		boxWidth := int(math.Round(4 * float64(eng.screenHeight) / (768 * math.Sqrt(aspect*aspect+1))))
+		if boxWidth < 1 {
+			boxWidth = 1
+		}
+		caretX := origin + width
+		caret := image.Rect(caretX, top, caretX+boxWidth, bottom)
+		draw.Draw(canvas, caret, &image.Uniform{C: color.RGBA{R: 255, G: 255, B: 255, A: 255}}, image.Point{}, draw.Over)
 	}
+}
+
+// updateCaretBlink is CSimpleEditBox's OnUpdate: the caret of the focused edit
+// box shows as soon as the cursor or focus changes, then flips every blink
+// speed seconds (0.5 unless set). It reports whether the caret flipped.
+func (eng *UIEngine) updateCaretBlink(elapsed float64) bool {
+	focused := eng.Rt.focused
+	if focused == nil || focused.kind != kindEditBox {
+		if eng.caretOwner != nil {
+			eng.caretOwner = nil
+			return true
+		}
+		return false
+	}
+	if focused != eng.caretOwner || focused.cursor != eng.caretCursor {
+		eng.caretOwner, eng.caretCursor = focused, focused.cursor
+		eng.caretShown, eng.caretTimer = true, 0
+		return true
+	}
+	speed := focused.blinkSpeed
+	if speed == 0 && !focused.blinkSet {
+		speed = 0.5
+	}
+	if speed == 0 {
+		return false
+	}
+	eng.caretTimer += elapsed
+	if eng.caretTimer > speed {
+		eng.caretShown = !eng.caretShown
+		eng.caretTimer = 0
+		return true
+	}
+	return false
 }
 
 func (eng *UIEngine) drawTextureColor(canvas *image.RGBA, r Rect, c rgba) {
@@ -1645,10 +1824,12 @@ func (eng *UIEngine) HandleCursor(x, y float64) bool {
 		}
 		return false
 	}
+	eng.startDragsIfNeeded(x, y)
 	target := eng.hitTest(x, y)
 	if target == eng.hovered {
 		return false
 	}
+	old := eng.hovered
 	if eng.hovered != nil && !eng.hovered.highlightLocked {
 		eng.hovered.highlighted = false
 	}
@@ -1656,86 +1837,8 @@ func (eng *UIEngine) HandleCursor(x, y float64) bool {
 	if target != nil && (target.kind == kindButton || target.kind == kindCheckButton) {
 		target.highlighted = true
 	}
+	eng.fireHoverChange(old, target)
 	return true
-}
-
-func (eng *UIEngine) HandleMouse(x, y float64, button window.MouseButton, down bool) bool {
-	if button != window.MouseButtonLeft {
-		return false
-	}
-	x, y = eng.worldInputPoint(x, y)
-	if eng.Rt != nil {
-		eng.Rt.cursorX = x
-		eng.Rt.cursorY = y
-	}
-	if eng.debugPanel.handleMouse(x, y, down, eng) {
-		return true
-	}
-	target := eng.hitTest(x, y)
-	if down {
-		eng.pressed = target
-		if target == nil {
-			if eng.Rt != nil {
-				eng.Rt.setFocus(nil)
-			}
-			return false
-		}
-		if target.kind == kindEditBox {
-			eng.Rt.setFocus(target)
-			eng.setEditCursor(target, x)
-			eng.selecting = target
-		} else if target.kind == kindSlider {
-			eng.sliderDragging = target
-			eng.setSliderValueAt(target, x, y)
-		} else if target.kind == kindButton || target.kind == kindCheckButton {
-			target.buttonState = "PUSHED"
-		}
-		if eng.Rt != nil {
-			eng.Rt.fire(target, "OnMouseDown", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString("LeftButton")})
-		}
-		return true
-	}
-	if eng.sliderDragging != nil {
-		slider := eng.sliderDragging
-		eng.setSliderValueAt(slider, x, y)
-		eng.sliderDragging = nil
-		eng.pressed = nil
-		if eng.Rt != nil {
-			eng.Rt.fire(slider, "OnMouseUp", []lua.LValue{slider.luaValue(eng.Rt.L), lua.LString("LeftButton")})
-		}
-		return true
-	}
-	pressed := eng.pressed
-	eng.pressed = nil
-	eng.selecting = nil
-	if pressed == nil {
-		return target != nil
-	}
-	if pressed.kind == kindButton || pressed.kind == kindCheckButton {
-		pressed.buttonState = "NORMAL"
-	}
-	if eng.Rt != nil {
-		eng.Rt.fire(pressed, "OnMouseUp", []lua.LValue{pressed.luaValue(eng.Rt.L), lua.LString("LeftButton")})
-	}
-	if pressed == target && (target.kind == kindButton || target.kind == kindCheckButton) {
-		if target.kind == kindCheckButton {
-			target.checked = !target.checked
-		}
-		if eng.Rt != nil {
-			eng.Rt.fire(target, "OnClick", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString("LeftButton"), lua.LBool(false)})
-		}
-		if eng.lastClick == target && time.Since(eng.lastClickAt) <= 500*time.Millisecond {
-			if eng.Rt != nil {
-				eng.Rt.fire(target, "OnDoubleClick", []lua.LValue{target.luaValue(eng.Rt.L), lua.LString("LeftButton")})
-			}
-			eng.lastClick = nil
-		} else if target.kind == kindButton || target.kind == kindCheckButton {
-			eng.lastClick = target
-			eng.lastClickAt = time.Now()
-		}
-		return true
-	}
-	return pressed == target
 }
 
 func (eng *UIEngine) setSliderValueAt(w *widget, x, y float64) {
@@ -1935,7 +2038,7 @@ func (eng *UIEngine) handleKey(key window.Key, extendSelection bool) bool {
 	if eng.worldUIReady && key == window.KeyEnter && eng.Rt.focused == nil {
 		return eng.activateWorldChat()
 	}
-	if eng.worldUIReady && eng.worldActive && eng.Rt.focused == nil && eng.handleWorldHotkey(key) {
+	if eng.worldUIReady && eng.worldActive && eng.Rt.focused == nil && eng.handleBindingKey(key, eng.keyMods) {
 		return true
 	}
 	w := eng.Rt.focused
@@ -2065,6 +2168,7 @@ if wasShown then target:Hide() else target:Show() end
 }
 
 func (eng *UIEngine) HandleKeyWithMods(key window.Key, mods window.ModifierKey) bool {
+	eng.keyMods = mods
 	if key == window.KeyF2 {
 		eng.ToggleDebugPanel()
 		return true
@@ -2114,6 +2218,9 @@ func (eng *UIEngine) isLoginTarget(target *widget) bool {
 }
 
 func (eng *UIEngine) HandleKeyUp(key window.Key) bool {
+	if eng.worldUIReady && eng.worldActive && eng.handleBindingKeyUp(key) {
+		return true
+	}
 	target := eng.keyboardTarget()
 	if target == nil {
 		return false
@@ -2399,10 +2506,10 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 			bgImg = eng.tintBackdropImage(bd.bgFile, bgImg, bd.bgColor)
 		}
 		// Tile the background inside insets
-		inL := int(bd.insetL * eng.uiScale)
-		inR := int(bd.insetR * eng.uiScale)
-		inT := int(bd.insetT * eng.uiScale)
-		inB := int(bd.insetB * eng.uiScale)
+		inL := int(bd.insetL * eng.pxUnit())
+		inR := int(bd.insetR * eng.pxUnit())
+		inT := int(bd.insetT * eng.pxUnit())
+		inB := int(bd.insetB * eng.pxUnit())
 		inner := image.Rect(dst.Min.X+inL, dst.Min.Y+inT, dst.Max.X-inR, dst.Max.Y-inB)
 		if inner.Dx() > 0 && inner.Dy() > 0 {
 			if bd.tile {
@@ -2412,10 +2519,10 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 			}
 		}
 	} else if !bd.bgColor.isZero() {
-		inL := int(bd.insetL * eng.uiScale)
-		inR := int(bd.insetR * eng.uiScale)
-		inT := int(bd.insetT * eng.uiScale)
-		inB := int(bd.insetB * eng.uiScale)
+		inL := int(bd.insetL * eng.pxUnit())
+		inR := int(bd.insetR * eng.pxUnit())
+		inT := int(bd.insetT * eng.pxUnit())
+		inB := int(bd.insetB * eng.pxUnit())
 		inner := image.Rect(dst.Min.X+inL, dst.Min.Y+inT, dst.Max.X-inR, dst.Max.Y-inB)
 		if inner.Dx() > 0 && inner.Dy() > 0 {
 			bgCol := color.RGBA{R: uint8(bd.bgColor.r * 255), G: uint8(bd.bgColor.g * 255), B: uint8(bd.bgColor.b * 255), A: uint8(bd.bgColor.a * 255)}
@@ -2432,7 +2539,7 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 		if !bd.edgeColor.isZero() {
 			edgeImg = eng.tintBackdropImage(bd.edgeFile, edgeImg, bd.edgeColor)
 		}
-		drawBackdropEdge(canvas, dst, edgeImg, bd.edgeSize*eng.uiScale)
+		drawBackdropEdge(canvas, dst, edgeImg, bd.edgeSize*eng.pxUnit())
 	} else if bd.edgeFile != "" {
 		drawBorder(canvas, dst, color.RGBA{R: 80, G: 120, B: 150, A: 200}, 1)
 	}
@@ -2583,7 +2690,7 @@ func drawBackdropEdge(canvas *image.RGBA, dst image.Rectangle, source image.Imag
 func (eng *UIEngine) drawTiled(canvas *image.RGBA, dst image.Rectangle, source image.Image, tileSize float64) {
 	tile := source
 	if tileSize > 0 {
-		size := int(tileSize * eng.uiScale)
+		size := int(tileSize * eng.pxUnit())
 		if size > 0 {
 			tileImage := image.NewRGBA(image.Rect(0, 0, size, size))
 			xdraw.NearestNeighbor.Scale(tileImage, tileImage.Bounds(), source, source.Bounds(), xdraw.Src, nil)
@@ -2614,10 +2721,10 @@ func (eng *UIEngine) drawTiledTexture(canvas *image.RGBA, source image.Image, r 
 	tileWidth := dst.Dx()
 	tileHeight := dst.Dy()
 	if horiz {
-		tileWidth = int(math.Round(float64(tile.Bounds().Dx()) * eng.uiScale))
+		tileWidth = int(math.Round(float64(tile.Bounds().Dx()) * eng.pxUnit()))
 	}
 	if vert {
-		tileHeight = int(math.Round(float64(tile.Bounds().Dy()) * eng.uiScale))
+		tileHeight = int(math.Round(float64(tile.Bounds().Dy()) * eng.pxUnit()))
 	}
 	if tileWidth < 1 || tileHeight < 1 {
 		return
@@ -2711,12 +2818,18 @@ func (eng *UIEngine) faceFor(w *widget, fallback, fallbackLarge font.Face) font.
 			}
 		}
 	} else if strings.Contains(strings.ToLower(w.fontObject), "large") || strings.Contains(strings.ToLower(w.fontObject), "huge") {
+		if unit := eng.pxUnit(); unit != eng.uiScale {
+			return eng.cachedFace("__base16", eng.FontObj, 16*unit)
+		}
 		return fallbackLarge
 	}
 	if size == 13 && style == nil {
+		if unit := eng.pxUnit(); unit != eng.uiScale {
+			return eng.cachedFace("__base13", eng.FontObj, 13*unit)
+		}
 		return fallback
 	}
-	return eng.cachedFace(fontKey, fontObj, size*eng.uiScale, fallback)
+	return eng.cachedFace(fontKey, fontObj, size*eng.pxUnit(), fallback)
 }
 
 func (eng *UIEngine) cachedFace(key string, fontObj *opentype.Font, size float64, fallback ...font.Face) font.Face {

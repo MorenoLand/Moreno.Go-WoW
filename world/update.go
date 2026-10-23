@@ -66,6 +66,7 @@ const (
 	UnitBytes0Field          uint16 = 0x17
 	UnitDisplayIDField       uint16 = 0x43
 	UnitNativeDisplayIDField uint16 = 0x44
+	UnitMountDisplayIDField  uint16 = 0x45
 )
 
 type UpdateMovement struct {

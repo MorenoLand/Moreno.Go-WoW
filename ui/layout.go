@@ -54,13 +54,15 @@ func resolveRect(w *widget, parent Rect, relative func(string) (Rect, bool)) Rec
 	// setAllPoints or explicit fill anchors against the parent only.
 	// TOPLEFT+BOTTOMRIGHT with a relativeTo (e.g. ChatFrameTab SelectedMid
 	// stretching to TabMiddle) must resolve through the normal anchor path.
+	e := effectiveScaleOf(w)
+	width, height := w.width*e, w.height*e
 	if len(w.points) == 0 {
 		cx := (parent.X0 + parent.X1) / 2
 		cy := (parent.Y0 + parent.Y1) / 2
-		return scaleRect(Rect{cx - w.width/2, cy - w.height/2, cx + w.width/2, cy + w.height/2}, w.scale)
+		return Rect{cx - width/2, cy - height/2, cx + width/2, cy + height/2}
 	}
 	if len(w.points) == 2 && w.points[0].point == "TOPLEFT" && w.points[1].point == "BOTTOMRIGHT" && w.points[0].relativePoint == "TOPLEFT" && w.points[1].relativePoint == "BOTTOMRIGHT" && w.points[0].x == 0 && w.points[0].y == 0 && w.points[1].x == 0 && w.points[1].y == 0 && w.points[0].relativeTo == "" && w.points[1].relativeTo == "" {
-		return scaleRect(parent, w.scale)
+		return parent
 	}
 
 	// Compute each anchor's absolute position, then derive the rect from
@@ -78,8 +80,8 @@ func resolveRect(w *widget, parent Rect, relative func(string) (Rect, bool)) Rec
 		if p.relativePoint == "" {
 			gx, gy = fx, fy
 		}
-		ax := base.X0 + gx*base.W() + p.x
-		ay := base.Y0 + gy*base.H() + p.y
+		ax := base.X0 + gx*base.W() + p.x*e
+		ay := base.Y0 + gy*base.H() + p.y*e
 		anchorPos[p.point] = [2]float64{ax, ay}
 	}
 
@@ -136,11 +138,11 @@ func resolveRect(w *widget, parent Rect, relative func(string) (Rect, bool)) Rec
 	}
 	if v, ok := anchorPos["CENTER"]; ok {
 		if !x0Set && !x1Set {
-			rect.X0, rect.X1 = v[0]-w.width/2, v[0]+w.width/2
+			rect.X0, rect.X1 = v[0]-width/2, v[0]+width/2
 			x0Set, x1Set = true, true
 		}
 		if !y0Set && !y1Set {
-			rect.Y0, rect.Y1 = v[1]-w.height/2, v[1]+w.height/2
+			rect.Y0, rect.Y1 = v[1]-height/2, v[1]+height/2
 			y0Set, y1Set = true, true
 		}
 	}
@@ -149,38 +151,38 @@ func resolveRect(w *widget, parent Rect, relative func(string) (Rect, bool)) Rec
 		aligned := false
 		for _, point := range []string{"TOP", "BOTTOM", "CENTER"} {
 			if v, ok := anchorPos[point]; ok {
-				rect.X0, rect.X1 = v[0]-w.width/2, v[0]+w.width/2
+				rect.X0, rect.X1 = v[0]-width/2, v[0]+width/2
 				aligned = true
 				break
 			}
 		}
 		if !aligned {
 			cx := (parent.X0 + parent.X1) / 2
-			rect.X0, rect.X1 = cx-w.width/2, cx+w.width/2
+			rect.X0, rect.X1 = cx-width/2, cx+width/2
 		}
 	} else if x0Set && !x1Set {
-		rect.X1 = rect.X0 + w.width
+		rect.X1 = rect.X0 + width
 	} else if !x0Set && x1Set {
-		rect.X0 = rect.X1 - w.width
+		rect.X0 = rect.X1 - width
 	}
 
 	if !y0Set && !y1Set {
 		aligned := false
 		for _, point := range []string{"LEFT", "RIGHT", "CENTER"} {
 			if v, ok := anchorPos[point]; ok {
-				rect.Y0, rect.Y1 = v[1]-w.height/2, v[1]+w.height/2
+				rect.Y0, rect.Y1 = v[1]-height/2, v[1]+height/2
 				aligned = true
 				break
 			}
 		}
 		if !aligned {
 			cy := (parent.Y0 + parent.Y1) / 2
-			rect.Y0, rect.Y1 = cy-w.height/2, cy+w.height/2
+			rect.Y0, rect.Y1 = cy-height/2, cy+height/2
 		}
 	} else if y0Set && !y1Set {
-		rect.Y1 = rect.Y0 + w.height
+		rect.Y1 = rect.Y0 + height
 	} else if !y0Set && y1Set {
-		rect.Y0 = rect.Y1 - w.height
+		rect.Y0 = rect.Y1 - height
 	}
 	if rect.X1 < rect.X0 {
 		rect.X0, rect.X1 = rect.X1, rect.X0
@@ -188,7 +190,7 @@ func resolveRect(w *widget, parent Rect, relative func(string) (Rect, bool)) Rec
 	if rect.Y1 < rect.Y0 {
 		rect.Y0, rect.Y1 = rect.Y1, rect.Y0
 	}
-	return scaleRect(rect, w.scale)
+	return rect
 }
 
 func scaleRect(rect Rect, scale float64) Rect {
@@ -209,4 +211,61 @@ func ScreenRect(r Rect, screenHeight float64) image.Rectangle {
 		int(r.X0), int(screenHeight-r.Y1),
 		int(r.X1), int(screenHeight-r.Y0),
 	)
+}
+
+// effectiveScaleOf is the widget's scale multiplied through its ancestors,
+// leaving out the roots whose scale is the screen's (the engine's UI scale
+// already maps UI units to pixels). Sizes and offsets of a widget are in its
+// own units, which are this many root units each.
+func effectiveScaleOf(w *widget) float64 {
+	scale := 1.0
+	for current := w; current != nil; current = current.parent {
+		switch current.name {
+		case "UIParent", "GlueParent", "WorldFrame":
+			return scale
+		}
+		if current.scale > 0 {
+			scale *= current.scale
+		}
+	}
+	return scale
+}
+
+// pxUnit is how many pixels one unit of the widget being painted is wide:
+// the UI scale times the widget's effective scale.
+func (eng *UIEngine) pxUnit() float64 {
+	if eng.curScale <= 0 {
+		return eng.uiScale
+	}
+	return eng.uiScale * eng.curScale
+}
+
+// onDemandRect lays a widget out from the screen down, without disturbing the
+// layout cache of the frame being painted, so scripts can ask for GetLeft and
+// friends at any time.
+func (eng *UIEngine) onDemandRect(w *widget) (Rect, bool) {
+	if eng == nil || w == nil {
+		return Rect{}, false
+	}
+	screen := eng.screen
+	if screen.W() <= 0 {
+		// Nothing has been painted yet: use the host's screen, or the 4:3 default.
+		screen = Rect{X1: 1024, Y1: 768}
+		if eng.Rt != nil && eng.Rt.Host != nil {
+			if width, height := eng.Rt.Host.ScreenSize(); width > 0 && height > 0 {
+				screen.X1 = 768 * width / height
+			}
+		}
+	}
+	saved, savedActive := eng.rects, eng.layoutActive
+	eng.rects, eng.layoutActive = make(map[*widget]Rect), make(map[*widget]bool)
+	defer func() { eng.rects, eng.layoutActive = saved, savedActive }()
+	var root *widget
+	for current := w; current != nil; current = current.parent {
+		root = current
+	}
+	if root == nil || (root.name != "UIParent" && root.name != "GlueParent" && root != w) {
+		return Rect{}, false
+	}
+	return eng.layoutRect(w, screen), true
 }

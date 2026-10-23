@@ -100,7 +100,7 @@ func (state *worldAuraState) apply(rt *ui.Runtime, loader *ui.Loader, update wor
 			continue
 		}
 		info := state.spells.info(loader, slot.SpellID)
-		aura := ui.AuraInfo{Name: info.name, Rank: info.rank, Texture: info.icon, Count: int(slot.Charges), DebuffType: info.debuffType, Harmful: slot.Flags&0x80 != 0}
+		aura := ui.AuraInfo{SpellID: slot.SpellID, Name: info.name, Rank: info.rank, Texture: info.icon, Count: int(slot.Charges), DebuffType: info.debuffType, Harmful: slot.Flags&0x80 != 0}
 		if aura.Count == 0 {
 			aura.Count = 1
 		}

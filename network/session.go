@@ -242,3 +242,67 @@ func splitEndpoint(address string, defaultPort uint16) (string, uint16, error) {
 	}
 	return strings.Trim(address, "[]"), defaultPort, nil
 }
+
+// QueryItem asks the server for an item entry's template.
+func (s *Session) QueryItem(entry uint32) error {
+	if s == nil || s.connection == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return s.connection.QueryItem(entry, 0)
+}
+
+// SwapItem moves an item between two named slots.
+func (s *Session) SwapItem(dstBag, dstSlot, srcBag, srcSlot uint8) error {
+	if s == nil || s.connection == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return s.connection.SwapItem(dstBag, dstSlot, srcBag, srcSlot)
+}
+
+// AutoEquipItem equips the item at (bag, slot).
+func (s *Session) AutoEquipItem(bag, slot uint8) error {
+	if s == nil || s.connection == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return s.connection.AutoEquipItem(bag, slot)
+}
+
+// AutoStoreBagItem stores an item in a free slot of a bag.
+func (s *Session) AutoStoreBagItem(srcBag, srcSlot, dstBag uint8) error {
+	if s == nil || s.connection == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return s.connection.AutoStoreBagItem(srcBag, srcSlot, dstBag)
+}
+
+// SplitItem splits count items off a stack.
+func (s *Session) SplitItem(srcBag, srcSlot, dstBag, dstSlot, count uint8) error {
+	if s == nil || s.connection == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return s.connection.SplitItem(srcBag, srcSlot, dstBag, dstSlot, count)
+}
+
+// DestroyItem destroys an item stack.
+func (s *Session) DestroyItem(bag, slot, count uint8) error {
+	if s == nil || s.connection == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return s.connection.DestroyItem(bag, slot, count)
+}
+
+// UseItem uses an item.
+func (s *Session) UseItem(bag, slot, castCount uint8, spellID uint32, itemGUID uint64, targetMask uint32, targetGUID uint64) error {
+	if s == nil || s.connection == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return s.connection.UseItem(bag, slot, castCount, spellID, itemGUID, targetMask, targetGUID)
+}
+
+// SendRaw sends a client packet with a body the caller built.
+func (s *Session) SendRaw(opcode world.ClientOpcode, body []byte) error {
+	if s == nil || s.connection == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return s.connection.SendRaw(opcode, body)
+}

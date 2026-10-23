@@ -2,9 +2,9 @@ package ui
 
 import (
 	"fmt"
-	"math"
 
 	lua "github.com/yuin/gopher-lua"
+	"golang.org/x/image/font"
 )
 
 // widgetKind enumerates the region and frame types the glue XML defines.
@@ -101,36 +101,56 @@ type messageLine struct {
 // the fields the glue scripts observe through their methods.
 type widget struct {
 	kind            widgetKind
-	name            string
-	id              int
-	parent          *widget
-	owner           *widget
-	children        []*widget
-	shown           bool
-	topLevel        bool
-	movable         bool
-	enableMouse     bool
-	enableKeyboard  bool
-	clampedToScreen bool
-	frameStrata     int
-	frameLevel      int
-	layerLevel      int
-	hitInsetL       float64
-	hitInsetR       float64
-	hitInsetT       float64
-	hitInsetB       float64
-	renderRect      Rect
-	hasRenderRect   bool
-	width           float64
-	height          float64
-	explicitWidth   bool
-	explicitHeight  bool
-	scale           float64
-	alpha           float64
-	points          []anchorPoint
-	scripts         map[string]*lua.LFunction
-	events          map[string]bool
-	backdrop        *backdrop
+	typeName        string // GetObjectType for frame types that share another kind's behaviour (GameTooltip, Cooldown, ...)
+	tip             *tooltipState
+	animation       *animationState
+	metaProxy       *lua.LTable
+	animationGroups []*widget
+
+	pushedTextOffsetX, pushedTextOffsetY float64
+	enableMouseWheel                     bool
+	clickMask, dragMask                  uint8
+	resizable                            bool
+	minResizeW, minResizeH               float64
+	maxResizeW, maxResizeH               float64
+	ignoreDepth                          bool
+	depth                                float64
+	rotation                             float64
+	multiLine, numeric                   bool
+	zoom                                 int
+	zoomSet                              bool
+	blinkSpeed                           float64
+	blinkSet                             bool
+	name                                 string
+	id                                   int
+	parent                               *widget
+	owner                                *widget
+	children                             []*widget
+	shown                                bool
+	topLevel                             bool
+	movable                              bool
+	enableMouse                          bool
+	enableKeyboard                       bool
+	clampedToScreen                      bool
+	frameStrata                          int
+	frameLevel                           int
+	layerLevel                           int
+	hitInsetL                            float64
+	hitInsetR                            float64
+	hitInsetT                            float64
+	hitInsetB                            float64
+	renderRect                           Rect
+	hasRenderRect                        bool
+	width                                float64
+	height                               float64
+	explicitWidth                        bool
+	explicitHeight                       bool
+	scale                                float64
+	alpha                                float64
+	points                               []anchorPoint
+	scripts                              map[string]*lua.LFunction
+	events                               map[string]bool
+	backdrop                             *backdrop
 
 	// Button and CheckButton state.
 	buttonState            string
@@ -226,6 +246,7 @@ type widget struct {
 	justifyV        string
 	textColor       rgba
 	textWidth       float64
+	measured        textMeasureKey // what the last measurement was made from
 	autoTextWidth   bool
 	autoTextHeight  bool
 	nonSpaceWrap    bool
@@ -294,7 +315,12 @@ func addWidgetChild(parent, child *widget) {
 	parent.children = append(parent.children, child)
 }
 
-func (w *widget) objectType() string { return w.kind.objectType() }
+func (w *widget) objectType() string {
+	if w.typeName != "" {
+		return w.typeName
+	}
+	return w.kind.objectType()
+}
 
 func (w *widget) parentName() string {
 	if w == nil || w.parent == nil {
@@ -419,8 +445,13 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 				}
 				w.parent.children = children
 			}
+			changed := w.parent != p
 			w.parent = p
 			addWidgetChild(p, w)
+			if changed && p != nil && w.isScriptableFrame() {
+				// Reparenting puts a frame one level above its new parent.
+				w.setFrameLevel(p.frameLevel + 1)
+			}
 			return 0
 		},
 		"GetID": func(L *lua.LState, w *widget) int {
@@ -436,15 +467,20 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 				return 0
 			}
 			w.shown = true
-			rt.fireHandler(w, "OnShow")
+			if w.visibleThroughParents() {
+				rt.fireShowCascade(w)
+			}
 			return 0
 		},
 		"Hide": func(L *lua.LState, w *widget) int {
 			if !w.shown {
 				return 0
 			}
+			visible := w.visibleThroughParents()
 			w.shown = false
-			rt.fireHandler(w, "OnHide")
+			if visible {
+				rt.fireHideCascade(w)
+			}
 			return 0
 		},
 		"IsShown": func(L *lua.LState, w *widget) int {
@@ -589,7 +625,8 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"SetFrameLevel": func(L *lua.LState, w *widget) int {
-			w.frameLevel = L.CheckInt(2)
+			// The frames below keep their levels relative to this one.
+			w.setFrameLevel(L.CheckInt(2))
 			return 0
 		},
 		"SetFrameStrata": func(L *lua.LState, w *widget) int {
@@ -612,16 +649,16 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 						level = sibling.frameLevel + 1
 					}
 				}
-				w.frameLevel = level
+				w.setFrameLevel(level)
 			}
 			return 0
 		},
 		"EnableKeyboard": func(L *lua.LState, w *widget) int {
-			w.enableKeyboard = L.CheckBool(2)
+			w.enableKeyboard = luaTruthy(L, 2)
 			return 0
 		},
 		"EnableMouse": func(L *lua.LState, w *widget) int {
-			w.enableMouse = L.CheckBool(2)
+			w.enableMouse = luaTruthy(L, 2)
 			return 0
 		},
 		"SetHitRectInsets": func(L *lua.LState, w *widget) int {
@@ -631,9 +668,15 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.hitInsetB = float64(L.CheckNumber(5))
 			return 0
 		},
-		"SetMovable":        func(L *lua.LState, w *widget) int { w.movable = L.CheckBool(2); return 0 },
-		"RegisterForClicks": func(L *lua.LState, w *widget) int { return 0 },
-		"RegisterForDrag":   func(L *lua.LState, w *widget) int { return 0 },
+		"SetMovable": func(L *lua.LState, w *widget) int { w.movable = luaTruthy(L, 2); return 0 },
+		"RegisterForClicks": func(L *lua.LState, w *widget) int {
+			w.clickMask = clickBits(luaStringArgs(L, 2))
+			return 0
+		},
+		"RegisterForDrag": func(L *lua.LState, w *widget) int {
+			w.dragMask = dragBits(luaStringArgs(L, 2))
+			return 0
+		},
 		"SetScript": func(L *lua.LState, w *widget) int {
 			handler := L.CheckString(2)
 			if L.Get(3) == lua.LNil {
@@ -769,7 +812,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		},
 		"GetPoint": func(L *lua.LState, w *widget) int {
 			idx := 1
-			if L.GetTop() >= 1 {
+			if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
 				idx = L.CheckInt(2)
 			}
 			if idx < 1 || idx > len(w.points) {
@@ -790,8 +833,8 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 				L.Push(lua.LNil)
 			}
 			L.Push(lua.LString(p.relativePoint))
-			L.Push(lua.LNumber(p.x))
-			L.Push(lua.LNumber(p.y))
+			L.Push(lua.LNumber(rt.anchorOffset(p.x)))
+			L.Push(lua.LNumber(rt.anchorOffset(p.y)))
 			return 5
 		},
 		"GetNumPoints": func(L *lua.LState, w *widget) int {
@@ -850,7 +893,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			value := L.Get(2)
 			switch value.Type() {
 			case lua.LTBool:
-				w.checked = L.CheckBool(2)
+				w.checked = luaTruthy(L, 2)
 			case lua.LTNumber:
 				w.checked = L.CheckNumber(2) != 0
 			case lua.LTString:
@@ -874,21 +917,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"SetFormattedText": func(L *lua.LState, w *widget) int {
-			format := L.CheckString(2)
-			args := make([]interface{}, 0, L.GetTop()-1)
-			for i := 3; i <= L.GetTop(); i++ {
-				value := L.Get(i)
-				if number, ok := value.(lua.LNumber); ok {
-					if math.Trunc(float64(number)) == float64(number) {
-						args = append(args, int64(number))
-					} else {
-						args = append(args, float64(number))
-					}
-				} else {
-					args = append(args, value.String())
-				}
-			}
-			rt.setText(w, sprintf(format, args))
+			rt.setText(w, rt.luaFormat(L, 2))
 			return 0
 		},
 		"GetText": func(L *lua.LState, w *widget) int {
@@ -955,7 +984,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"SetAutoFocus": func(L *lua.LState, w *widget) int {
-			w.autoFocus = L.CheckBool(2)
+			w.autoFocus = luaTruthy(L, 2)
 			return 0
 		},
 		"SetMaxLetters": func(L *lua.LState, w *widget) int {
@@ -973,8 +1002,8 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			}
 			return 0
 		},
-		"SetMultiLine": func(L *lua.LState, w *widget) int { return 0 },
-		"SetNumeric":   func(L *lua.LState, w *widget) int { return 0 },
+		"SetMultiLine": func(L *lua.LState, w *widget) int { w.multiLine = luaTruthyOpt(L, 2, true); return 0 },
+		"SetNumeric":   func(L *lua.LState, w *widget) int { w.numeric = luaTruthyOpt(L, 2, true); return 0 },
 		"SetMinMaxValues": func(L *lua.LState, w *widget) int {
 			w.minValue = float64(L.CheckNumber(2))
 			w.maxValue = float64(L.CheckNumber(3))
@@ -1101,7 +1130,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		},
 		"SetDisplayValue": func(L *lua.LState, w *widget) int {
 			if L.Get(2).Type() == lua.LTBool {
-				w.checked = L.CheckBool(2)
+				w.checked = luaTruthy(L, 2)
 			} else {
 				w.value = float64(L.CheckNumber(2))
 			}
@@ -1199,7 +1228,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		"GetMaxLines":    func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(w.messageMaxLines)); return 1 },
 		"SetTimeVisible": func(L *lua.LState, w *widget) int { w.messageDuration = float64(L.CheckNumber(2)); return 0 },
 		"GetTimeVisible": func(L *lua.LState, w *widget) int { L.Push(lua.LNumber(w.messageDuration)); return 1 },
-		"SetFading":      func(L *lua.LState, w *widget) int { w.messageFading = L.CheckBool(2); return 0 },
+		"SetFading":      func(L *lua.LState, w *widget) int { w.messageFading = luaTruthy(L, 2); return 0 },
 		"IsFading":       func(L *lua.LState, w *widget) int { L.Push(lua.LBool(w.messageFading)); return 1 },
 		"AtBottom": func(L *lua.LState, w *widget) int {
 			L.Push(lua.LBool(w.messageOffset == 0))
@@ -1290,7 +1319,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			}
 			return 0
 		},
-		"SetIndented":          func(L *lua.LState, w *widget) int { w.messageIndented = L.CheckBool(2); return 0 },
+		"SetIndented":          func(L *lua.LState, w *widget) int { w.messageIndented = luaTruthy(L, 2); return 0 },
 		"SetInsertMode":        func(L *lua.LState, w *widget) int { w.messageInsert = L.CheckString(2); return 0 },
 		"SetNonSpaceWrap":      func(L *lua.LState, w *widget) int { return 0 },
 		"SetHyperlinksEnabled": func(L *lua.LState, w *widget) int { return 0 },
@@ -1393,7 +1422,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			w.desaturated = false
 			switch value := L.Get(2); value.Type() {
 			case lua.LTBool:
-				w.desaturated = L.CheckBool(2)
+				w.desaturated = luaTruthy(L, 2)
 			case lua.LTNumber:
 				w.desaturated = L.CheckNumber(2) != 0
 			}
@@ -1421,20 +1450,27 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"SetTexCoord": func(L *lua.LState, w *widget) int {
-			if L.GetTop() >= 5 {
-				w.texCoordL = float64(L.CheckNumber(2))
-				w.texCoordR = float64(L.CheckNumber(3))
-				w.texCoordT = float64(L.CheckNumber(4))
-				w.texCoordB = float64(L.CheckNumber(5))
+			switch {
+			case L.GetTop() >= 9:
+				// ULx, ULy, LLx, LLy, URx, URy, LRx, LRy: the rectangle's edges.
+				w.texCoordL = float64(L.OptNumber(2, 0))
+				w.texCoordT = float64(L.OptNumber(3, 0))
+				w.texCoordB = float64(L.OptNumber(5, 0))
+				w.texCoordR = float64(L.OptNumber(6, 0))
+			case L.GetTop() >= 5:
+				w.texCoordL = float64(L.OptNumber(2, 0))
+				w.texCoordR = float64(L.OptNumber(3, 0))
+				w.texCoordT = float64(L.OptNumber(4, 0))
+				w.texCoordB = float64(L.OptNumber(5, 0))
 			}
 			return 0
 		},
 		"GetTexCoord": func(L *lua.LState, w *widget) int {
-			L.Push(lua.LNumber(w.texCoordL))
-			L.Push(lua.LNumber(w.texCoordR))
-			L.Push(lua.LNumber(w.texCoordT))
-			L.Push(lua.LNumber(w.texCoordB))
-			return 4
+			// ULx, ULy, LLx, LLy, URx, URy, LRx, LRy.
+			for _, value := range []float64{w.texCoordL, w.texCoordT, w.texCoordL, w.texCoordB, w.texCoordR, w.texCoordT, w.texCoordR, w.texCoordB} {
+				L.Push(lua.LNumber(value))
+			}
+			return 8
 		},
 		"SetFontObject": func(L *lua.LState, w *widget) int {
 			w.fontObject = fontObjectName(L, 2)
@@ -1478,7 +1514,15 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 1
 		},
 		"GetTextWidth": func(L *lua.LState, w *widget) int {
-			L.Push(lua.LNumber(w.textWidth))
+			// A button's text is its label's: measured now, not at the next paint.
+			label := w
+			if w.buttonLabel != nil {
+				label = w.buttonLabel
+			}
+			if label.kind == kindFontString && rt.measureText != nil {
+				rt.measureText(label)
+			}
+			L.Push(lua.LNumber(label.textWidth))
 			return 1
 		},
 		"SetBackdrop": func(L *lua.LState, w *widget) int {
@@ -1645,7 +1689,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 0
 		},
 		"EnableSubtitles": func(L *lua.LState, w *widget) int {
-			w.subtitles = L.CheckBool(2)
+			w.subtitles = luaTruthy(L, 2)
 			return 0
 		},
 		"SetOwner": func(L *lua.LState, w *widget) int {
@@ -1685,7 +1729,24 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		},
 	}
 
+	for name, fn := range rt.extraWidgetMethods() {
+		if _, exists := methods[name]; !exists {
+			methods[name] = fn
+		}
+	}
+	for name, fn := range rt.coordinateMethods() {
+		methods[name] = fn
+	}
+	tooltipMethods := rt.tooltipMethods()
+	animationMethods := rt.animationMethods()
+	for name, fn := range tooltipMethods {
+		if _, exists := methods[name]; !exists {
+			methods[name] = fn
+		}
+	}
+
 	methodIndex := L.NewTable()
+	rt.widgetMethodIndex = methodIndex
 	for methodName, method := range methods {
 		method := method
 		methodIndex.RawSetString(methodName, L.NewFunction(func(L *lua.LState) int {
@@ -1715,7 +1776,23 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 				return 1
 			}
 		}
-		if fn, ok := methods[name]; ok {
+		// Methods an add-on wrote into the type's method table come next.
+		if table := rt.addonMethods[w.objectType()]; table != nil {
+			// (An entry still holding the built-in is left to the path below, which
+			// also notes whether the call changed what the screen shows.)
+			if v := table.RawGetString(name); v != lua.LNil && v != methodIndex.RawGetString(name) {
+				L.Push(v)
+				return 1
+			}
+		}
+		fn, ok := methods[name]
+		if tipFn, isTip := tooltipMethods[name]; isTip && w.typeName == "GameTooltip" {
+			fn, ok = tipFn, true
+		}
+		if animFn, isAnim := animationMethods[name]; isAnim && w.isAnimation() {
+			fn, ok = animFn, true
+		}
+		if ok {
 			L.Push(L.NewFunction(func(L *lua.LState) int {
 				defer func() {
 					if r := recover(); r != nil {
@@ -1757,12 +1834,13 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		w.ensureFields(L).RawSetString(L.CheckString(2), L.Get(3))
 		return 0
 	}))
+	installWidgetSetmetatable(L)
 	baseGetMetatable := L.GetGlobal("getmetatable")
 	L.SetGlobal("getmetatable", L.NewFunction(func(L *lua.LState) int {
 		if ud, ok := L.Get(1).(*lua.LUserData); ok {
-			if _, ok := ud.Value.(*widget); ok {
+			if w, ok := ud.Value.(*widget); ok {
 				proxy := L.NewTable()
-				proxy.RawSetString("__index", methodIndex)
+				proxy.RawSetString("__index", rt.addonMethodTable(w.objectType()))
 				L.Push(proxy)
 				return 1
 			}
@@ -1879,4 +1957,17 @@ func fontObjectName(L *lua.LState, idx int) string {
 		}
 	}
 	return ""
+}
+
+// textMeasureKey is everything a FontString measurement depends on, so an
+// unchanged string is not measured again every frame.
+type textMeasureKey struct {
+	valid                           bool
+	text                            string
+	face                            font.Face
+	wrap                            int
+	scale                           float64
+	autoWidth, explicit, autoHeight bool
+	justify                         string
+	width, height                   float64
 }

@@ -35,7 +35,16 @@ type UnitInfo struct {
 	Player     bool
 	Dead       bool
 	Visible    bool
-	Auras      []AuraInfo
+	XP, XPMax  int
+	// Hostile and Friendly are the unit's reaction towards the player; neither
+	// means neutral.
+	Hostile, Friendly bool
+	InCombat          bool
+	Mounted           bool
+	// Classification is the UnitClassification string ("normal", "elite", ...).
+	Classification string
+	CreatureType   string
+	Auras          []AuraInfo
 }
 
 type AuraInfo struct {
@@ -50,6 +59,7 @@ type AuraInfo struct {
 	CanStealOrPurge   bool
 	ShouldConsolidate bool
 	Harmful           bool
+	SpellID           uint32
 }
 
 func (rt *Runtime) ensureUnits() {
@@ -124,6 +134,18 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 	if value, ok := fields[0x36]; ok {
 		info.Level = int(value)
 	}
+	if value, ok := fields[634]; ok {
+		info.XP = int(value)
+	}
+	if value, ok := fields[635]; ok {
+		info.XPMax = int(value)
+	}
+	if value, ok := fields[0x3B]; ok {
+		info.InCombat = value&0x80000 != 0
+	}
+	if value, ok := fields[0x45]; ok {
+		info.Mounted = value != 0
+	}
 	changed := false
 	for _, entry := range []struct {
 		Event   string
@@ -133,6 +155,10 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 			changed = true
 			rt.FireEvent(entry.Event, lua.LString(unit))
 		}
+	}
+	if old.XP != info.XP || old.XPMax != info.XPMax {
+		changed = true
+		rt.FireEvent("PLAYER_XP_UPDATE", lua.LString(unit))
 	}
 	return changed
 }
@@ -158,6 +184,11 @@ func (rt *Runtime) UnitGUID(unit string) uint64 {
 	}
 	return 0
 }
+
+// RaceFileFromID and ClassFileFromID name the race and class stored in a
+// player unit's bytes-0 update field, for portrait paths and class colours.
+func RaceFileFromID(id int) string  { return raceFileFromID(id) }
+func ClassFileFromID(id int) string { return classFileFromID(id) }
 
 func (rt *Runtime) unitInfo(unit string) *UnitInfo {
 	if rt == nil || rt.units == nil {
@@ -600,8 +631,20 @@ func registerUnitAPI(rt *Runtime) {
 		return 1
 	})
 	reg("UnitFactionGroup", func(L *lua.LState) int {
-		L.Push(lua.LString(""))
-		L.Push(lua.LString(""))
+		info := rt.unitInfo(L.OptString(1, "player"))
+		if info == nil || !info.Player || info.RaceID == 0 {
+			// Not known to be a player of a race: no faction group to name.
+			L.Push(lua.LString(""))
+			L.Push(lua.LString(""))
+			return 2
+		}
+		group := "Horde"
+		switch info.RaceID {
+		case 1, 3, 4, 7, 11:
+			group = "Alliance"
+		}
+		L.Push(lua.LString(group))
+		L.Push(lua.LString(group))
 		return 2
 	})
 	reg("UnitIsPVP", func(L *lua.LState) int {
@@ -745,7 +788,61 @@ func (rt *Runtime) pushAura(L *lua.LState, unit string, index int, filter string
 		}
 		L.Push(lua.LBool(aura.CanStealOrPurge))
 		L.Push(lua.LBool(aura.ShouldConsolidate))
-		return 10
+		L.Push(lua.LNumber(aura.SpellID))
+		return 11
 	}
 	return 0
+}
+
+// registerUnitExtras defines unit queries beyond the basic ones.
+func registerUnitExtras(rt *Runtime) {
+	L := rt.L
+	L.SetGlobal("UnitGUID", L.NewFunction(func(L *lua.LState) int {
+		guid := rt.UnitGUID(L.CheckString(1))
+		if guid == 0 {
+			L.Push(lua.LNil)
+			return 1
+		}
+		L.Push(lua.LString(fmt.Sprintf("0x%016X", guid)))
+		return 1
+	}))
+	L.SetGlobal("UnitClassBase", L.NewFunction(func(L *lua.LState) int {
+		info := rt.unitInfo(L.CheckString(1))
+		if info == nil || !info.Exists {
+			L.Push(lua.LNil)
+			return 1
+		}
+		L.Push(lua.LString(info.ClassFile))
+		return 1
+	}))
+}
+
+// RefreshTarget updates the identity and reaction of the current target
+// (keeping its vitals) and reports whether anything changed.
+func (rt *Runtime) RefreshTarget(info UnitInfo) bool {
+	current := rt.unitInfo("target")
+	if current == nil || !current.Exists {
+		return false
+	}
+	changedName := current.Name != info.Name
+	changedFaction := current.Hostile != info.Hostile || current.Friendly != info.Friendly
+	changedLevel := info.Level != 0 && current.Level != info.Level
+	if !changedName && !changedFaction && !changedLevel && current.Classification == info.Classification && current.CreatureType == info.CreatureType {
+		return false
+	}
+	current.Name, current.Level = info.Name, info.Level
+	current.Hostile, current.Friendly = info.Hostile, info.Friendly
+	current.Classification, current.CreatureType = info.Classification, info.CreatureType
+	current.RaceID, current.RaceFile, current.ClassID, current.ClassFile, current.Sex = info.RaceID, info.RaceFile, info.ClassID, info.ClassFile, info.Sex
+	if changedName {
+		rt.FireEvent("UNIT_NAME_UPDATE", lua.LString("target"))
+	}
+	if changedFaction {
+		rt.FireEvent("UNIT_FACTION", lua.LString("target"))
+	}
+	if changedLevel {
+		rt.FireEvent("UNIT_LEVEL", lua.LString("target"))
+	}
+	rt.FireEvent("PLAYER_TARGET_CHANGED")
+	return true
 }

@@ -216,21 +216,14 @@ func registerGlueAPI(rt *Runtime) {
 
 	// Build and platform info.
 	reg("GetBuildInfo", func(L *lua.LState) int {
-		versionType := L.GetGlobal("NORMAL_BUILD")
-		if versionType.Type() != lua.LTString {
-			versionType = lua.LString("")
-		}
-		buildType := L.GetGlobal("RELEASE_BUILD")
-		if buildType.Type() != lua.LTString {
-			buildType = lua.LString("")
-		}
-		L.Push(versionType)
-		L.Push(buildType)
+		// version, build, date and the interface (TOC) version as a number.
 		L.Push(lua.LString(buildVersion))
 		L.Push(lua.LString(buildNumber))
 		L.Push(lua.LString(buildDate))
-		return 5
+		L.Push(lua.LNumber(30300))
+		return 4
 	})
+	reg("IsSystemSupported", func(L *lua.LState) int { L.Push(lua.LTrue); return 1 })
 	reg("IsWindowsClient", func(L *lua.LState) int { L.Push(lua.LBool(runtime.GOOS == "windows")); return 1 })
 	reg("IsMacClient", func(L *lua.LState) int { L.Push(lua.LBool(false)); return 1 })
 	reg("IsLinuxClient", func(L *lua.LState) int { L.Push(lua.LBool(runtime.GOOS == "linux")); return 1 })
@@ -356,12 +349,13 @@ func registerGlueAPI(rt *Runtime) {
 	})
 	reg("HasPetSpells", func(L *lua.LState) int { L.Push(lua.LFalse); L.Push(lua.LNil); return 2 })
 	reg("GetNumSpellTabs", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
-	reg("GetTrackingTexture", func(L *lua.LState) int { L.Push(lua.LNil); return 1 })
+	reg("GetTrackingTexture", func(L *lua.LState) int { L.Push(lua.LString(`Interface\Minimap\Tracking\None`)); return 1 })
 	reg("GetNumTrackingTypes", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("GetTrackingInfo", func(L *lua.LState) int { return 4 })
-	reg("GetLFGProposal", func(L *lua.LState) int { return 10 })
-	reg("GetLFGInfoServer", func(L *lua.LState) int { return 7 })
-	reg("GetLFGRoleUpdate", func(L *lua.LState) int { return 3 })
+	reg("GetTrackingInfo", func(L *lua.LState) int { return 0 })
+	reg("GetLFGProposal", func(L *lua.LState) int { return 0 })
+	reg("GetLFGMode", func(L *lua.LState) int { return 0 })
+	reg("GetLFGInfoServer", func(L *lua.LState) int { return 0 })
+	reg("GetLFGRoleUpdate", func(L *lua.LState) int { return 0 })
 	reg("IsPartyLFG", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("GetMinimapZoneText", func(L *lua.LState) int {
 		if idx := rt.Glue.SelectedCharacter; idx >= 1 && idx <= len(rt.Glue.Characters) {
@@ -656,7 +650,7 @@ func registerGlueAPI(rt *Runtime) {
 		case lua.LTString:
 			value = L.CheckString(2)
 		case lua.LTBool:
-			value = map[bool]string{true: "1", false: "0"}[L.CheckBool(2)]
+			value = map[bool]string{true: "1", false: "0"}[luaTruthy(L, 2)]
 		default:
 			value = L.Get(2).String()
 		}
@@ -863,7 +857,7 @@ func registerGlueAPI(rt *Runtime) {
 		return 0
 	})
 	reg("SetUsesToken", func(L *lua.LState) int {
-		rt.SetCVar("accountUsesToken", map[bool]string{true: "1", false: "0"}[L.CheckBool(1)])
+		rt.SetCVar("accountUsesToken", map[bool]string{true: "1", false: "0"}[luaTruthy(L, 1)])
 		return 0
 	})
 	reg("GetUsesToken", func(L *lua.LState) int {
@@ -1370,12 +1364,14 @@ func registerGlueAPI(rt *Runtime) {
 			name = resolveParentName(name, parent.name)
 		}
 		w := newWidget(kindFromObjectType(frameType), name)
+		w.typeName = frameTypeNames[strings.ToUpper(frameType)]
 		if L.Get(5).Type() == lua.LTNumber {
 			w.id = L.CheckInt(5)
 		}
 		w.parent = parent
 		if parent != nil {
 			w.frameStrata = parent.frameStrata
+			w.frameLevel = parent.frameLevel + 1
 		}
 		addWidgetChild(parent, w)
 		if template != "" && rt.instantiateTemplate != nil {

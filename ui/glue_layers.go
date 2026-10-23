@@ -98,7 +98,13 @@ func (eng *UIEngine) planeFor(blend GlueBlend, bounds image.Rectangle) *glueLaye
 // correction and light textures) get their own blended plane; widgets inside
 // buttons and edit boxes keep painting with the software blend.
 func frontBlend(w *widget) GlueBlend {
-	if w.kind != kindTexture || w.parent == nil || w.parent.kind != kindFrame {
+	if w.kind != kindTexture || w.parent == nil {
+		return GlueBlendNormal
+	}
+	// A button's highlight texture (the character list's selection glow) adds
+	// to the scene like any ADD texture; blending it over would show its dark
+	// rim as an opaque box.
+	if w.parent.highlightTexture != w && w.parent.kind != kindFrame {
 		return GlueBlendNormal
 	}
 	switch {

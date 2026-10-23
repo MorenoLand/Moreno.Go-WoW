@@ -13,6 +13,46 @@ import (
 
 const worldMinimapTileSize = 533.333333
 
+// minimapZoomLevels, minimapDefaultZoom and minimapOutdoorRadius come from
+// Wow.exe: the zoom setter clamps to 0..5, the level starts at 3, and the
+// outdoor radius in yards is {14,12,10,8,6,4} * 0.5 * 33.333.
+const (
+	minimapZoomLevels  = 6
+	minimapDefaultZoom = 3
+)
+
+var minimapOutdoorRadius = [minimapZoomLevels]float64{14 * 0.5 * 33.333332, 12 * 0.5 * 33.333332, 10 * 0.5 * 33.333332, 8 * 0.5 * 33.333332, 6 * 0.5 * 33.333332, 4 * 0.5 * 33.333332}
+
+// zoomLevel is the minimap zoom, its default until a script sets one.
+func (w *widget) zoomLevel() int {
+	if !w.zoomSet {
+		return minimapDefaultZoom
+	}
+	return w.zoom
+}
+
+// applyMinimapZoom sets which part of the tile composite the minimap shows.
+func (eng *UIEngine) applyMinimapZoom() {
+	if eng == nil || eng.Rt == nil || !eng.minimapHasPosition {
+		return
+	}
+	mapWidget := eng.Rt.widgets["MinimapMap"]
+	minimap := eng.Rt.widgets["Minimap"]
+	if mapWidget == nil {
+		return
+	}
+	level := minimapDefaultZoom
+	if minimap != nil {
+		level = minimap.zoomLevel()
+	}
+	half := minimapOutdoorRadius[level] / (worldMinimapTileSize * 3)
+	mapWidget.texCoordL = eng.minimapU - half
+	mapWidget.texCoordR = eng.minimapU + half
+	mapWidget.texCoordT = eng.minimapV - half
+	mapWidget.texCoordB = eng.minimapV + half
+	eng.minimapVersion++
+}
+
 func (eng *UIEngine) SetWorldMinimapPosition(mapName string, worldX, worldY float32) bool {
 	if eng == nil || eng.AssetLoader == nil || eng.Rt == nil {
 		return false
@@ -22,8 +62,16 @@ func (eng *UIEngine) SetWorldMinimapPosition(mapName string, worldX, worldY floa
 		return false
 	}
 	tileX, tileY := worldMinimapTile(worldX, worldY)
-	if eng.minimapHasPosition && eng.minimapMapName == mapName && eng.minimapTileX == tileX && eng.minimapTileY == tileY && math.Hypot(float64(worldX-eng.minimapWorldX), float64(worldY-eng.minimapWorldY)) < 6 {
-		return false
+	if eng.minimapHasPosition && eng.minimapMapName == mapName && eng.minimapTileX == tileX && eng.minimapTileY == tileY {
+		// Same tiles: only the window onto them moves, which needs no new composite.
+		if math.Hypot(float64(worldX-eng.minimapWorldX), float64(worldY-eng.minimapWorldY)) < 1 {
+			return false
+		}
+		eng.minimapU = (1 + (32 - float64(tileY) - float64(worldX)/worldMinimapTileSize)) / 3
+		eng.minimapV = (1 + (32 - float64(tileX) - float64(worldY)/worldMinimapTileSize)) / 3
+		eng.minimapWorldX, eng.minimapWorldY = worldX, worldY
+		eng.applyMinimapZoom()
+		return true
 	}
 	eng.loadMinimapTRS()
 	composite := image.NewRGBA(image.Rect(0, 0, 768, 768))
@@ -52,15 +100,10 @@ func (eng *UIEngine) SetWorldMinimapPosition(mapName string, worldX, worldY floa
 	fracWest := 32 - float64(tileY) - float64(worldX)/worldMinimapTileSize
 	playerU := (1 + fracWest) / 3
 	playerV := (1 + fracNorth) / 3
-	half := 400.0 / (worldMinimapTileSize * 3)
-	mapWidget := eng.Rt.widgets["MinimapMap"]
-	if mapWidget == nil {
+	if eng.Rt.widgets["MinimapMap"] == nil {
 		return false
 	}
-	mapWidget.texCoordL = playerU - half
-	mapWidget.texCoordR = playerU + half
-	mapWidget.texCoordT = playerV - half
-	mapWidget.texCoordB = playerV + half
+	eng.minimapU, eng.minimapV = playerU, playerV
 	eng.minimapImage = composite
 	eng.minimapMapName = mapName
 	eng.minimapTileX = tileX
@@ -68,7 +111,7 @@ func (eng *UIEngine) SetWorldMinimapPosition(mapName string, worldX, worldY floa
 	eng.minimapWorldX = worldX
 	eng.minimapWorldY = worldY
 	eng.minimapHasPosition = true
-	eng.minimapVersion++
+	eng.applyMinimapZoom()
 	return true
 }
 

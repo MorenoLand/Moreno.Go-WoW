@@ -173,11 +173,13 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 		geom.AddVBO(colorVBO)
 		geom.AddVBO(alphaVBO)
 		geom.AddVBO(combinerVBO)
-		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
+		mat := newWorldMaterial()
+		mat.lit = true
+		mat.noFog = !worldFoggedBlending(m2MaterialBlending(part.material.blend))
 		if part.material.blend == 1 {
-			mat.SetShader("morenowow_m2_alpha_key")
+			mat.SetShader("morenowow_world_m2_alpha_key")
 		} else {
-			mat.SetShader("morenowow_m2")
+			mat.SetShader("morenowow_world_m2")
 		}
 		mat.SetShaderUnique(false)
 		if part.material.flags&0x04 != 0 {
@@ -228,8 +230,12 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 	}
 	scale := float32(1)
 	modelBottom := float32(math.MaxFloat32)
+	modelTop := float32(-math.MaxFloat32)
 	for _, part := range parts {
 		for index := 1; index < len(part.positions); index += 3 {
+			if top := part.positions[index]; top > modelTop {
+				modelTop = top
+			}
 			if bottom := part.positions[index]; bottom < modelBottom {
 				modelBottom = bottom
 			}
@@ -242,7 +248,7 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 		stats.particlePoints = particles.pointCount
 	}
 	animation := buildM2Animation(&model, skin, animatedMeshes, modelPath)
-	info := glueModelInfo{stats: stats, particles: particles, animation: animation, modelScale: scale, modelBottom: modelBottom}
+	info := glueModelInfo{stats: stats, particles: particles, animation: animation, modelScale: scale, modelBottom: modelBottom, modelTop: modelTop}
 	root.SetUserData(info)
 	return root, nil
 }
