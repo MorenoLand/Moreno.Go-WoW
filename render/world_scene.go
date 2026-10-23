@@ -95,6 +95,10 @@ type worldWMOMaterial struct {
 
 type worldWMORoot struct {
 	groupCount int
+	// ambient is the WMO's own ambient light (MOHD) and lights its omni lights
+	// (MOLT), in the WMO's coordinates.
+	ambient    [3]float32
+	lights     []worldPointLight
 	materials  []worldWMOMaterial
 	doodadSets []worldWMODoodadSet
 	doodads    []worldWMODoodad
@@ -125,7 +129,11 @@ type worldWMOTriangle struct {
 }
 
 type worldWMOGroup struct {
-	flags     uint32
+	flags uint32
+	// doodadRefs are the doodads (indices into the root's list) placed in the group.
+	doodadRefs []uint16
+	// lightRefs are the lights of the root's list the group is lit by (MOLR).
+	lightRefs []uint16
 	vertices  []float32
 	normals   []float32
 	uvs       []float32
@@ -180,7 +188,9 @@ type worldSceneCollision struct {
 	solids       []worldCollisionMesh
 	cells        map[[2]int][]worldCollisionRef
 	terrainCells map[[2]int][]int
-	liquid       *worldLiquidAnimator
+	// lightCells index the WMO omni lights by the cells they reach.
+	lightCells map[[2]int][]worldPointLight
+	liquid     *worldLiquidAnimator
 	// owned are textures made for this tile alone, released when it unloads.
 	owned []*texture.Texture2D
 }
@@ -196,10 +206,31 @@ type worldCollisionTriangle struct {
 	min, max [3]float32
 	noCamera bool
 	mopy     uint8
+	// colours are the baked vertex lighting of the corners (an indoor WMO group's
+	// MOCV), when it has any.
+	colours    [9]float32
+	hasColours bool
+}
+
+// worldPointLight is an omni light of a WMO: its place, its colour already
+// scaled by intensity, and the distances it fades out between.
+type worldPointLight struct {
+	position   [3]float32
+	colour     [3]float32
+	start, end float32
 }
 
 type worldCollisionMesh struct {
 	triangles []worldCollisionTriangle
+	// indoor marks a WMO group lit from inside (its own ambient and lights, not
+	// the sun); ambient is that group's WMO ambient light.
+	indoor  bool
+	ambient [3]float32
+	// groupLights are the omni lights the group refers to, in the world.
+	groupLights []worldPointLight
+	// lights are the omni lights of a WMO placement, carried by a mesh of no
+	// triangles.
+	lights []worldPointLight
 }
 
 func worldCollisionTriangleFromPoints(a, b, c [3]float32, noCamera bool) (worldCollisionTriangle, bool) {
@@ -217,12 +248,20 @@ func worldCollisionTriangleFromPoints(a, b, c [3]float32, noCamera bool) (worldC
 }
 
 func newWorldSceneCollision(chunks []worldADTChunk, solids []worldCollisionMesh) worldSceneCollision {
-	collision := worldSceneCollision{chunks: chunks, solids: solids, cells: make(map[[2]int][]worldCollisionRef), terrainCells: make(map[[2]int][]int)}
+	collision := worldSceneCollision{chunks: chunks, solids: solids, cells: make(map[[2]int][]worldCollisionRef), terrainCells: make(map[[2]int][]int), lightCells: make(map[[2]int][]worldPointLight)}
 	for chunkIndex, chunk := range chunks {
 		key := [2]int{int(math.Floor(float64(chunk.position[0] / float32(worldChunkSize)))), int(math.Floor(float64(chunk.position[1] / float32(worldChunkSize))))}
 		collision.terrainCells[key] = append(collision.terrainCells[key], chunkIndex)
 	}
 	for meshIndex, mesh := range solids {
+		for _, light := range mesh.lights {
+			reach := light.end
+			for x := int(math.Floor(float64((light.position[0] - reach) / worldCollisionCell))); x <= int(math.Floor(float64((light.position[0]+reach)/worldCollisionCell))); x++ {
+				for y := int(math.Floor(float64((light.position[1] - reach) / worldCollisionCell))); y <= int(math.Floor(float64((light.position[1]+reach)/worldCollisionCell))); y++ {
+					collision.lightCells[[2]int{x, y}] = append(collision.lightCells[[2]int{x, y}], light)
+				}
+			}
+		}
 		for triangleIndex, triangle := range mesh.triangles {
 			minX := int(math.Floor(float64(triangle.min[0] / worldCollisionCell)))
 			maxX := int(math.Floor(float64(triangle.max[0] / worldCollisionCell)))
@@ -569,7 +608,7 @@ func loadWorldTerrainProgress(loader *ui.Loader, position world.WorldPosition, p
 				}
 				continue
 			}
-			streamer.adopt([2]int{neighborX, neighborY}, tile)
+			streamer.adoptNow([2]int{neighborX, neighborY}, tile)
 			info.tiles++
 			info.chunks += tile.info.chunks
 			info.vertices += tile.info.vertices
@@ -882,7 +921,7 @@ func parseWorldM2Placements(data []byte, names []string) []worldM2Placement {
 
 func parseWorldWMORoot(data []byte) (worldWMORoot, error) {
 	var version uint32
-	var mohd, motx, momt, modn, mods, modd []byte
+	var mohd, motx, momt, modn, mods, modd, molt []byte
 	for offset := 0; offset < len(data); {
 		id, _, payload, _, next, ok := worldChunk(data, offset)
 		if !ok {
@@ -895,6 +934,8 @@ func parseWorldWMORoot(data []byte) (worldWMORoot, error) {
 			}
 		case "MOHD":
 			mohd = payload
+		case "MOLT":
+			molt = payload
 		case "MOTX":
 			motx = payload
 		case "MOMT":
@@ -915,6 +956,22 @@ func parseWorldWMORoot(data []byte) (worldWMORoot, error) {
 		return worldWMORoot{}, fmt.Errorf("MOHD is short")
 	}
 	root := worldWMORoot{groupCount: int(binary.LittleEndian.Uint32(mohd[4:8]))}
+	if len(mohd) >= 32 {
+		// The ambient colour is stored B, G, R, A.
+		root.ambient = [3]float32{float32(mohd[30]) / 255, float32(mohd[29]) / 255, float32(mohd[28]) / 255}
+	}
+	for offset := 0; offset+48 <= len(molt); offset += 48 {
+		intensity := math.Float32frombits(binary.LittleEndian.Uint32(molt[offset+20 : offset+24]))
+		light := worldPointLight{
+			colour: [3]float32{float32(molt[offset+6]) / 255 * intensity, float32(molt[offset+5]) / 255 * intensity, float32(molt[offset+4]) / 255 * intensity},
+			start:  math.Float32frombits(binary.LittleEndian.Uint32(molt[offset+40 : offset+44])),
+			end:    math.Float32frombits(binary.LittleEndian.Uint32(molt[offset+44 : offset+48])),
+		}
+		for index := range light.position {
+			light.position[index] = math.Float32frombits(binary.LittleEndian.Uint32(molt[offset+8+index*4 : offset+12+index*4]))
+		}
+		root.lights = append(root.lights, light)
+	}
 	for offset := 0; offset+64 <= len(momt); offset += 64 {
 		textureOffset := binary.LittleEndian.Uint32(momt[offset+12 : offset+16])
 		root.materials = append(root.materials, worldWMOMaterial{
@@ -992,6 +1049,14 @@ func parseWorldWMOGroup(data []byte) (worldWMOGroup, error) {
 		case "MOCV":
 			for index := 0; index+3 < len(payload); index += 4 {
 				group.colors = append(group.colors, float32(payload[index+2])/255, float32(payload[index+1])/255, float32(payload[index])/255)
+			}
+		case "MOLR":
+			for index := 0; index+2 <= len(payload); index += 2 {
+				group.lightRefs = append(group.lightRefs, binary.LittleEndian.Uint16(payload[index:index+2]))
+			}
+		case "MODR":
+			for index := 0; index+2 <= len(payload); index += 2 {
+				group.doodadRefs = append(group.doodadRefs, binary.LittleEndian.Uint16(payload[index:index+2]))
 			}
 		case "MOVI":
 			for index := 0; index+2 <= len(payload); index += 2 {
@@ -1353,8 +1418,18 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 			}
 			cache.wmoModels[placement.path] = model
 		}
-		meshes, placementSolids := buildWorldWMOPlacement(loader, placement, model, cache.textures, cache.placeholder)
+		meshes, placementSolids, indoorDoodads := buildWorldWMOPlacement(loader, placement, model, cache.textures, cache.placeholder)
 		solids = append(solids, placementSolids...)
+		if len(model.lights) > 0 {
+			placed := make([]worldPointLight, 0, len(model.lights))
+			for _, light := range model.lights {
+				light.position = transformWorldWMOPoint(light.position, placement)
+				light.start *= placement.scale
+				light.end *= placement.scale
+				placed = append(placed, light)
+			}
+			solids = append(solids, worldCollisionMesh{lights: placed})
+		}
 		for _, mesh := range meshes {
 			root.Add(mesh)
 			meshCount++
@@ -1363,7 +1438,7 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 			set := model.doodadSets[setIndex]
 			start := minWorldInt(int(set.start), len(model.doodads))
 			end := minWorldInt(start+int(set.count), len(model.doodads))
-			for _, doodad := range model.doodads[start:end] {
+			for doodadIndex, doodad := range model.doodads[start:end] {
 				if doodadCount >= worldWMODoodadBudget {
 					break
 				}
@@ -1381,6 +1456,10 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 					continue
 				}
 				worldPosition := transformWorldWMOPoint(doodad.position, placement)
+				if group, indoor := indoorDoodads[uint16(start+doodadIndex)]; indoor {
+					lit := group
+					applyWorldLocalLight(instance, &lit)
+				}
 				instance.SetPosition(worldPosition[0], worldPosition[1], worldPosition[2])
 				instance.SetRotationQuat(worldWMODoodadRotation(doodad.rotation, placement.rotation))
 				instance.SetScale(placement.scale*doodad.scale, placement.scale*doodad.scale, placement.scale*doodad.scale)
@@ -1417,7 +1496,8 @@ func worldWMOPlacementInRange(placement worldWMOPlacement, position world.WorldP
 	return dx*dx+dy*dy <= worldTileObjectDistance*worldTileObjectDistance
 }
 
-func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, model worldWMORoot, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) ([]*graphic.Mesh, []worldCollisionMesh) {
+func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, model worldWMORoot, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) ([]*graphic.Mesh, []worldCollisionMesh, map[uint16]worldLocalLight) {
+	indoorDoodads := make(map[uint16]worldLocalLight)
 	builders := make(map[worldWMOMeshKey]*worldWMOMeshBuilder)
 	solids := make([]worldCollisionMesh, 0)
 	for groupIndex := 0; groupIndex < model.groupCount; groupIndex++ {
@@ -1429,7 +1509,25 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 		if err != nil {
 			continue
 		}
-		collisionMesh := worldCollisionMesh{triangles: make([]worldCollisionTriangle, 0, len(group.indices)/3)}
+		if group.flags&0x2000 != 0 {
+			// What lights a doodad in the group by default: the group's baked colour,
+			// averaged.
+			average := groupAverageColour(group, model.ambient)
+			groupLit := worldLocalLight{ambient: average}
+			for _, light := range groupLights(model, group, placement) {
+				if groupLit.count < worldLocalLightCount {
+					groupLit.lights[groupLit.count] = light
+					groupLit.count++
+				}
+			}
+			for _, ref := range group.doodadRefs {
+				indoorDoodads[ref] = groupLit
+			}
+		}
+		collisionMesh := worldCollisionMesh{triangles: make([]worldCollisionTriangle, 0, len(group.indices)/3), indoor: group.flags&0x2000 != 0, ambient: groupAverageColour(group, model.ambient)}
+		if collisionMesh.indoor {
+			collisionMesh.groupLights = groupLights(model, group, placement)
+		}
 		// Detail geometry (gears, railings) never blocks unless a group is nothing but
 		// detail; collision hulls and rendered solids do.
 		blocks := func(triangle int) bool {
@@ -1467,6 +1565,18 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 			if triangle, valid := worldCollisionTriangleFromPoints(a, b, c, noCamera); valid {
 				if triangleIndex/3 < len(group.triangles) {
 					triangle.mopy = group.triangles[triangleIndex/3].flags
+				}
+				if collisionMesh.indoor && len(group.colors) > 0 {
+					complete := true
+					for corner := 0; corner < 3; corner++ {
+						vertex := int(group.indices[triangleIndex+corner]) * 3
+						if vertex+2 >= len(group.colors) {
+							complete = false
+							break
+						}
+						copy(triangle.colours[corner*3:corner*3+3], group.colors[vertex:vertex+3])
+					}
+					triangle.hasColours = complete
 				}
 				collisionMesh.triangles = append(collisionMesh.triangles, triangle)
 			}
@@ -1585,7 +1695,7 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 		mesh.SetRenderOrder(-40 + int(key.material.blend))
 		meshes = append(meshes, mesh)
 	}
-	return meshes, solids
+	return meshes, solids, indoorDoodads
 }
 
 func worldWMOGroupPath(path string, index int) string {
@@ -2033,4 +2143,36 @@ func transformWorldWMONormal(normal [3]float32, placement worldWMOPlacement) [3]
 	normal = rotateWorldWMOX(normal, roll)
 	normal = rotateWorldWMOY(normal, pitch)
 	return rotateWorldWMOZ(normal, yaw)
+}
+
+// groupLights are the lights a WMO group refers to, placed in the world.
+func groupLights(model worldWMORoot, group worldWMOGroup, placement worldWMOPlacement) []worldPointLight {
+	lights := make([]worldPointLight, 0, len(group.lightRefs))
+	for _, ref := range group.lightRefs {
+		if int(ref) >= len(model.lights) {
+			continue
+		}
+		light := model.lights[ref]
+		light.position = transformWorldWMOPoint(light.position, placement)
+		light.start *= placement.scale
+		light.end *= placement.scale
+		lights = append(lights, light)
+	}
+	return lights
+}
+
+// groupAverageColour is the baked vertex colour of a WMO group averaged, or
+// fallback for a group that has none.
+func groupAverageColour(group worldWMOGroup, fallback [3]float32) [3]float32 {
+	count := len(group.colors) / 3
+	if count == 0 {
+		return fallback
+	}
+	var average [3]float32
+	for index := 0; index+2 < len(group.colors); index += 3 {
+		average[0] += group.colors[index]
+		average[1] += group.colors[index+1]
+		average[2] += group.colors[index+2]
+	}
+	return [3]float32{average[0] / float32(count), average[1] / float32(count), average[2] / float32(count)}
 }

@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/MorenoLand/Moreno.WoW/ui"
 	"github.com/MorenoLand/Moreno.WoW/world"
@@ -27,6 +28,10 @@ type worldNameplate struct {
 	image *gui.Image
 	tex   *texture.Texture2D
 	key   string
+	// hidden is whether the world stands between the camera and the unit's head,
+	// last decided at checkedAt.
+	hidden    bool
+	checkedAt time.Time
 }
 
 // worldNameplates draws the names (and guild or title lines) over the units
@@ -54,6 +59,10 @@ type nameplateInputs struct {
 	factions      *worldFactions
 	send          func(world.ClientOpcode, []byte) error
 	playerFaction uint32
+	// lineOfSight returns where a ray from focus toward eye first meets the world
+	// (eye itself when nothing is in the way).
+	lineOfSight func(focus, eye math32.Vector3) math32.Vector3
+	cameraPos   math32.Vector3
 }
 
 // nameplateColour is the colour of a unit's name from how it relates to the
@@ -185,6 +194,14 @@ func (n *worldNameplates) update(in nameplateInputs) {
 			}
 			plate.image.SetSize(float32(picture.Bounds().Dx()), float32(picture.Bounds().Dy()))
 			plate.key = key
+		}
+		if in.lineOfSight != nil && time.Since(plate.checkedAt) > 120*time.Millisecond {
+			plate.checkedAt = time.Now()
+			reached := in.lineOfSight(*head, in.cameraPos)
+			plate.hidden = reached.DistanceTo(&in.cameraPos) > 0.5
+		}
+		if plate.hidden {
+			continue
 		}
 		seen[guid] = true
 		plate.image.SetPosition(screen.X-plate.image.Width()/2, screen.Y-plate.image.Height())

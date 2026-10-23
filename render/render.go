@@ -358,6 +358,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var uiCursorTex *texture.Texture2D
 	uiCursorKey := ""
 	var playerEquipment *worldEquipment
+	var playerLight worldLightState
 	playerModelPath := ""
 	var eng *ui.UIEngine
 	var err error
@@ -1090,6 +1091,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						syncWorldEquipment(uiEngine.AssetLoader, worldPlayer, &playerEquipment, playerModelPath, own, worldCreatureExtra{})
 					}
 					poseWorldEquipment(worldPlayer, playerEquipment)
+					updateWorldLocalLight(worldPlayer, &playerLight, worldStreamer.collision, frameAt)
 				}
 				for _, entity := range worldEntities {
 					if entity.node == nil {
@@ -1136,6 +1138,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						}
 					}
 					poseWorldEquipment(entity.node, entity.equipment)
+					updateWorldLocalLight(entity.node, &entity.light, worldStreamer.collision, frameAt)
 				}
 				if screenWidth, screenHeight := win.GetSize(); screenWidth > 0 && screenHeight > 0 && worldFactionState != nil {
 					playerFaction := uint32(0)
@@ -1146,6 +1149,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						scene: scene, engine: uiEngine, cam: cam, width: float32(screenWidth), height: float32(screenHeight),
 						entities: worldEntities, ownGUID: worldCharacter.GUID, playerNode: worldPlayer, cameraAt: worldCamera.position,
 						names: worldNameState, factions: worldFactionState, send: worldSend, playerFaction: playerFaction,
+						lineOfSight: worldStreamer.collision.cameraPosition, cameraPos: cam.Position(),
 					})
 				}
 				if worldSky != nil {

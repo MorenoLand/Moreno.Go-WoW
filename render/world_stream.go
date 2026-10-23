@@ -140,6 +140,13 @@ func (s *worldTerrainStreamer) loadTile(tileX, tileY int) (*worldStreamedTile, e
 }
 
 // adopt attaches an already built tile to the scene.
+// adoptNow attaches a tile that is shown at once (the ones around the player
+// when the world loads, behind the loading screen).
+func (s *worldTerrainStreamer) adoptNow(key [2]int, tile *worldStreamedTile) {
+	s.root.Add(tile.node)
+	s.tiles[key] = tile
+}
+
 func (s *worldTerrainStreamer) adopt(key [2]int, tile *worldStreamedTile) {
 	var hide func(node core.INode)
 	hide = func(node core.INode) {

@@ -7,6 +7,7 @@ uniform mat4 MVP;
 uniform mat4 ModelMatrix;
 ` + worldFogVertexDeclarations + `in vec2 VertexTexcoord2;
 out vec3 FragNormal;
+out vec3 FragWorldPos;
 in float VertexM2Alpha;
 in vec2 VertexM2Combiner;
 out vec2 FragTexcoord;
@@ -21,6 +22,7 @@ void main() {
     FragM2Alpha = VertexM2Alpha;
     FragM2Combiner = VertexM2Combiner;
     FragNormal = mat3(ModelMatrix) * VertexNormal;
+    FragWorldPos = (ModelMatrix * vec4(VertexPosition, 1.0)).xyz;
 ` + worldFogVertexBody + `    gl_Position = MVP * vec4(VertexPosition, 1.0);
 }`
 
@@ -32,9 +34,13 @@ in vec3 FragVertexColor;
 in float FragM2Alpha;
 in vec2 FragM2Combiner;
 in vec3 FragNormal;
+in vec3 FragWorldPos;
 uniform vec4 LightAmbient;
 uniform vec3 LightDiffuse;
 uniform vec3 LightDirection;
+uniform vec4 IndoorAmbient;
+uniform vec4 PointLightPos[4];
+uniform vec4 PointLightColor[4];
 ` + worldFogFragmentDecl + `out vec4 FragColor;
 vec3 m2Light() {
     if (LightAmbient.w < 0.5) {
@@ -43,6 +49,19 @@ vec3 m2Light() {
     vec3 n = normalize(FragNormal);
     if (!gl_FrontFacing) {
         n = -n;
+    }
+    if (IndoorAmbient.w > 0.5) {
+        vec3 total = IndoorAmbient.rgb;
+        for (int i = 0; i < 4; i++) {
+            vec3 toLight = PointLightPos[i].xyz - FragWorldPos;
+            float distance = length(toLight);
+            float fadeEnd = PointLightPos[i].w;
+            if (fadeEnd > 0.0 && distance > 0.0001) {
+                float fade = clamp((fadeEnd - distance) / max(fadeEnd - PointLightColor[i].w, 0.001), 0.0, 1.0);
+                total += PointLightColor[i].rgb * fade * max(dot(n, toLight / distance), 0.0);
+            }
+        }
+        return clamp(total, 0.0, 1.0);
     }
     return clamp(LightAmbient.rgb + LightDiffuse * max(dot(n, LightDirection), 0.0), 0.0, 1.0);
 }

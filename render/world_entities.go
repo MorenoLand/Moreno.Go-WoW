@@ -47,6 +47,7 @@ type worldEntity struct {
 	modelPath     string
 	extra         worldCreatureExtra
 	equipment     *worldEquipment
+	light         worldLightState
 }
 
 func (tables *worldCreatureTables) definition(loader *ui.Loader, displayID, nativeDisplayID uint32) (worldCreatureDefinition, error) {

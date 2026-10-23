@@ -20,12 +20,19 @@ type worldMaterial struct {
 	// lit lights the surface with the frame's ambient and directional light.
 	lit bool
 
+	// local lights the surface from inside a WMO instead of by the sun and sky.
+	local *worldLocalLight
+
+	indoorAmbient, pointPositions, pointColours      gls.Uniform
 	ambient, diffuse, direction, fogColor, fogParams gls.Uniform
 	waterShallow, waterDeep, waterAlpha, skyColors   gls.Uniform
 }
 
 func newWorldMaterial() *worldMaterial {
 	m := &worldMaterial{Standard: material.NewStandard(&math32.Color{R: 1, G: 1, B: 1}), water: -1}
+	m.indoorAmbient.Init("IndoorAmbient")
+	m.pointPositions.Init("PointLightPos")
+	m.pointColours.Init("PointLightColor")
 	m.ambient.Init("LightAmbient")
 	m.diffuse.Init("LightDiffuse")
 	m.direction.Init("LightDirection")
@@ -50,6 +57,20 @@ func (m *worldMaterial) RenderSetup(gs *gls.GLS) {
 	if a.valid && m.lit && !m.noFog {
 		lit = 1
 	}
+	var positions, colours [worldLocalLightCount * 4]float32
+	indoor := float32(0)
+	var indoorAmbient [3]float32
+	if m.local != nil && lit > 0 {
+		indoor, indoorAmbient = 1, m.local.ambient
+		for index := 0; index < m.local.count; index++ {
+			light := m.local.lights[index]
+			copy(positions[index*4:], []float32{light.position[0], light.position[1], light.position[2], light.end})
+			copy(colours[index*4:], []float32{light.colour[0], light.colour[1], light.colour[2], light.start})
+		}
+	}
+	gs.Uniform4f(m.indoorAmbient.Location(gs), indoorAmbient[0], indoorAmbient[1], indoorAmbient[2], indoor)
+	gs.Uniform4fv(m.pointPositions.Location(gs), worldLocalLightCount, &positions[0])
+	gs.Uniform4fv(m.pointColours.Location(gs), worldLocalLightCount, &colours[0])
 	gs.Uniform4f(m.ambient.Location(gs), a.ambient[0], a.ambient[1], a.ambient[2], lit)
 	gs.Uniform3f(m.diffuse.Location(gs), a.diffuse[0], a.diffuse[1], a.diffuse[2])
 	gs.Uniform3f(m.direction.Location(gs), a.direction[0], a.direction[1], a.direction[2])
