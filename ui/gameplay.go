@@ -40,6 +40,8 @@ type gameplayState struct {
 	Catalog   map[uint32]SpellInfo
 	Skills    map[uint32]SpellSkillLine
 	Known     map[uint32]bool
+	// Mounts and Critters are the known spells of the Mounts and Companions skill lines.
+	Mounts, Critters []uint32
 	Cooldowns map[uint32]spellCooldown
 	Actions   []world.ActionButton
 	Tabs      []spellTab
@@ -187,9 +189,19 @@ func (rt *Runtime) SetSpellCooldowns(cooldowns []world.SpellCooldown) {
 }
 func (rt *Runtime) rebuildSpellBook() {
 	grouped := make(map[uint32][]uint32)
+	rt.gameplay.Mounts, rt.gameplay.Critters = nil, nil
 	for id := range rt.gameplay.Known {
 		info, ok := rt.gameplay.Catalog[id]
 		if !ok || info.Name == "" {
+			continue
+		}
+		// Mounts and companions are listed by their own panels, not the spellbook.
+		switch info.SkillLine {
+		case skillLineMounts:
+			rt.gameplay.Mounts = append(rt.gameplay.Mounts, id)
+			continue
+		case skillLineCompanions:
+			rt.gameplay.Critters = append(rt.gameplay.Critters, id)
 			continue
 		}
 		line := rt.gameplay.Skills[info.SkillLine]
@@ -236,6 +248,17 @@ func (rt *Runtime) rebuildSpellBook() {
 		}
 		return a.Name < b.Name
 	})
+	byName := func(ids []uint32) {
+		sort.Slice(ids, func(i, j int) bool {
+			a, b := rt.gameplay.Catalog[ids[i]], rt.gameplay.Catalog[ids[j]]
+			if a.Name != b.Name {
+				return a.Name < b.Name
+			}
+			return ids[i] < ids[j]
+		})
+	}
+	byName(rt.gameplay.Mounts)
+	byName(rt.gameplay.Critters)
 	rt.gameplay.Book = nil
 	for i := range rt.gameplay.Tabs {
 		tab := &rt.gameplay.Tabs[i]
@@ -473,8 +496,11 @@ func registerGameplayAPI(rt *Runtime) {
 	reg("GetActionTexture", func(L *lua.LState) int {
 		action := rt.action(L.CheckInt(1))
 		icon := ""
-		if action.Type == 0 {
+		switch action.Type {
+		case 0:
 			icon = rt.gameplay.Catalog[action.ID].Icon
+		case actionTypeItem:
+			icon = rt.itemIcon(action.ID)
 		}
 		if icon == "" {
 			L.Push(lua.LNil)
@@ -484,8 +510,38 @@ func registerGameplayAPI(rt *Runtime) {
 		return 1
 	})
 	reg("GetActionCooldown", func(L *lua.LState) int { return rt.pushCooldown(L, rt.action(L.CheckInt(1)).ID) })
+	reg("GetActionCount", func(L *lua.LState) int {
+		action := rt.action(L.CheckInt(1))
+		if action.Type == actionTypeItem {
+			L.Push(lua.LNumber(rt.itemCountOf(action.ID)))
+		} else {
+			L.Push(lua.LNumber(0))
+		}
+		return 1
+	})
+	reg("IsConsumableAction", func(L *lua.LState) int {
+		action := rt.action(L.CheckInt(1))
+		L.Push(lua.LBool(action.Type == actionTypeItem && rt.itemIsConsumable(action.ID)))
+		return 1
+	})
+	reg("IsStackableAction", func(L *lua.LState) int {
+		action := rt.action(L.CheckInt(1))
+		template := rt.itemTemplateIfKnown(action.ID)
+		L.Push(lua.LBool(action.Type == actionTypeItem && template != nil && template.Stackable > 1 && !rt.itemIsConsumable(action.ID)))
+		return 1
+	})
+	reg("IsEquippedAction", func(L *lua.LState) int {
+		action := rt.action(L.CheckInt(1))
+		L.Push(lua.LBool(action.Type == actionTypeItem && rt.itemIsEquipped(action.ID)))
+		return 1
+	})
 	reg("IsUsableAction", func(L *lua.LState) int {
 		action := rt.action(L.CheckInt(1))
+		if action.Type == actionTypeItem {
+			L.Push(lua.LBool(rt.itemCountOf(action.ID) > 0))
+			L.Push(lua.LFalse)
+			return 2
+		}
 		info := rt.gameplay.Catalog[action.ID]
 		player := rt.unitInfo("player")
 		noPower := player != nil && player.PowerType == info.PowerType && player.Power < info.Cost
@@ -496,6 +552,10 @@ func registerGameplayAPI(rt *Runtime) {
 	reg("UseAction", func(L *lua.LState) int {
 		action := rt.action(L.CheckInt(1))
 		if action.ID == 0 {
+			return 0
+		}
+		if action.Type == actionTypeItem {
+			rt.useActionItem(L, action.ID)
 			return 0
 		}
 		if action.Type != 0 {

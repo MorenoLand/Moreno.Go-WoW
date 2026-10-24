@@ -38,6 +38,8 @@ const (
 	CharacterLoginFailed   uint16 = 0x0041
 	LoginVerifyWorld       uint16 = 0x0236
 	MessageChat            uint16 = 0x0096
+	// GMMessageChat is the chat packet a server sends to a game master's account.
+	GMMessageChat uint16 = 0x03B3
 	AuraUpdate             uint16 = 0x0496
 	AuraUpdateAll          uint16 = 0x0495
 	UpdateObject           uint16 = 0x00A9

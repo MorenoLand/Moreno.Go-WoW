@@ -40,6 +40,7 @@ in vec2 FragTexcoord;
 in vec2 FragTexcoord2;
 in vec2 FragEnvCoord;
 uniform float M2EnvMask;
+uniform vec3 M2Highlight;
 bool m2UsesEnvironment(int index) {
     return mod(floor(M2EnvMask / exp2(float(index))), 2.0) > 0.5;
 }
@@ -127,7 +128,7 @@ void main() {
     }
 #endif
 #endif
-    FragColor = vec4(result.rgb * FragVertexColor * m2Light(), result.a * FragM2Alpha * MatOpacity);
+    FragColor = vec4(result.rgb * (FragVertexColor * m2Light() + M2Highlight), result.a * FragM2Alpha * MatOpacity);
 ` + worldFogApply + `}`
 
 const m2ParticleVertexShader = `#include <attributes>
@@ -179,6 +180,7 @@ in vec2 FragTexcoord;
 in vec2 FragTexcoord2;
 in vec2 FragEnvCoord;
 uniform float M2EnvMask;
+uniform vec3 M2Highlight;
 bool m2UsesEnvironment(int index) {
     return mod(floor(M2EnvMask / exp2(float(index))), 2.0) > 0.5;
 }
@@ -249,7 +251,7 @@ void main() {
     if (result.a * FragM2Alpha * MatOpacity < 0.5) {
         discard;
     }
-    FragColor = vec4(result.rgb * FragVertexColor * m2Light(), 1.0);
+    FragColor = vec4(result.rgb * (FragVertexColor * m2Light() + M2Highlight), 1.0);
 ` + worldFogApply + `}`
 
 const worldTerrainVertexShader = `#include <attributes>

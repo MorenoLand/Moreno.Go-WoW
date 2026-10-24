@@ -200,14 +200,18 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 		}
 		for textureIndex, texturePath := range part.texturePaths {
 			tex := preloaded[texturePath]
+			shared := false
 			if tex == nil {
 				tex = textures[texturePath]
 			}
 			if tex == nil {
-				tex = loadModelTexture(loader, texturePath)
+				tex = loadSharedModelTexture(loader, texturePath)
 				if tex != nil {
 					textures[texturePath] = tex
 				}
+			}
+			if tex != nil && preloaded[texturePath] == nil {
+				shared = true
 			}
 			if tex != nil {
 				if textureIndex < len(part.textureFlags) {
@@ -219,6 +223,10 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 					}
 				}
 				mat.AddTexture(tex)
+				if shared {
+					// The cache keeps one reference; each material holds its own.
+					tex.Incref()
+				}
 			}
 		}
 		mesh := graphic.NewMesh(geom, mat)
@@ -256,21 +264,20 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 			low, high = float32(math.Min(float64(low), float64(vertex.position[2]))), float32(math.Max(float64(high), float64(vertex.position[2])))
 		}
 		info.rawHeight = high - low
+		info.shadowHalf = modelShadowHalfExtents(model.vertices)
+	}
+	if len(model.cameras) > 0 {
+		info.portrait, info.hasPortrait = model.cameras[0], true
 	}
 	root.SetUserData(info)
 	return root, nil
 }
 
 func buildWorldCreatureModelFromParts(loader *ui.Loader, path string, variations [3]string, bake string, extra worldCreatureExtra) (*core.Node, error) {
-	modelData, err := loader.ReadFile(path)
+	model, err := loadSharedM2(loader, path)
 	if err != nil {
 		return nil, fmt.Errorf("read creature model %s: %w", path, err)
 	}
-	model, err := parseM2(modelData)
-	if err != nil {
-		return nil, err
-	}
-	loadM2AnimationTracks(loader, path, &model)
 	skinData, err := loader.ReadFile(worldM2SkinPath(path))
 	if err != nil {
 		return nil, fmt.Errorf("read creature skin %s: %w", worldM2SkinPath(path), err)

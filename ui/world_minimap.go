@@ -41,6 +41,12 @@ func (eng *UIEngine) applyMinimapZoom() {
 	if mapWidget == nil {
 		return
 	}
+	if eng.minimapIndoor {
+		// The indoor view is drawn for the zoom it is asked at: all of it shows.
+		mapWidget.texCoordL, mapWidget.texCoordR, mapWidget.texCoordT, mapWidget.texCoordB = 0, 1, 0, 1
+		eng.minimapVersion++
+		return
+	}
 	level := minimapDefaultZoom
 	if minimap != nil {
 		level = minimap.zoomLevel()
@@ -59,6 +65,10 @@ func (eng *UIEngine) SetWorldMinimapPosition(mapName string, worldX, worldY floa
 	}
 	mapName = strings.TrimSpace(mapName)
 	if mapName == "" {
+		return false
+	}
+	if eng.minimapIndoor {
+		eng.minimapWorldX, eng.minimapWorldY = worldX, worldY
 		return false
 	}
 	tileX, tileY := worldMinimapTile(worldX, worldY)
@@ -111,6 +121,50 @@ func (eng *UIEngine) SetWorldMinimapPosition(mapName string, worldX, worldY floa
 	eng.minimapWorldX = worldX
 	eng.minimapWorldY = worldY
 	eng.minimapHasPosition = true
+	eng.applyMinimapZoom()
+	return true
+}
+
+// MinimapZoom is the zoom level the minimap is at, 0 the widest.
+func (eng *UIEngine) MinimapZoom() int {
+	if eng == nil || eng.Rt == nil {
+		return minimapDefaultZoom
+	}
+	if minimap := eng.Rt.widgets["Minimap"]; minimap != nil {
+		return minimap.zoomLevel()
+	}
+	return minimapDefaultZoom
+}
+
+// MinimapZoomLevels is how many zoom levels the minimap has.
+func MinimapZoomLevels() int { return minimapZoomLevels }
+
+// MinimapIndoor reports whether the minimap shows an indoor view.
+func (eng *UIEngine) MinimapIndoor() bool { return eng != nil && eng.minimapIndoor }
+
+// SetWorldMinimapIndoor puts a picture of the rooms around the player in the
+// minimap, as it does inside a building; a nil picture goes back to the map.
+// It reports whether the minimap changed.
+func (eng *UIEngine) SetWorldMinimapIndoor(view image.Image) bool {
+	if eng == nil || eng.Rt == nil || eng.Rt.widgets["MinimapMap"] == nil {
+		return false
+	}
+	if view == nil {
+		if !eng.minimapIndoor {
+			return false
+		}
+		eng.minimapIndoor = false
+		// The map is composed again from the tiles at the next position.
+		eng.minimapHasPosition = false
+		eng.minimapImage = nil
+		eng.minimapVersion++
+		return true
+	}
+	if !eng.minimapIndoor {
+		eng.minimapIndoor = true
+		eng.minimapHasPosition = true
+	}
+	eng.minimapImage = view
 	eng.applyMinimapZoom()
 	return true
 }

@@ -18,11 +18,9 @@ type worldMountRig struct {
 	// z up), before the mount's facing is applied.
 	seat    [3]float32
 	hasSeat bool
-	// attachment is the model attachment the rider sits on (id 0) and the
-	// ground offset the model was raised by.
+	// attachment is the model attachment the rider sits on (id 0).
 	attachmentBone     uint16
 	attachmentPosition [3]float32
-	groundOffset       float32
 }
 
 // buildWorldMount creates the mount model for a creature display id.
@@ -48,19 +46,15 @@ func buildWorldMount(loader *ui.Loader, tables *worldCreatureTables, displayID u
 	model.SetRotation(float32(math.Pi/2), 0, 0)
 	if info, ok := model.UserData().(glueModelInfo); ok {
 		rig.root.SetUserData(info)
-		groundOffset := float32(0)
-		if info.modelBottom < 0 {
-			groundOffset = -info.modelBottom
-		}
-		model.SetPosition(0, 0, groundOffset)
-		rig.groundOffset = groundOffset
+		// A model stands with its origin on the ground, whatever its lowest vertex.
+		model.SetPosition(0, 0, 0)
 	}
 	if data, readErr := loader.ReadFile(definition.path); readErr == nil {
 		if parsed, parseErr := parseM2(data); parseErr == nil {
 			for _, attachment := range parsed.attachments {
 				if attachment.id == 0 {
 					rig.attachmentBone, rig.attachmentPosition, rig.hasSeat = attachment.bone, attachment.position, true
-					rig.seat = [3]float32{attachment.position[0], attachment.position[1], attachment.position[2] + groundOffsetOf(model)}
+					rig.seat = attachment.position
 					break
 				}
 			}
@@ -155,13 +149,6 @@ func syncWorldPlayerMount(scene *core.Node, loader *ui.Loader, tables *worldCrea
 	return true
 }
 
-func groundOffsetOf(model *core.Node) float32 {
-	if info, ok := model.UserData().(glueModelInfo); ok && info.modelBottom < 0 {
-		return -info.modelBottom
-	}
-	return 0
-}
-
 // seatPosition is the rider's seat in the mount's frame: the model attachment
 // posed by its bone at the current animation time (the bone matrix maps the
 // rest position the attachment is stated in to where it is now).
@@ -178,5 +165,5 @@ func (rig *worldMountRig) seatPosition() [3]float32 {
 		}
 		position = posed
 	}
-	return [3]float32{position[0], position[1], position[2] + rig.groundOffset}
+	return position
 }

@@ -69,15 +69,10 @@ func loadCharacterModel(loader *ui.Loader, character world.Character, worldLit b
 		}
 	}
 	modelPath := normalizeModelPath(worldCharacterModelPath(character))
-	modelData, err := loader.ReadFile(modelPath)
+	model, err := loadSharedM2(loader, modelPath)
 	if err != nil {
 		return nil, fmt.Errorf("read model %s: %w", modelPath, err)
 	}
-	model, err := parseM2(modelData)
-	if err != nil {
-		return nil, err
-	}
-	loadM2AnimationTracks(loader, modelPath, &model)
 	skinData, err := loader.ReadFile(worldM2SkinPath(modelPath))
 	if err != nil {
 		return nil, fmt.Errorf("read skin %s: %w", worldM2SkinPath(modelPath), err)

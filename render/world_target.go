@@ -20,8 +20,8 @@ const (
 	unitFlagsField     = 0x3B
 	unitBoundingRadius = 0x41
 	unitCombatReach    = 0x42
-	unitDynamicField   = 0x4E
-	unitNPCFlagsField  = 0x51
+	unitDynamicField   = 0x4F
+	unitNPCFlagsField  = 0x52
 )
 
 // worldFactionTemplate is one FactionTemplate.dbc row: who a faction is
@@ -129,6 +129,10 @@ func (n *worldNames) unitInfoFor(entity *worldEntity, factions *worldFactions, p
 		}
 	} else if creature, ok := n.creatures[entity.fields[objectEntryField]]; ok {
 		info.Name = creature.Name
+		info.DisplayID = entity.fields[world.UnitDisplayIDField]
+		if info.DisplayID == 0 {
+			info.DisplayID = entity.fields[world.UnitNativeDisplayIDField]
+		}
 		info.Classification = worldClassificationNames[creature.Rank]
 		info.CreatureType = worldCreatureTypeNames[creature.Type]
 	}
@@ -138,7 +142,7 @@ func (n *worldNames) unitInfoFor(entity *worldEntity, factions *worldFactions, p
 
 // syncWorldTarget derives the "target" unit from the player's replicated
 // UNIT_FIELD_TARGET (two uint32 halves) and refreshes its vitals and names.
-func syncWorldTarget(rt *ui.Runtime, entities map[uint64]*worldEntity, player *worldEntity, names *worldNames, factions *worldFactions, send func(world.ClientOpcode, []byte) error) bool {
+func syncWorldTarget(rt *ui.Runtime, entities map[uint64]*worldEntity, player *worldEntity, names *worldNames, factions *worldFactions, send func(world.ClientOpcode, []byte) error, auras *worldAuraState, loader *ui.Loader) bool {
 	if rt == nil || player == nil {
 		return false
 	}
@@ -157,6 +161,7 @@ func syncWorldTarget(rt *ui.Runtime, entities map[uint64]*worldEntity, player *w
 	changed := false
 	if current != guid {
 		rt.SetTarget(&info)
+		auras.push(rt, loader, "target", guid)
 		changed = true
 	} else if rt.RefreshTarget(info) {
 		changed = true

@@ -1,6 +1,7 @@
 package render
 
 import (
+	rdebug "runtime/debug"
 	"encoding/binary"
 	"fmt"
 	"image"
@@ -361,6 +362,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	uiCursorKey := ""
 	var playerEquipment *worldEquipment
 	var playerLight worldLightState
+	var playerShadow worldShadowState
 	playerModelPath := ""
 	var eng *ui.UIEngine
 	var err error
@@ -412,6 +414,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var worldFloor func(float32, float32, float32) (float32, bool)
 	var worldCharacter world.Character
 	worldNameState := newWorldNames()
+	chatLineID := 0
+	var worldNet worldNetStats
+	worldHoverState := newWorldHover()
+	var indoorMinimap worldIndoorMinimap
+	var lastAreaCheck, lastEntityCompact time.Time
+	worldPortraitState := newWorldPortraits()
 	worldPlates := newWorldNameplates()
 	var worldFactionState *worldFactions
 	worldSend := func(opcode world.ClientOpcode, body []byte) error {
@@ -468,12 +476,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		if player := worldEntities[worldCharacter.GUID]; player != nil {
 			player.fields[world.UnitTargetField] = uint32(guid)
 			player.fields[world.UnitTargetField+1] = uint32(guid >> 32)
-			syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend)
+			syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend, &worldAuras, uiEngine.AssetLoader)
 		}
 		return activeSession.SetSelection(guid)
 	}
 	host.setSelection = selectTarget
-	// selectTarget tells the server and shows the selection at once; the	// server's own UNIT_FIELD_TARGET update then confirms it.	selectTarget := func(guid uint64) error {		if activeSession == nil {			return fmt.Errorf("world session is closed")		}		if player := worldEntities[worldCharacter.GUID]; player != nil {			player.fields[world.UnitTargetField] = uint32(guid)			player.fields[world.UnitTargetField+1] = uint32(guid >> 32)			syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend)		}		return activeSession.SetSelection(guid)	}	host.setSelection = selectTarget
 	var worldPress worldMousePress
 	worldClick := func(button window.MouseButton, x, y float64) {
 		if activeSession == nil || worldCamera == nil {
@@ -513,6 +520,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		uiEngine.UserAddOns = savedOptions.Addons
 		defer uiEngine.Close()
 		uiEngine.Rt.Host = host
+		uiEngine.Rt.PortraitSource = worldPortraitState.source
 		if audio, audioErr := newAudioManager(uiEngine.AssetLoader, debug); audioErr != nil {
 			if debug {
 				log.Printf("audio: %v", audioErr)
@@ -929,6 +937,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					refresh()
 				}
 			}
+			if worldMode && worldCamera != nil && wowCursor != nil {
+				worldHoverState.update(win, uiEngine.AssetLoader, cam, worldEntities, worldCharacter.GUID, worldFactionState, worldCamera.position, float64(cursor.Xpos), float64(cursor.Ypos), uiEngine.PointOverUI(float64(cursor.Xpos), float64(cursor.Ypos)))
+			}
 			updateCursorIcon()
 		})
 		win.Subscribe(window.OnMouseDown, func(_ string, event interface{}) {
@@ -1069,6 +1080,21 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					worldAtmo = worldLight.sample(worldMapID, worldCamera.position[0], worldCamera.position[1], worldClock.minuteOfDay(time.Now()))
 				}
 				worldMovement.update(time.Now(), worldCamera)
+				worldNet.update(frameAt, activeSession, uiEngine.Rt)
+				if frameAt.Sub(lastEntityCompact) >= 3*time.Second {
+					lastEntityCompact = frameAt
+					compactEntityTextures(worldEntities)
+				}
+				if worldStreamer != nil && frameAt.Sub(lastAreaCheck) >= 250*time.Millisecond {
+					lastAreaCheck = frameAt
+					position := worldCamera.position
+					area := worldStreamer.collision.areaAt(position[0], position[1], position[2])
+					zone, subZone, row := worldAreas(uiEngine.AssetLoader).place(area)
+					if zone != "" {
+						indoors := worldInsideInstance != 0
+						uiEngine.Rt.SetArea(zone, subZone, row.pvpType(worldTeamOfRace(worldCharacter.Race)), indoors)
+					}
+				}
 				if playerMount != nil && worldPlayer != nil {
 					rider := playerMount.place(worldCamera.position, worldCamera.bodyYaw)
 					worldPlayer.SetPosition(rider[0], rider[1], rider[2])
@@ -1078,7 +1104,20 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						}
 					})
 				}
-				minimapChanged = uiEngine.SetWorldMinimapPosition(worldMapName, worldCamera.position[0], worldCamera.position[1])
+				if worldStreamer != nil && worldModel != nil {
+					position := worldCamera.position
+					if worldStreamer.collision.indoorAt(position[0], position[1], position[2]) {
+						viewWidth, viewHeight := win.GetSize()
+						if indoorMinimap.update(frameAt, r, gl, worldModel, uiEngine, position, viewWidth, viewHeight) {
+							minimapChanged = true
+						}
+					} else if uiEngine.SetWorldMinimapIndoor(nil) {
+						minimapChanged = true
+					}
+				}
+				if changed := uiEngine.SetWorldMinimapPosition(worldMapName, worldCamera.position[0], worldCamera.position[1]); changed {
+					minimapChanged = true
+				}
 				uiEngine.Rt.SetPlayerMapPosition(worldMapID, worldCamera.position[0], worldCamera.position[1])
 				uiEngine.Rt.SetPlayerMapFacing(worldCamera.bodyYaw)
 				worldLightChecksLeft, worldSkinBudget = 6, 24
@@ -1105,6 +1144,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					}
 					poseWorldEquipment(worldPlayer, playerEquipment)
 					updateWorldLocalLight(worldPlayer, &playerLight, worldStreamer.collision, frameAt)
+					updateWorldShadow(worldPlayer, &playerShadow, worldStreamer.collision, uiEngine.AssetLoader, frameAt)
 					if frameAt.Sub(lastInstanceCheck) > 100*time.Millisecond {
 						lastInstanceCheck = frameAt
 						position := worldPlayer.Position()
@@ -1174,6 +1214,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					}
 					poseWorldEquipment(entity.node, entity.equipment)
 					updateWorldLocalLight(entity.node, &entity.light, worldStreamer.collision, frameAt)
+					updateWorldShadow(entity.node, &entity.shadow, worldStreamer.collision, uiEngine.AssetLoader, frameAt)
 				}
 				if screenWidth, screenHeight := win.GetSize(); screenWidth > 0 && screenHeight > 0 && worldFactionState != nil {
 					playerFaction := uint32(0)
@@ -1189,6 +1230,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				if worldSky != nil {
 					cameraPosition := cam.Position()
 					worldSky.SetPositionVec(&cameraPosition)
+					fitWorldSky(worldSky, cam)
 				}
 			}
 			updateElapsed := elapsed
@@ -1457,6 +1499,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				}
 				worldFloor = nil
 				worldModel = loaded
+				// Loading a world leaves a lot of garbage behind; give it back, and
+				// collect sooner from here on than the default of letting the heap double.
+				rdebug.SetGCPercent(50)
+				rdebug.FreeOSMemory()
 				scene.Add(worldModel)
 				worldSky = buildWorldSky()
 				worldSky.SetPosition(entry.position.X, entry.position.Y, entry.position.Z)
@@ -1512,6 +1558,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				uiEngine.SetWorldMinimapPosition(worldMapName, worldCamera.position[0], worldCamera.position[1])
 				cameraPosition := cam.Position()
 				worldSky.SetPositionVec(&cameraPosition)
+					fitWorldSky(worldSky, cam)
 				if debug {
 					cameraPosition := cam.Position()
 					log.Printf("world: entry position=(%.3f,%.3f,%.3f) orientation=%.3f camera=(%.3f,%.3f,%.3f) near=%.3f far=%.3f", entry.position.X, entry.position.Y, entry.position.Z, entry.position.Orientation, cameraPosition.X, cameraPosition.Y, cameraPosition.Z, cam.Near(), cam.Far())
@@ -1551,7 +1598,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						log.Printf("world combat packet: %v", err)
 					}
 					if player := worldEntities[worldCharacter.GUID]; player != nil {
-						syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend)
+						syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend, &worldAuras, uiEngine.AssetLoader)
 					}
 					refresh()
 					break
@@ -1567,7 +1614,14 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				if worldMoveNet != nil && worldMoveNet.handle(event.Packet, worldCamera, worldMovement, time.Now()) {
 					break
 				}
+				worldNet.received += len(event.Packet.Body) + 4
 				switch event.Packet.Opcode {
+				case world.PongOpcode:
+					if sequence, pongErr := world.ParsePong(event.Packet.Body); pongErr == nil && sequence == worldNet.pingSequence && !worldNet.pingSent.IsZero() {
+						worldNet.latency = int(time.Since(worldNet.pingSent).Milliseconds())
+						worldNet.pingSent = time.Time{}
+						uiEngine.Rt.SetNetStats(worldNet.latency, worldNet.bandwidth)
+					}
 				case world.ItemQuerySingleResponse:
 					template, itemErr := world.ParseItemQueryResponse(event.Packet.Body)
 					if itemErr != nil {
@@ -1588,14 +1642,19 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					if worldAuras.apply(uiEngine.Rt, uiEngine.AssetLoader, auraUpdate, all, worldCharacter.GUID) {
 						refresh()
 					}
-				case world.MessageChat:
-					message, chatErr := world.ParseMessageChat(event.Packet.Body)
+				case world.MessageChat, world.GMMessageChat:
+					parseChat := world.ParseMessageChat
+					if event.Packet.Opcode == world.GMMessageChat {
+						parseChat = world.ParseGMMessageChat
+					}
+					message, chatErr := parseChat(event.Packet.Body)
 					if chatErr != nil {
 						if debug {
 							log.Printf("world chat: %v", chatErr)
 						}
 						break
 					}
+					chatLineID++
 					eventName := message.Type.EventName()
 					if eventName == "" {
 						break
@@ -1611,7 +1670,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					uiEngine.FireWorldChat(eventName,
 						lua.LString(message.Text), lua.LString(sender), lua.LString(message.LanguageName()),
 						lua.LString(message.Channel), lua.LString(""), lua.LString(""),
-						lua.LNumber(0), lua.LNumber(0), lua.LString(message.Channel), lua.LNumber(0), lua.LString(guid))
+						lua.LNumber(0), lua.LNumber(0), lua.LString(message.Channel), lua.LNumber(0), lua.LNumber(chatLineID), lua.LString(guid))
 					refresh()
 				case world.LoginSetTimeSpeed:
 					if gameTime, timeErr := world.ParseLoginSetTimeSpeed(event.Packet.Body); timeErr == nil {
@@ -1642,7 +1701,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						if uiEngine.Rt.ApplyUnitFields("player", player.fields) {
 							refresh()
 						}
-						if syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend) {
+						if syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend, &worldAuras, uiEngine.AssetLoader) {
 							refresh()
 						}
 						syncWorldInventory(uiEngine.Rt, worldEntities, player)
@@ -1708,6 +1767,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 		}
 		debugUpdateMS = time.Since(frameAt).Seconds() * 1000
+		if worldMode {
+			frameWidth, frameHeight := win.GetSize()
+			worldPortraitState.process(uiEngine.Rt, uiEngine.AssetLoader, &worldCreatureCache, r, gl, frameWidth, frameHeight)
+		}
 		gl.Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
 		sceneStarted := time.Now()
 		drawn := false

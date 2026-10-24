@@ -57,6 +57,10 @@ type worldCameraController struct {
 	landingTime float64
 	dragging    bool
 	dragRight   bool
+	dragLeft    bool
+	// leftDown and rightDown are the mouse buttons held.
+	leftDown  bool
+	rightDown bool
 	lastMouseX  float64
 	lastMouseY  float64
 
@@ -69,6 +73,14 @@ type worldCameraController struct {
 	walking  bool
 	autoRun  bool
 	mounted  bool
+	// slowFall is the safe fall flag the server grants, which caps the falling speed.
+	slowFall bool
+
+	// A fall from a jump or a ledge is worked out from where and when it began.
+	fallActive bool
+	fallTime   float64
+	fallStartZ float64
+	fallV0     float64
 
 	// Movement mode.
 	flying        bool
@@ -243,8 +255,14 @@ func (c *worldCameraController) handleMouse(x, y float64, button window.MouseBut
 	if button != window.MouseButtonRight && button != window.MouseButtonLeft {
 		return false
 	}
-	c.dragging = down
-	c.dragRight = down && button == window.MouseButtonRight
+	if button == window.MouseButtonRight {
+		c.rightDown = down
+	} else {
+		c.leftDown = down
+	}
+	c.dragging = c.leftDown || c.rightDown
+	c.dragRight = c.rightDown
+	c.dragLeft = c.leftDown && !c.rightDown
 	c.lastMouseX = x
 	c.lastMouseY = y
 	return true
@@ -281,6 +299,8 @@ func (c *worldCameraController) applyForcedChange(change world.ForcedChange) {
 		set(&c.levitate)
 	case world.MovementFlagHover:
 		set(&c.hover)
+	case world.MovementFlagSafeFall:
+		set(&c.slowFall)
 	}
 }
 
@@ -301,6 +321,7 @@ func (c *worldCameraController) knockBack(knock world.KnockBack) {
 func (c *worldCameraController) teleport(position world.WorldPosition) {
 	c.position = [3]float32{position.X, position.Y, position.Z}
 	c.velocity = [3]float32{}
+	c.fallActive = false
 	c.yaw, c.bodyYaw = position.Orientation, position.Orientation
 	c.grounded = true
 	c.flying, c.swimming, c.ascending, c.descending = false, false, false, false
@@ -330,13 +351,26 @@ func (c *worldCameraController) movementSpeed(backward bool) float32 {
 // flags is the movement flag word for the controller's current state.
 func (c *worldCameraController) flags() uint32 {
 	flags := worldInputFlags(c.commands)
+	// Both mouse buttons together run forward, and the turn keys slide sideways
+	// while the right button turns the character (FUN_005FAE70, FUN_005FAFB0).
+	if c.leftDown && c.rightDown && flags&(world.MovementFlagForward|world.MovementFlagBackward) == 0 {
+		flags |= world.MovementFlagForward
+	}
+	if c.rightDown {
+		if c.commands[cmdTurnLeft] && !c.commands[cmdTurnRight] {
+			flags |= world.MovementFlagStrafeLeft
+		}
+		if c.commands[cmdTurnRight] && !c.commands[cmdTurnLeft] {
+			flags |= world.MovementFlagStrafeRight
+		}
+	}
 	if c.autoRun && flags&(world.MovementFlagForward|world.MovementFlagBackward) == 0 {
 		flags |= world.MovementFlagForward
 	}
 	if c.rooted {
 		flags &^= world.MovementFlagForward | world.MovementFlagBackward | world.MovementFlagStrafeLeft | world.MovementFlagStrafeRight
 	}
-	if c.commands[cmdTurnLeft] != c.commands[cmdTurnRight] {
+	if c.commands[cmdTurnLeft] != c.commands[cmdTurnRight] && !c.rightDown {
 		if c.commands[cmdTurnLeft] {
 			flags |= world.MovementFlagTurnLeft
 		} else {
@@ -396,11 +430,11 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 		c.landingTime -= float64(delta)
 	}
 	turn := c.speeds[world.SpeedKindTurn] * delta
-	if c.commands[cmdTurnLeft] && !c.rooted {
+	if c.commands[cmdTurnLeft] && !c.rooted && !c.rightDown {
 		c.yaw += turn
 		c.bodyYaw = c.yaw
 	}
-	if c.commands[cmdTurnRight] && !c.rooted {
+	if c.commands[cmdTurnRight] && !c.rooted && !c.rightDown {
 		c.yaw -= turn
 		c.bodyYaw = c.yaw
 	}
@@ -436,20 +470,17 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 		}
 	}
 	moveLength := float32(math.Hypot(float64(move[0]), float64(move[1])))
-	moveDirection := c.bodyYaw
-	if moveLength > 0 {
-		moveDirection = float32(math.Atan2(float64(move[1]), float64(move[0])))
-	}
 	targetSpeed := c.movementSpeed(backward)
 	if moveLength > 0 {
 		move[0], move[1] = move[0]/moveLength*targetSpeed, move[1]/moveLength*targetSpeed
 	}
-	// The character faces where it is going; the camera turns the body when it
-	// is dragged far enough.
-	if moveLength > 0 && !c.commands[cmdTurnLeft] && !c.commands[cmdTurnRight] {
-		c.bodyYaw = approachWorldAngle(c.bodyYaw, moveDirection, 10*delta)
-	} else if c.dragRight && math.Abs(float64(worldAngleDelta(c.bodyYaw, c.yaw))) > 1.2 {
-		c.bodyYaw = approachWorldAngle(c.bodyYaw, c.yaw, 7*delta)
+	// The body faces where the camera looks: all the time the right button is
+	// held (the mouse turns the character), and from the moment the character
+	// moves; dragging the camera round with the left button alone leaves it be.
+	// Walking is relative to that facing, so the character never turns to face
+	// the way it is going (InputControl.cpp, FUN_005FA170 and FUN_005FBBC0).
+	if c.dragRight || (moveLength > 0 && !c.dragLeft) {
+		c.bodyYaw = c.yaw
 	}
 
 	wasGrounded := c.grounded
@@ -529,9 +560,14 @@ func (c *worldCameraController) updateWalking(delta float32, moveLength float32,
 	groundHeight := float32(0)
 	if c.floor != nil {
 		groundHeight, grounded = c.floor(c.position[0], c.position[1], c.position[2])
+		if c.fallActive {
+			// Airborne until the fall reaches the ground below.
+			grounded = false
+		}
 		if grounded && c.velocity[2] <= 0 && math.Abs(float64(c.position[2]-groundHeight)) <= worldMaxGroundSnap {
 			c.position[2] = groundHeight
 			c.velocity[2] = 0
+			c.fallActive = false
 		}
 	} else if c.ground != nil {
 		groundHeight, grounded = c.ground(c.position[0], c.position[1])
@@ -549,6 +585,7 @@ func (c *worldCameraController) updateWalking(delta float32, moveLength float32,
 			return
 		case grounded:
 			c.velocity[2] = world.JumpInitialSpeed
+			c.fallActive, c.fallTime, c.fallStartZ, c.fallV0 = true, 0, float64(c.position[2]), -world.JumpInitialSpeed
 			c.jumpDirection = [2]float32{move[0], move[1]}
 			if moveLength == 0 {
 				c.jumpDirection = [2]float32{}
@@ -562,22 +599,32 @@ func (c *worldCameraController) updateWalking(delta float32, moveLength float32,
 	}
 	c.jumpQueued = false
 	if !c.levitate {
-		c.velocity[2] -= world.Gravity * delta
-		if c.velocity[2] < -world.TerminalFall {
-			c.velocity[2] = -world.TerminalFall
+		if (!grounded || c.velocity[2] > 0) && !c.fallActive {
+			// Off a ledge, or thrown: a fall that begins at the speed it has now.
+			c.fallActive, c.fallTime, c.fallStartZ, c.fallV0 = true, 0, float64(c.position[2]), -float64(c.velocity[2])
 		}
+		if c.fallActive && delta > 0 {
+			c.fallTime += float64(delta)
+			z := float32(c.fallStartZ - world.FallDistance(c.fallTime, c.slowFall, c.fallV0))
+			c.velocity[2] = (z - c.position[2]) / delta
+			c.position[2] = z
+		}
+	} else {
+		c.fallActive = false
+		c.position[2] += c.velocity[2] * delta
 	}
-	c.position[2] += c.velocity[2] * delta
 	if c.floor != nil {
 		if height, ok := c.floor(c.position[0], c.position[1], c.position[2]); ok && c.position[2] <= height {
 			c.position[2] = height
 			c.velocity[2] = 0
+			c.fallActive = false
 			grounded = true
 		}
 	} else if c.ground != nil {
 		if height, ok := c.ground(c.position[0], c.position[1]); ok && c.position[2] <= height {
 			c.position[2] = height
 			c.velocity[2] = 0
+			c.fallActive = false
 			grounded = true
 		}
 	}
@@ -595,6 +642,7 @@ func (c *worldCameraController) updateWalking(delta float32, moveLength float32,
 // direction it looks, up and down with the ascend and descend commands.
 func (c *worldCameraController) updateFreeMovement(delta float32, moveLength float32, move [2]float32, targetSpeed float32, flags uint32) {
 	c.grounded = false
+	c.fallActive = false
 	c.ascending = c.commands[cmdJump] && !c.commands[cmdDescend]
 	c.descending = c.commands[cmdDescend] && !c.commands[cmdJump]
 	if c.jumpQueued {

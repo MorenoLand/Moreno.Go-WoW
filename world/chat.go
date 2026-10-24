@@ -293,6 +293,55 @@ func BuildMessageChat(chatType ChatType, language uint32, target, text string) (
 	return body, nil
 }
 
+// ParseGMMessageChat reads SMSG_GM_MESSAGECHAT: a chat line carrying the sender's
+// name, whatever the kind of line.
+func ParseGMMessageChat(body []byte) (ChatMessage, error) {
+	r := NewReader(body, "SMSG_GM_MESSAGECHAT")
+	chatType, err := r.U8()
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	language, err := r.U32()
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	sender, err := r.U64()
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	if err := r.Skip(4); err != nil {
+		return ChatMessage{}, err
+	}
+	message := ChatMessage{Type: chatTypeFromID(chatType), Language: language, Sender: sender}
+	if _, err := r.U32(); err != nil {
+		return ChatMessage{}, err
+	}
+	if message.SenderName, err = r.CString(); err != nil {
+		return ChatMessage{}, err
+	}
+	if message.Type == ChatChannel {
+		if message.Channel, err = r.CString(); err != nil {
+			return ChatMessage{}, err
+		}
+	}
+	if message.Target, err = r.U64(); err != nil {
+		return ChatMessage{}, err
+	}
+	if _, err := r.U32(); err != nil {
+		return ChatMessage{}, err
+	}
+	if message.Text, err = r.CString(); err != nil {
+		return ChatMessage{}, err
+	}
+	if message.Tag, err = r.U8(); err != nil {
+		return ChatMessage{}, err
+	}
+	if err := r.Finish(); err != nil {
+		return ChatMessage{}, err
+	}
+	return message, nil
+}
+
 func ParseMessageChat(body []byte) (ChatMessage, error) {
 	r := NewReader(body, "SMSG_MESSAGECHAT")
 	chatType, err := r.U8()

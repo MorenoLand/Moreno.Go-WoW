@@ -40,6 +40,9 @@ func (eng *UIEngine) LoadWorldUI() error {
 		return fmt.Errorf("load world UI: %w", err)
 	}
 	eng.loadBindings()
+	// The frames read the keys when they load, before the table exists; the client
+	// announces the bindings once they are in.
+	eng.Rt.FireEvent("UPDATE_BINDINGS")
 	if err := eng.loadCombatLogAddon(); err != nil {
 		return err
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/MorenoLand/Moreno.WoW/ui"
 	"github.com/MorenoLand/Moreno.WoW/world"
+	"github.com/g3n/engine/camera"
 	"github.com/g3n/engine/core"
 	"github.com/g3n/engine/geometry"
 	"github.com/g3n/engine/gls"
@@ -56,6 +57,8 @@ type worldADTChunk struct {
 	gridY     int
 	flags     uint32
 	holes     uint16
+	// area is the AreaTable id the chunk lies in.
+	area      uint32
 	position  [3]float32
 	heights   [worldHeightCount]float32
 	normals   [worldHeightCount][3]int8
@@ -81,7 +84,9 @@ type worldWMOPlacement struct {
 	lower     [3]float32
 	upper     [3]float32
 	doodadSet uint16
-	scale     float32
+	// nameSet picks the names of its groups in WMOAreaTable.
+	nameSet uint16
+	scale   float32
 }
 
 type worldM2Placement struct {
@@ -100,6 +105,8 @@ type worldWMOMaterial struct {
 
 type worldWMORoot struct {
 	groupCount int
+	// wmoID is the id WMOAreaTable names the map object by (MOHD).
+	wmoID uint32
 	// ambient is the WMO's own ambient light (MOHD) and lights its omni lights
 	// (MOLT), in the WMO's coordinates.
 	ambient    [3]float32
@@ -135,6 +142,8 @@ type worldWMOTriangle struct {
 
 type worldWMOGroup struct {
 	flags uint32
+	// groupID is the id WMOAreaTable names the group by.
+	groupID uint32
 	// doodadRefs are the doodads (indices into the root's list) placed in the group.
 	doodadRefs []uint16
 	// lightRefs are the lights of the root's list the group is lit by (MOLR).
@@ -255,6 +264,8 @@ type worldCollisionMesh struct {
 	// lights are the omni lights of a WMO placement, carried by a mesh of no
 	// triangles.
 	lights []worldPointLight
+	// area is the AreaTable id WMOAreaTable gives the group, 0 for none.
+	area uint32
 }
 
 func worldCollisionTriangleFromPoints(a, b, c [3]float32, noCamera bool) (worldCollisionTriangle, bool) {
@@ -1015,6 +1026,7 @@ func parseWorldWMOPlacements(data []byte, names []string) []worldWMOPlacement {
 			placement.upper[index] = math.Float32frombits(binary.LittleEndian.Uint32(data[offset+44+index*4 : offset+48+index*4]))
 		}
 		placement.doodadSet = binary.LittleEndian.Uint16(data[offset+58 : offset+60])
+		placement.nameSet = binary.LittleEndian.Uint16(data[offset+60 : offset+62])
 		result = append(result, placement)
 	}
 	return result
@@ -1078,6 +1090,9 @@ func parseWorldWMORoot(data []byte) (worldWMORoot, error) {
 		return worldWMORoot{}, fmt.Errorf("MOHD is short")
 	}
 	root := worldWMORoot{groupCount: int(binary.LittleEndian.Uint32(mohd[4:8]))}
+	if len(mohd) >= 36 {
+		root.wmoID = binary.LittleEndian.Uint32(mohd[32:36])
+	}
 	if len(mohd) >= 32 {
 		// The ambient colour is stored B, G, R, A.
 		root.ambient = [3]float32{float32(mohd[30]) / 255, float32(mohd[29]) / 255, float32(mohd[28]) / 255}
@@ -1156,6 +1171,9 @@ func parseWorldWMOGroup(data []byte) (worldWMOGroup, error) {
 		return worldWMOGroup{}, fmt.Errorf("MOGP is short")
 	}
 	group := worldWMOGroup{flags: binary.LittleEndian.Uint32(mogp[8:12])}
+	if len(mogp) >= 0x3c {
+		group.groupID = binary.LittleEndian.Uint32(mogp[0x38:0x3c])
+	}
 	for offset := 68; offset < len(mogp); {
 		id, _, payload, _, next, ok := worldChunk(mogp, offset)
 		if !ok {
@@ -1735,7 +1753,7 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 				indoorDoodads[ref] = groupLit
 			}
 		}
-		collisionMesh := worldCollisionMesh{triangles: make([]worldCollisionTriangle, 0, len(group.indices)/3), indoor: group.flags&0x2000 != 0, ambient: groupAverageColour(group, model.ambient), instance: instance}
+		collisionMesh := worldCollisionMesh{triangles: make([]worldCollisionTriangle, 0, len(group.indices)/3), indoor: group.flags&0x2000 != 0, ambient: groupAverageColour(group, model.ambient), instance: instance, area: worldAreas(loader).wmoArea(model.wmoID, placement.nameSet, group.groupID)}
 		if collisionMesh.indoor {
 			collisionMesh.groupLights = groupLights(model, group, placement)
 		}
@@ -2027,6 +2045,7 @@ func parseWorldMCNK(data []byte, offset, fallbackX, fallbackY int, textures []st
 		chunk.gridY = y
 	}
 	chunk.holes = binary.LittleEndian.Uint16(payload[0x3c:0x3e])
+	chunk.area = binary.LittleEndian.Uint32(payload[0x34:0x38])
 	for index := range chunk.position {
 		chunk.position[index] = math.Float32frombits(binary.LittleEndian.Uint32(payload[0x68+index*4 : 0x6c+index*4]))
 	}
@@ -2168,10 +2187,26 @@ func buildWorldTerrain(loader *ui.Loader, adt worldADT, position world.WorldPosi
 	return buildWorldTerrainProgress(loader, adt, position, nil)
 }
 
+// worldSkyRadius is the radius the sky dome is built with.
+const worldSkyRadius = 2400
+
+// fitWorldSky keeps the dome inside the far plane, which a short view distance
+// would otherwise cut away, leaving the sky black.
+func fitWorldSky(sky *core.Node, cam *camera.Camera) {
+	if sky == nil || cam == nil {
+		return
+	}
+	scale := cam.Far() * 0.9 / worldSkyRadius
+	if scale > 1 {
+		scale = 1
+	}
+	sky.SetScale(scale, scale, scale)
+}
+
 func buildWorldSky() *core.Node {
 	root := core.NewNode()
 	root.SetRotation(math.Pi/2, 0, 0)
-	geom := geometry.NewSphere(2400, 64, 32)
+	geom := geometry.NewSphere(worldSkyRadius, 64, 32)
 	mat := newWorldMaterial()
 	mat.sky = true
 	mat.lit = true

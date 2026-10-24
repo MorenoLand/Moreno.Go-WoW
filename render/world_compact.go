@@ -9,6 +9,7 @@ import (
 	"github.com/g3n/engine/core"
 	"github.com/g3n/engine/geometry"
 	"github.com/g3n/engine/graphic"
+	"github.com/g3n/engine/material"
 	"github.com/g3n/engine/texture"
 )
 
@@ -89,3 +90,35 @@ func (s *worldTerrainStreamer) compact() {
 }
 
 var _ = time.Second
+
+// materialTextures are the textures a material draws with.
+func materialTextures(mat material.IMaterial) []*texture.Texture2D {
+	if mat == nil {
+		return nil
+	}
+	field := unexportedField(mat.GetMaterial(), "textures")
+	textures, _ := field.Interface().([]*texture.Texture2D)
+	return textures
+}
+
+// compactEntityTextures lets go of the pixels of the textures the units and
+// objects of the scene have been drawn with.
+func compactEntityTextures(entities map[uint64]*worldEntity) {
+	var walk func(node core.INode)
+	walk = func(node core.INode) {
+		if mesh, ok := node.(*graphic.Mesh); ok {
+			for _, tex := range materialTextures(mesh.GetMaterial(0)) {
+				dropTextureData(tex)
+			}
+		}
+		for _, child := range node.GetNode().Children() {
+			walk(child)
+		}
+	}
+	for _, entity := range entities {
+		if entity.node != nil {
+			walk(entity.node)
+		}
+	}
+	dropSharedTextureData()
+}

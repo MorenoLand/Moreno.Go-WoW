@@ -247,9 +247,9 @@ func registerGlueAPI(rt *Runtime) {
 		return 2
 	})
 	reg("GetNetStats", func(L *lua.LState) int {
+		L.Push(lua.LNumber(rt.netBandwidthIn))
 		L.Push(lua.LNumber(0))
-		L.Push(lua.LNumber(0))
-		L.Push(lua.LNumber(0))
+		L.Push(lua.LNumber(rt.netLatency))
 		return 3
 	})
 	reg("GetActionBarPage", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
@@ -271,8 +271,12 @@ func registerGlueAPI(rt *Runtime) {
 	reg("IsAutoRepeatAction", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("IsAttackAction", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("IsUsableAction", func(L *lua.LState) int { L.Push(lua.LFalse); L.Push(lua.LFalse); return 2 })
-	reg("GetSubZoneText", func(L *lua.LState) int { L.Push(lua.LString("")); return 1 })
+	reg("GetSubZoneText", func(L *lua.LState) int { L.Push(lua.LString(rt.area.subZone)); return 1 })
 	reg("GetZoneText", func(L *lua.LState) int {
+		if rt.area.known {
+			L.Push(lua.LString(rt.area.zone))
+			return 1
+		}
 		if idx := rt.Glue.SelectedCharacter; idx >= 1 && idx <= len(rt.Glue.Characters) {
 			L.Push(lua.LString(rt.Glue.Characters[idx-1].Zone))
 		} else {
@@ -358,6 +362,14 @@ func registerGlueAPI(rt *Runtime) {
 	reg("GetLFGRoleUpdate", func(L *lua.LState) int { return 0 })
 	reg("IsPartyLFG", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("GetMinimapZoneText", func(L *lua.LState) int {
+		if rt.area.known {
+			if rt.area.subZone != "" {
+				L.Push(lua.LString(rt.area.subZone))
+			} else {
+				L.Push(lua.LString(rt.area.zone))
+			}
+			return 1
+		}
 		if idx := rt.Glue.SelectedCharacter; idx >= 1 && idx <= len(rt.Glue.Characters) {
 			L.Push(lua.LString(rt.Glue.Characters[idx-1].Zone))
 		} else {
@@ -366,7 +378,11 @@ func registerGlueAPI(rt *Runtime) {
 		return 1
 	})
 	reg("GetZonePVPInfo", func(L *lua.LState) int {
-		L.Push(lua.LNil)
+		if rt.area.pvp == "" {
+			L.Push(lua.LNil)
+		} else {
+			L.Push(lua.LString(rt.area.pvp))
+		}
 		L.Push(lua.LFalse)
 		L.Push(lua.LNil)
 		return 3

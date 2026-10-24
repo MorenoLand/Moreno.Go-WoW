@@ -36,6 +36,10 @@ var optionsCVarMeta = map[string]cvarMeta{
 	"gxstereoseparation":   {Default: "0", Min: "0", Max: "100"},
 	"widescreen":           {Default: "1"},
 	"videooptionsversion":  {Default: "0"},
+	// Chat timestamps are off until the interface options pick a format.
+	"showtimestamps": {Default: "none"},
+	// Wow.exe FUN_0051d9b0 registers buffDurations with the default "1".
+	"buffdurations": {Default: "1"},
 
 	// Gamma (FUN_00401b60): Gamma default DAT_009e1340 "1.0", DesktopGamma "0"
 	"gamma":        {Default: "1.0", Min: "-0.5", Max: "0.5"},

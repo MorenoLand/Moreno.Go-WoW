@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"image"
 	"strings"
 	"time"
 
@@ -20,6 +21,13 @@ func (e ScriptError) Error() string { return e.Source + ": " + e.Message }
 // Runtime owns the Lua state, widget registry, virtual template registry,
 // cvar store, and glue event dispatch for one interface session.
 type Runtime struct {
+	// PortraitSource returns the portrait rendered from a creature display's model,
+	// or nil while it is not ready (asking for it queues it).
+	PortraitSource   func(displayID uint32) image.Image
+	area             areaState
+	// netLatency (ms) and netBandwidthIn (KB/s) are what GetNetStats answers.
+	netLatency       int
+	netBandwidthIn   float64
 	mapArrowTextures []*widget
 	inventory        inventoryState
 	clearItemCursor  func()
@@ -219,6 +227,7 @@ func NewRuntime(host Host) *Runtime {
 	registerCombatAPI(rt)
 	registerAuraCancelAPI(rt)
 	registerAddonSupportAPI(rt)
+	registerCompanionAPI(rt)
 	registerWorldAPIDefaults(rt)
 	registerWorldMapDefaults(rt)
 	registerSurveyedAPIDefaults(rt)

@@ -112,6 +112,7 @@ func (rt *Runtime) SetItemTemplate(template world.ItemTemplate) {
 	rt.FireEvent("GET_ITEM_INFO_RECEIVED", numberValue(template.Entry))
 	rt.FireEvent("BAG_UPDATE", numberValue(0))
 	rt.FireEvent("UNIT_INVENTORY_CHANGED", stringValue("player"))
+	rt.refreshItemActions()
 }
 
 // SetInventory replaces the item objects and the player's slot array with what
@@ -148,6 +149,9 @@ func (rt *Runtime) SetInventory(slots [invSlotCount]uint64, items map[uint64]*It
 	}
 	for bag := range changedBags {
 		rt.FireEvent("BAG_UPDATE", numberValue(bag))
+	}
+	if len(changedBags) > 0 {
+		rt.refreshItemActions()
 	}
 	if len(changedBags) > 0 {
 		rt.FireEvent("BAG_UPDATE_COOLDOWN")

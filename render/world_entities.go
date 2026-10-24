@@ -116,6 +116,7 @@ type worldEntity struct {
 	animPending   float64
 	geoHeight     float32
 	light         worldLightState
+	shadow        worldShadowState
 }
 
 func (tables *worldCreatureTables) definition(loader *ui.Loader, displayID, nativeDisplayID uint32) (worldCreatureDefinition, error) {
@@ -222,18 +223,10 @@ func wrapWorldModel(model *core.Node, position world.WorldPosition, scale float3
 			model.SetScale(1, 1, 1)
 		} else if info.hasStand {
 			offsetX, offsetY, offsetZ = -info.standPosition.X, info.standPosition.Z, -info.standPosition.Y
-		} else if info.modelBottom < 0 {
-			offsetZ = -info.modelBottom
 		}
 		model.SetPosition(offsetX, offsetY, offsetZ)
 	}
 	root.Add(model)
-	// The shadow is added after the model, which stays the node's first child.
-	radius := float32(0.6)
-	if info, ok := model.UserData().(glueModelInfo); ok && info.rawHeight > 0 {
-		radius = float32(math.Max(0.3, math.Min(float64(info.rawHeight)*0.3, 6)))
-	}
-	addBlobShadow(root, radius)
 	return root
 }
 
@@ -342,7 +335,11 @@ func worldEntityArrivalFacing(entities map[uint64]*worldEntity, entity *worldEnt
 	return 0, false
 }
 
-func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64, _ func(float32, float32, float32) (float32, bool)) {
+// worldEntityGroundReach is how far from its path a walking unit is brought to the
+// floor it walks on; further than that the server's height stands.
+const worldEntityGroundReach = 2.0
+
+func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64, floor func(float32, float32, float32) (float32, bool)) {
 	if elapsed <= 0 {
 		return
 	}
@@ -365,6 +362,14 @@ func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64, _ f
 		}
 		from, to := points[segment], points[segment+1]
 		entity.movement.Position = world.WorldPosition{X: from.X + (to.X-from.X)*fraction, Y: from.Y + (to.Y-from.Y)*fraction, Z: from.Z + (to.Z-from.Z)*fraction, Orientation: float32(math.Atan2(float64(to.Y-from.Y), float64(to.X-from.X)))}
+		// A walking unit stays on the ground it walks over: between two points of its
+		// path the straight line goes through stairs and slopes.
+		if floor != nil && entity.movement.MovementFlags&(world.MovementFlagFlying|world.MovementFlagSwimming|world.MovementFlagCanFly|world.MovementFlagLevitating) == 0 {
+			position := entity.movement.Position
+			if z, ok := floor(position.X, position.Y, position.Z); ok && math.Abs(float64(z-position.Z)) <= worldEntityGroundReach {
+				entity.movement.Position.Z = z
+			}
+		}
 		if remaining >= 1 {
 			entity.movement.Position = points[len(points)-1]
 			switch entity.arrivalFacing.Kind {

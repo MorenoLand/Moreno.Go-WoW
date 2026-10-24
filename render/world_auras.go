@@ -91,9 +91,20 @@ func (state *worldAuraState) apply(rt *ui.Runtime, loader *ui.Loader, update wor
 		slots[entry.Slot] = entry.Aura
 	}
 	state.slots[update.GUID] = slots
-	if update.GUID != playerGUID {
-		return false
+	changed := false
+	for _, unit := range []string{"player", "target"} {
+		if rt.UnitGUID(unit) == update.GUID || (unit == "player" && update.GUID == playerGUID) {
+			state.push(rt, loader, unit, update.GUID)
+			changed = true
+		}
 	}
+	return changed
+}
+
+// push shows the auras held for a guid on a unit of the interface.
+func (state *worldAuraState) push(rt *ui.Runtime, loader *ui.Loader, unit string, guid uint64) {
+	slots := state.slots[guid]
+	now := rt.GameTime()
 	auras := make([]ui.AuraInfo, 0, len(slots))
 	for _, slot := range slots {
 		if slot.Empty() {
@@ -110,11 +121,10 @@ func (state *worldAuraState) apply(rt *ui.Runtime, loader *ui.Loader, update wor
 		if slot.MaxDuration > 0 {
 			aura.Duration = float64(slot.MaxDuration) / 1000
 			if slot.Duration > 0 {
-				aura.ExpirationTime = float64(slot.Duration) / 1000
+				aura.ExpirationTime = now + float64(slot.Duration)/1000
 			}
 		}
 		auras = append(auras, aura)
 	}
-	rt.SetUnitAuras("player", auras)
-	return true
+	rt.SetUnitAuras(unit, auras)
 }

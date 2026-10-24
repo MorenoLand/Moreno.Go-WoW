@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -90,6 +91,8 @@ type UIEngine struct {
 	minimapWorldX      float32
 	minimapWorldY      float32
 	minimapHasPosition bool
+	// minimapIndoor is set while the minimap shows the rooms around the player.
+	minimapIndoor bool
 	minimapVersion     uint64
 	caretOwner         *widget // the edit box whose caret is blinking
 	caretCursor        int
@@ -332,6 +335,18 @@ func (eng *UIEngine) loadBLP(path string) image.Image {
 		return nil
 	}
 	if img, ok := eng.Cache[path]; ok {
+		return img
+	}
+	if strings.HasPrefix(path, portraitImagePrefix) {
+		id, err := strconv.ParseUint(path[len(portraitImagePrefix):], 10, 32)
+		if err != nil || eng.Rt == nil || eng.Rt.PortraitSource == nil {
+			return nil
+		}
+		img := eng.Rt.PortraitSource(uint32(id))
+		if img == nil {
+			return nil
+		}
+		eng.Cache[path] = img
 		return img
 	}
 	data, err := eng.AssetLoader.ReadAsset(path)
@@ -618,6 +633,9 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 				if child.layerLevel == layerHighlight && !isHighlighted(w) {
 					continue
 				}
+				if w.kind == kindStatusBar && statusBarBackgroundRegion(child) {
+					continue
+				}
 				paint(target, child, rect)
 			}
 		}
@@ -692,6 +710,12 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 			}
 
 		case kindStatusBar:
+			// The bar's own BACKGROUND regions lie under its fill.
+			for _, child := range orderedChildren(w.children) {
+				if child.shown && statusBarBackgroundRegion(child) {
+					paint(target, child, rect)
+				}
+			}
 			fraction := 1.0
 			if w.maxValue > w.minValue {
 				fraction = (w.value - w.minValue) / (w.maxValue - w.minValue)
@@ -1486,6 +1510,21 @@ func editCaretBand(face font.Face, text image.Rectangle) (top, bottom int) {
 	return top, top + height
 }
 
+// statusBarBackgroundRegion reports a texture or text of a status bar's
+// BACKGROUND layer, which is drawn before the bar's fill.
+func statusBarBackgroundRegion(w *widget) bool {
+	return (w.kind == kindTexture || w.kind == kindFontString) && w.layerLevel == layerBackground
+}
+
+// editTextAlpha is the opacity of edit box text: a colour set without an alpha
+// is opaque.
+func editTextAlpha(alpha float64) float64 {
+	if alpha <= 0 {
+		return 1
+	}
+	return alpha
+}
+
 func (eng *UIEngine) drawEditText(canvas *image.RGBA, face, faceLg font.Face, w *widget, rect Rect, screenHeight float64) {
 	text := editDisplayText(w)
 	textWidget := eng.editTextWidget(w)
@@ -1494,7 +1533,7 @@ func (eng *UIEngine) drawEditText(canvas *image.RGBA, face, faceLg font.Face, w 
 	screenTextRect := screenScaledRect(textRect, eng.uiScale)
 	textColor := color.RGBA{R: 235, G: 235, B: 235, A: 255}
 	if !textWidget.textColor.isZero() {
-		textColor = color.RGBA{R: uint8(textWidget.textColor.r * 255), G: uint8(textWidget.textColor.g * 255), B: uint8(textWidget.textColor.b * 255), A: uint8(textWidget.textColor.a * 255)}
+		textColor = color.RGBA{R: uint8(textWidget.textColor.r * 255), G: uint8(textWidget.textColor.g * 255), B: uint8(textWidget.textColor.b * 255), A: uint8(editTextAlpha(textWidget.textColor.a) * 255)}
 	}
 	start, end := editSelection(w)
 	if eng.Rt.focused == w && start != end {
@@ -3174,10 +3213,7 @@ func drawTextAlignedVStyle(canvas *image.RGBA, face font.Face, text string, r Re
 	}
 	clip := dst.Intersect(canvas.Bounds())
 	if shadow != nil {
-		padding := 0
-		if strings.EqualFold(shadow.Outline, "NORMAL") {
-			padding = 1
-		}
+		padding := fontOutlineRadius(shadow.Outline)
 		if shadow.Shadow {
 			shadowY := int(math.Round(-shadow.ShadowOffsetY * shadowScale))
 			if value := int(math.Abs(float64(shadowY))) + 1; value > padding {
@@ -3220,10 +3256,14 @@ func drawTextAlignedVStyle(canvas *image.RGBA, face font.Face, text string, r Re
 		case "RIGHT":
 			dotX = dst.Max.X - width - 4
 		}
-		if shadow != nil && strings.EqualFold(shadow.Outline, "NORMAL") {
+		radius := 0
+		if shadow != nil {
+			radius = fontOutlineRadius(shadow.Outline)
+		}
+		if radius > 0 {
 			outlineColor := color.RGBA{A: 255}
-			for offsetY := -1; offsetY <= 1; offsetY++ {
-				for offsetX := -1; offsetX <= 1; offsetX++ {
+			for offsetY := -radius; offsetY <= radius; offsetY++ {
+				for offsetX := -radius; offsetX <= radius; offsetX++ {
 					if offsetX != 0 || offsetY != 0 {
 						drawLine(line, dotX+offsetX, startY+index*height+offsetY, outlineColor)
 					}
@@ -3238,6 +3278,18 @@ func drawTextAlignedVStyle(canvas *image.RGBA, face font.Face, text string, r Re
 		}
 		drawLine(line, dotX, startY+index*height, c)
 	}
+}
+
+// fontOutlineRadius is how far a font's outline reaches around its glyphs: one
+// pixel for NORMAL and two for THICK.
+func fontOutlineRadius(outline string) int {
+	switch {
+	case strings.EqualFold(outline, "THICK"):
+		return 2
+	case strings.EqualFold(outline, "NORMAL"):
+		return 1
+	}
+	return 0
 }
 
 func wrapText(text string, face font.Face, maxWidth int) []string {

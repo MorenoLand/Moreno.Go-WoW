@@ -247,9 +247,15 @@ type glueModelInfo struct {
 	attachments   []m2Attachment
 	// rawHeight is the model's height in its own units.
 	rawHeight float32
-	stats     glueModelStats
-	particles *m2ParticleSystem
-	animation *m2Animation
+	// shadowHalf is half the model's extent on x and y, the size of its ground shadow.
+	shadowHalf [2]float32
+	// portrait is the model's own portrait camera (the first camera), in the
+	// model's native axes.
+	portrait    m2Camera
+	hasPortrait bool
+	stats       glueModelStats
+	particles   *m2ParticleSystem
+	animation   *m2Animation
 }
 
 type glueModelStats struct {
@@ -448,6 +454,7 @@ func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model 
 			low, high = float32(math.Min(float64(low), float64(vertex.position[2]))), float32(math.Max(float64(high), float64(vertex.position[2])))
 		}
 		info.rawHeight = high - low
+		info.shadowHalf = modelShadowHalfExtents(model.vertices)
 	}
 	for _, attachment := range model.attachments {
 		if attachment.id == 0 {

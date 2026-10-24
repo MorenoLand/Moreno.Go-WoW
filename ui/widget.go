@@ -303,6 +303,10 @@ func newWidget(kind widgetKind, name string) *widget {
 	case kindButton, kindCheckButton, kindEditBox, kindSlider:
 		w.enableMouse = true
 	}
+	// A slider runs up and down until told otherwise; a status bar fills left to right.
+	if kind == kindStatusBar {
+		w.orientation = "HORIZONTAL"
+	}
 	return w
 }
 

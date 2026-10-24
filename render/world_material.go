@@ -30,6 +30,9 @@ type worldMaterial struct {
 	// reflected environment coordinates.
 	envMask           float32
 	envMaskUniform    gls.Uniform
+	// highlight is the colour a model under the mouse is lit up by.
+	highlight        [3]float32
+	highlightUniform gls.Uniform
 	instance          int
 	wmoParams, wmoAdd gls.Uniform
 
@@ -41,6 +44,7 @@ type worldMaterial struct {
 func newWorldMaterial() *worldMaterial {
 	m := &worldMaterial{Standard: material.NewStandard(&math32.Color{R: 1, G: 1, B: 1}), water: -1}
 	m.envMaskUniform.Init("M2EnvMask")
+	m.highlightUniform.Init("M2Highlight")
 	m.wmoParams.Init("WmoParams")
 	m.wmoAdd.Init("WmoAdd")
 	m.indoorAmbient.Init("IndoorAmbient")
@@ -75,6 +79,7 @@ type worldProgramUniforms struct {
 	wmoMode                          float32
 	envMask                          float32
 	wmoAdd                           [3]float32
+	highlight                        [3]float32
 }
 
 // Wow.exe's three ways of lighting a map object surface (FUN_007a8b10).
@@ -124,7 +129,7 @@ func (m *worldMaterial) RenderSetup(gs *gls.GLS) {
 		worldUniformCache[key] = cached
 	}
 	if m.local == nil && m.water < 0 && !m.sky {
-		current := worldProgramUniforms{set: true, ambient: a.ambient, diffuse: a.diffuse, direction: a.direction, fog: a.fog, fogStart: a.fogStart, fogEnd: a.fogEnd, valid: a.valid, lit: m.lit, noFog: m.noFog, wmoMode: m.wmoMode, envMask: m.envMask, wmoAdd: m.wmoAmbientAdd()}
+		current := worldProgramUniforms{set: true, ambient: a.ambient, diffuse: a.diffuse, direction: a.direction, fog: a.fog, fogStart: a.fogStart, fogEnd: a.fogEnd, valid: a.valid, lit: m.lit, noFog: m.noFog, wmoMode: m.wmoMode, envMask: m.envMask, wmoAdd: m.wmoAmbientAdd(), highlight: m.highlight}
 		if *cached == current {
 			return
 		}
@@ -156,6 +161,7 @@ func (m *worldMaterial) RenderSetup(gs *gls.GLS) {
 	}
 	add := m.wmoAmbientAdd()
 	gs.Uniform1f(m.envMaskUniform.Location(gs), m.envMask)
+	gs.Uniform3f(m.highlightUniform.Location(gs), m.highlight[0], m.highlight[1], m.highlight[2])
 	gs.Uniform4f(m.wmoParams.Location(gs), m.wmoMode, 0, 0, 0)
 	gs.Uniform3f(m.wmoAdd.Location(gs), add[0], add[1], add[2])
 	gs.Uniform4f(m.indoorAmbient.Location(gs), indoorAmbient[0], indoorAmbient[1], indoorAmbient[2], indoor)

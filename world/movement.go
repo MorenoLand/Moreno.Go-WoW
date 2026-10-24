@@ -63,12 +63,36 @@ const (
 	MovementFlag2AlwaysAllowPitching = MovementFlag2Pitching
 )
 
-// Physics constants the client and the server agree on (yards, seconds).
+// Physics constants the client and the server agree on (yards, seconds), as
+// Wow.exe holds them: the jump speed at 0xAA33DC, gravity at 0xA32F74, its half
+// at 0xAA33AC, the time one yard per second takes to build at 0xA37F8C, and the
+// terminal speeds at 0xB2D9E8 (falling) and 0xB2D9EC (slow fall).
 const (
-	JumpInitialSpeed = 7.955547
-	Gravity          = 19.2911
-	TerminalFall     = 60.1481
+	JumpInitialSpeed = 7.955547332763672
+	Gravity          = 19.291105270385742
+	TerminalFall     = 60.14800262451172
+	SlowFallTerminal = 7.0
+	halfGravity      = 9.645552635192871
+	invGravity       = 0.051837362349033356
 )
+
+// FallDistance is how far a mover has fallen after t seconds of a fall that began
+// at speed v0 (down positive), which Wow.exe works out in FUN_00986F00: the speed
+// builds with gravity until it reaches the terminal speed and holds there.
+func FallDistance(t float64, slowFall bool, v0 float64) float64 {
+	terminal := float64(TerminalFall)
+	if slowFall {
+		terminal = SlowFallTerminal
+	}
+	if v0 > terminal {
+		v0 = terminal
+	}
+	if Gravity*t+v0 > terminal {
+		toTerminal := (terminal - v0) * invGravity
+		return (halfGravity*toTerminal+v0)*toTerminal + (t-toTerminal)*terminal
+	}
+	return (t*halfGravity + v0) * t
+}
 
 // Default unit speeds (yards per second, turn rate in radians per second).
 const (

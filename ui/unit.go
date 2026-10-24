@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"time"
 	"fmt"
 	"strings"
 
@@ -43,6 +44,8 @@ type UnitInfo struct {
 	Mounted           bool
 	// Classification is the UnitClassification string ("normal", "elite", ...).
 	Classification string
+	// DisplayID is the model a creature wears, which its portrait shows.
+	DisplayID uint32
 	CreatureType   string
 	Auras          []AuraInfo
 }
@@ -94,6 +97,19 @@ func (rt *Runtime) SetTarget(info *UnitInfo) {
 		rt.SetUnit("target", *info)
 	}
 	rt.FireEvent("PLAYER_TARGET_CHANGED")
+}
+
+// PortraitReady tells the interface the portrait of a display has been rendered,
+// for each unit that shows it.
+func (rt *Runtime) PortraitReady(displayID uint32) {
+	if rt == nil {
+		return
+	}
+	for unit, info := range rt.units {
+		if info.DisplayID == displayID && !info.Player {
+			rt.FireEvent("UNIT_PORTRAIT_UPDATE", lua.LString(unit))
+		}
+	}
 }
 
 func (rt *Runtime) ClearUnit(unit string) {
@@ -162,6 +178,16 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 	}
 	return changed
 }
+
+// SetNetStats records the round trip time to the server GetNetStats reports.
+func (rt *Runtime) SetNetStats(latencyMS int, bandwidthIn float64) {
+	if rt != nil {
+		rt.netLatency, rt.netBandwidthIn = latencyMS, bandwidthIn
+	}
+}
+
+// GameTime is the time GetTime reports, seconds since the interface started.
+func (rt *Runtime) GameTime() float64 { return time.Since(rt.started).Seconds() }
 
 func (rt *Runtime) SetUnitAuras(unit string, auras []AuraInfo) {
 	if rt == nil {
@@ -303,6 +329,10 @@ func atoiDefault(s string, def int) int {
 	return n
 }
 
+// portraitImagePrefix starts the texture path of a portrait rendered from a
+// creature's model.
+const portraitImagePrefix = "Portrait:"
+
 func (rt *Runtime) temporaryPortraitPath(unit string) string {
 	info := rt.unitInfo(unit)
 	if info == nil || !info.Exists {
@@ -310,6 +340,9 @@ func (rt *Runtime) temporaryPortraitPath(unit string) string {
 	}
 	if strings.EqualFold(unit, "pet") && !info.Player && info.RaceFile == "" {
 		return `Interface\CharacterFrame\TemporaryPortrait-Pet`
+	}
+	if info.DisplayID != 0 && !info.Player && rt.PortraitSource != nil && rt.PortraitSource(info.DisplayID) != nil {
+		return fmt.Sprintf("%s%d", portraitImagePrefix, info.DisplayID)
 	}
 	race := info.RaceFile
 	if race == "" {
