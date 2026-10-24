@@ -30,71 +30,71 @@ type UIEngine struct {
 	cursorIconPath  string
 	cursorIconImage *image.RGBA
 
-	keyMods window.ModifierKey // modifiers of the key press being handled
-	curScale float64 // effective scale of the widget being painted (1 outside painting)
-	Rt               *Runtime
-	FontObj          *opentype.Font
-	FontObjSm        *opentype.Font
-	FontObjArial     *opentype.Font
-	AssetLoader      *Loader
-	Cache            map[string]image.Image
-	BgImagePath      string // Path to a static background image (JPEG/PNG)
-	statusKey        string
-	statusText       string
-	statusTTL        float64
-	statusDialogType string
-	rememberMe       bool
-	pressed          *widget
-	presses          map[string]*mousePress
-	dragging         *dragState
-	sliderDragging   *widget
-	selecting        *widget
-	hovered          *widget
-	screen           Rect
-	uiScale          float64
-	screenWidth      int
-	screenHeight     int
-	rects            map[*widget]Rect
-	layoutActive     map[*widget]bool
-	textFaces        map[string]font.Face
-	layerPool        []*image.RGBA
-	layerDepth       int
-	paintCanvas      *image.RGBA
-	layered          bool
-	splitReached     bool
-	planes           []*glueLayerPlane
-	curPlane         *glueLayerPlane
-	planePool        []*image.RGBA
-	worldBaseCanvas  *image.RGBA
-	movieFile        string
-	movieImage       image.Image
-	movie            *moviePlayback
-	sceneBackground  bool
-	debugPanel       debugPanelState
-	lastClick        *widget
-	lastClickAt      time.Time
-	loading          bool
-	loadingPath      string
-	loadingProgress  float64
-	worldRoot        *widget
-	worldUIReady     bool
-	worldLoading     bool
-	worldActive      bool
-	worldRenderScale float64
-	minimapImage     image.Image
-	minimapTRS       map[string]string
-	minimapTRSLoaded bool
-	minimapMapName   string
-	minimapTileX     int
-	minimapTileY     int
-	minimapWorldX    float32
-	minimapWorldY    float32
+	keyMods            window.ModifierKey // modifiers of the key press being handled
+	curScale           float64            // effective scale of the widget being painted (1 outside painting)
+	Rt                 *Runtime
+	FontObj            *opentype.Font
+	FontObjSm          *opentype.Font
+	FontObjArial       *opentype.Font
+	AssetLoader        *Loader
+	Cache              map[string]image.Image
+	BgImagePath        string // Path to a static background image (JPEG/PNG)
+	statusKey          string
+	statusText         string
+	statusTTL          float64
+	statusDialogType   string
+	rememberMe         bool
+	pressed            *widget
+	presses            map[string]*mousePress
+	dragging           *dragState
+	sliderDragging     *widget
+	selecting          *widget
+	hovered            *widget
+	screen             Rect
+	uiScale            float64
+	screenWidth        int
+	screenHeight       int
+	rects              map[*widget]Rect
+	layoutActive       map[*widget]bool
+	textFaces          map[string]font.Face
+	layerPool          []*image.RGBA
+	layerDepth         int
+	paintCanvas        *image.RGBA
+	layered            bool
+	splitReached       bool
+	planes             []*glueLayerPlane
+	curPlane           *glueLayerPlane
+	planePool          []*image.RGBA
+	worldBaseCanvas    *image.RGBA
+	movieFile          string
+	movieImage         image.Image
+	movie              *moviePlayback
+	sceneBackground    bool
+	debugPanel         debugPanelState
+	lastClick          *widget
+	lastClickAt        time.Time
+	loading            bool
+	loadingPath        string
+	loadingProgress    float64
+	worldRoot          *widget
+	worldUIReady       bool
+	worldLoading       bool
+	worldActive        bool
+	worldRenderScale   float64
+	minimapImage       image.Image
+	minimapTRS         map[string]string
+	minimapTRSLoaded   bool
+	minimapMapName     string
+	minimapTileX       int
+	minimapTileY       int
+	minimapWorldX      float32
+	minimapWorldY      float32
 	minimapHasPosition bool
-	minimapVersion   uint64
-	caretOwner      *widget // the edit box whose caret is blinking
-	caretCursor     int
-	caretShown      bool
-	caretTimer      float64
+	minimapVersion     uint64
+	caretOwner         *widget // the edit box whose caret is blinking
+	caretCursor        int
+	caretShown         bool
+	caretTimer         float64
 	minimapU, minimapV float64 // where the player is in the tile composite, 0..1
 }
 
@@ -321,9 +321,9 @@ func (eng *UIEngine) resolveText(s string) string {
 	// Try to look it up as a Lua global
 	v := eng.Rt.L.GetGlobal(s)
 	if v != nil && v.Type() == lua.LTString {
-		return string(v.(lua.LString))
+		return expandPluralByNumber(string(v.(lua.LString)))
 	}
-	return s
+	return expandPluralByNumber(s)
 }
 
 // loadBLP loads an asset as an image, caching the result.
@@ -3297,4 +3297,38 @@ func cleanText(text string) string {
 		text = text[:index] + text[index+10:]
 	}
 	return text
+}
+
+// expandPluralByNumber resolves each "|4singular:plural;" of drawn text by the
+// number written before it.
+func expandPluralByNumber(text string) string {
+	if !strings.Contains(text, "|4") {
+		return text
+	}
+	var out strings.Builder
+	number := 0
+	digits := false
+	for index := 0; index < len(text); {
+		if strings.HasPrefix(text[index:], "|4") {
+			if end := strings.IndexByte(text[index:], ';'); end > 0 {
+				out.WriteString(expandPluralMarkup(text[index:index+end+1], number))
+				index += end + 1
+				digits = false
+				continue
+			}
+		}
+		ch := text[index]
+		if ch >= '0' && ch <= '9' {
+			if !digits {
+				number = 0
+			}
+			number = number*10 + int(ch-'0')
+			digits = true
+		} else {
+			digits = false
+		}
+		out.WriteByte(ch)
+		index++
+	}
+	return out.String()
 }

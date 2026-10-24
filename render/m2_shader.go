@@ -12,10 +12,18 @@ in float VertexM2Alpha;
 in vec2 VertexM2Combiner;
 out vec2 FragTexcoord;
 out vec2 FragTexcoord2;
+out vec2 FragEnvCoord;
 out vec3 FragVertexColor;
 out float FragM2Alpha;
 out vec2 FragM2Combiner;
 void main() {
+    // Sphere map coordinates of the view reflected in the surface, for the
+    // textures drawn with the environment coordinates.
+    vec3 envView = (ModelViewMatrix * vec4(VertexPosition, 1.0)).xyz;
+    vec3 envEye = normalize(envView);
+    vec3 envNormal = normalize(mat3(ModelViewMatrix) * VertexNormal);
+    vec3 envReflect = reflect(envEye, envNormal);
+    FragEnvCoord = envReflect.xy / (2.0 * length(envReflect + vec3(0.0, 0.0, 1.0))) + 0.5;
     FragTexcoord = VertexTexcoord;
     FragTexcoord2 = VertexTexcoord2;
     FragVertexColor = VertexColor;
@@ -30,6 +38,11 @@ const m2FragmentShader = `precision highp float;
 #include <material>
 in vec2 FragTexcoord;
 in vec2 FragTexcoord2;
+in vec2 FragEnvCoord;
+uniform float M2EnvMask;
+bool m2UsesEnvironment(int index) {
+    return mod(floor(M2EnvMask / exp2(float(index))), 2.0) > 0.5;
+}
 in vec3 FragVertexColor;
 in float FragM2Alpha;
 in vec2 FragM2Combiner;
@@ -52,6 +65,9 @@ vec3 m2Light() {
     }
     if (IndoorAmbient.w > 0.5) {
         vec3 total = IndoorAmbient.rgb;
+        if (IndoorAmbient.w > 1.5) {
+            total = LightAmbient.rgb + LightDiffuse * max(dot(n, LightDirection), 0.0);
+        }
         for (int i = 0; i < 4; i++) {
             vec3 toLight = PointLightPos[i].xyz - FragWorldPos;
             float distance = length(toLight);
@@ -96,12 +112,15 @@ vec4 m2Combine(vec4 base, vec4 layer, float operation) {
 void main() {
     vec4 result = vec4(1.0);
 #if MAT_TEXTURES > 0
-    result = m2Combine(result, texture(MatTexture[0], FragTexcoord), FragM2Combiner.x);
+    result = m2Combine(result, texture(MatTexture[0], m2UsesEnvironment(0) ? FragEnvCoord : FragTexcoord), FragM2Combiner.x);
 #if MAT_TEXTURES > 1
     for (int index = 1; index < MAT_TEXTURES; index++) {
         vec2 coord = FragTexcoord;
         if (index == 1) {
             coord = FragTexcoord2;
+        }
+        if (m2UsesEnvironment(index)) {
+            coord = FragEnvCoord;
         }
         vec4 layer = texture(MatTexture[index], coord);
         result = m2Combine(result, layer, index == 1 ? FragM2Combiner.y : float(1));
@@ -158,6 +177,11 @@ const m2AlphaKeyFragmentShader = `precision highp float;
 #include <material>
 in vec2 FragTexcoord;
 in vec2 FragTexcoord2;
+in vec2 FragEnvCoord;
+uniform float M2EnvMask;
+bool m2UsesEnvironment(int index) {
+    return mod(floor(M2EnvMask / exp2(float(index))), 2.0) > 0.5;
+}
 in vec3 FragVertexColor;
 in float FragM2Alpha;
 in vec2 FragM2Combiner;
@@ -207,12 +231,15 @@ vec4 m2Combine(vec4 base, vec4 layer, float operation) {
 void main() {
     vec4 result = vec4(1.0);
 #if MAT_TEXTURES > 0
-    result = m2Combine(result, texture(MatTexture[0], FragTexcoord), FragM2Combiner.x);
+    result = m2Combine(result, texture(MatTexture[0], m2UsesEnvironment(0) ? FragEnvCoord : FragTexcoord), FragM2Combiner.x);
 #if MAT_TEXTURES > 1
     for (int index = 1; index < MAT_TEXTURES; index++) {
         vec2 coord = FragTexcoord;
         if (index == 1) {
             coord = FragTexcoord2;
+        }
+        if (m2UsesEnvironment(index)) {
+            coord = FragEnvCoord;
         }
         vec4 layer = texture(MatTexture[index], coord);
         result = m2Combine(result, layer, index == 1 ? FragM2Combiner.y : float(1));
@@ -243,21 +270,29 @@ uniform vec3 LightDirection;
 ` + worldFogFragmentDecl + `in vec2 FragTexcoord;
 in vec3 FragNormal;
 out vec4 FragColor;
+// The layer textures: an odd count, one more when the chunk has shadows.
+#define TERRAIN_TEXTURES (MAT_TEXTURES - (1 - MAT_TEXTURES % 2))
 void main() {
 	vec2 tiled = FragTexcoord * 8.0;
 	vec4 color = texture(MatTexture[0], tiled);
-#if MAT_TEXTURES > 1
+#if TERRAIN_TEXTURES > 1
 	color.rgb = mix(color.rgb, texture(MatTexture[1], tiled).rgb, texture(MatTexture[2], FragTexcoord).r);
 #endif
-#if MAT_TEXTURES > 3
+#if TERRAIN_TEXTURES > 3
 	color.rgb = mix(color.rgb, texture(MatTexture[3], tiled).rgb, texture(MatTexture[4], FragTexcoord).r);
 #endif
-#if MAT_TEXTURES > 5
+#if TERRAIN_TEXTURES > 5
 	color.rgb = mix(color.rgb, texture(MatTexture[5], tiled).rgb, texture(MatTexture[6], FragTexcoord).r);
 #endif
     vec3 lit = color.rgb;
     if (LightAmbient.w > 0.5) {
-        lit *= clamp(LightAmbient.rgb + LightDiffuse * max(dot(normalize(FragNormal), LightDirection), 0.0), 0.0, 1.0);
+        float sun = max(dot(normalize(FragNormal), LightDirection), 0.0);
+#if (MAT_TEXTURES % 2) == 0
+        // A chunk with shadows has one more texture, whose red is how much of the
+        // sun the objects on the ground keep from it.
+        sun *= 1.0 - texture(MatTexture[MAT_TEXTURES - 1], FragTexcoord).r;
+#endif
+        lit *= clamp(LightAmbient.rgb + LightDiffuse * sun, 0.0, 1.0);
     }
     FragColor = vec4(lit, 1.0);
 ` + worldFogApply + `}`
@@ -302,6 +337,22 @@ vec3 wmoLight() {
     }
     return clamp(LightAmbient.rgb + LightDiffuse * max(dot(n, LightDirection), 0.0), 0.0, 1.0);
 }
+
+// The original's map object programs (Shaders\Effects\MapObj.wfx, the
+// MapObjDiffuse vertex and pixel programs) clamp the vertex colour times the
+// light to 0..1 and the pixel stage doubles texture times that colour (Mod2x).
+uniform vec4 WmoParams;
+uniform vec3 WmoAdd;
+vec3 wmoSurface(vec3 texel, vec3 vertexColor) {
+    if (WmoParams.x < 0.5) {
+        // Unlit material: the baked colour alone.
+        return texel * clamp(vertexColor, 0.0, 1.0) * 2.0;
+    }
+    // Exterior groups take the sun and sky light; interior ones keep their baked
+    // colour. The ambient of the map object the player stands in is added.
+    vec3 light = WmoParams.x < 1.5 ? wmoLight() : vec3(1.0);
+    return texel * clamp(vertexColor * light + WmoAdd, 0.0, 1.0) * 2.0;
+}
 `
 
 const worldWMOFragmentShader = `precision highp float;
@@ -311,7 +362,7 @@ in vec3 FragVertexColor;
 out vec4 FragColor;
 void main() {
     vec4 color = texture(MatTexture[0], FragTexcoord);
-    FragColor = vec4(color.rgb * FragVertexColor * wmoLight(), color.a);
+    FragColor = vec4(wmoSurface(color.rgb, FragVertexColor), color.a);
 ` + worldFogApply + `}`
 
 const worldWMOAlphaKeyFragmentShader = `precision highp float;
@@ -324,7 +375,7 @@ void main() {
     if (color.a < 0.5) {
         discard;
     }
-    FragColor = vec4(color.rgb * FragVertexColor * wmoLight(), 1.0);
+    FragColor = vec4(wmoSurface(color.rgb, FragVertexColor), 1.0);
 ` + worldFogApply + `}`
 
 const worldSkyVertexShader = `#include <attributes>
@@ -386,5 +437,11 @@ func installM2Shaders(r *renderer.Renderer) {
 	r.Shaman.AddProgram("morenowow_world_wmo", "morenowow_world_wmo_vertex", "morenowow_world_wmo_fragment")
 	r.Shaman.AddProgram("morenowow_world_wmo_alpha_key", "morenowow_world_wmo_vertex", "morenowow_world_wmo_alpha_key_fragment")
 	r.Shaman.AddProgram("morenowow_world_sky", "morenowow_world_sky_vertex", "morenowow_world_sky_fragment")
+	r.Shaman.AddShader("morenowow_blob_shadow_vertex", blobShadowVertexShader)
+	r.Shaman.AddShader("morenowow_blob_shadow_fragment", blobShadowFragmentShader)
+	r.Shaman.AddProgram("morenowow_blob_shadow", "morenowow_blob_shadow_vertex", "morenowow_blob_shadow_fragment")
+	r.Shaman.AddShader("morenowow_nameplate_vertex", nameplateVertexShader)
+	r.Shaman.AddShader("morenowow_nameplate_fragment", nameplateFragmentShader)
+	r.Shaman.AddProgram("morenowow_nameplate", "morenowow_nameplate_vertex", "morenowow_nameplate_fragment")
 	r.Shaman.AddProgram("morenowow_world_liquid", "morenowow_world_liquid_vertex", "morenowow_world_liquid_fragment")
 }

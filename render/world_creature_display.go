@@ -175,6 +175,7 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 		geom.AddVBO(combinerVBO)
 		mat := newWorldMaterial()
 		mat.lit = true
+		mat.envMask = float32(part.envMask)
 		mat.noFog = !worldFoggedBlending(m2MaterialBlending(part.material.blend))
 		if part.material.blend == 1 {
 			mat.SetShader("morenowow_world_m2_alpha_key")
@@ -248,7 +249,14 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 		stats.particlePoints = particles.pointCount
 	}
 	animation := buildM2Animation(&model, skin, animatedMeshes, modelPath)
-	info := glueModelInfo{stats: stats, particles: particles, animation: animation, modelScale: scale, modelBottom: modelBottom, modelTop: modelTop}
+	info := glueModelInfo{stats: stats, particles: particles, animation: animation, modelScale: scale, modelBottom: modelBottom, modelTop: modelTop, attachments: model.attachments}
+	if len(model.vertices) > 0 {
+		low, high := float32(math.MaxFloat32), float32(-math.MaxFloat32)
+		for _, vertex := range model.vertices {
+			low, high = float32(math.Min(float64(low), float64(vertex.position[2]))), float32(math.Max(float64(high), float64(vertex.position[2])))
+		}
+		info.rawHeight = high - low
+	}
 	root.SetUserData(info)
 	return root, nil
 }

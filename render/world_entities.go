@@ -3,11 +3,14 @@ package render
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/MorenoLand/Moreno.WoW/ui"
 	"github.com/MorenoLand/Moreno.WoW/world"
 	"github.com/g3n/engine/core"
+	"github.com/g3n/engine/math32"
 )
 
 type worldCreatureDefinition struct {
@@ -18,6 +21,8 @@ type worldCreatureDefinition struct {
 	displayScale float32
 	modelScale   float32
 	extra        worldCreatureExtra
+	// geoHeight is the model data's geobox height (CreatureModelData fields 19 and 22), before scale.
+	geoHeight float32
 }
 
 type worldCreatureTables struct {
@@ -26,6 +31,67 @@ type worldCreatureTables struct {
 	extra    charSectionsTable
 	loaded   bool
 	cache    map[uint32]worldCreatureDefinition
+	// gameObjects is GameObjectDisplayInfo.dbc, read when first needed.
+	gameObjects       charSectionsTable
+	gameObjectsLoaded bool
+}
+
+// gameObjectDisplayField is GAMEOBJECT_DISPLAYID.
+const gameObjectDisplayField uint16 = 0x08
+
+// gameObjectModel is the M2 a game object display uses (field 1 of
+// GameObjectDisplayInfo.dbc); objects drawn as map objects have none here.
+func (tables *worldCreatureTables) gameObjectModel(loader *ui.Loader, display uint32) string {
+	if !tables.gameObjectsLoaded {
+		tables.gameObjectsLoaded = true
+		tables.gameObjects, _ = loadCharacterDBC(loader, `DBFilesClient\GameObjectDisplayInfo.dbc`)
+	}
+	record := characterDBCRecordByID(tables.gameObjects, display)
+	if record < 0 || tables.gameObjects.fields < 2 {
+		return ""
+	}
+	path := normalizeModelPath(tables.gameObjects.string(record, 1))
+	if !strings.HasSuffix(strings.ToLower(path), ".m2") {
+		return ""
+	}
+	return path
+}
+
+// syncWorldGameObject places a game object (a brazier, a bank vault, a mailbox)
+// with the model its display names.
+func syncWorldGameObject(scene *core.Node, loader *ui.Loader, tables *worldCreatureTables, entity *worldEntity) error {
+	display := entity.fields[gameObjectDisplayField]
+	if display == 0 {
+		return nil
+	}
+	if entity.node == nil && entity.attemptedID != display {
+		if !worldBuildDeadline.IsZero() && time.Now().After(worldBuildDeadline) {
+			return nil
+		}
+		entity.attemptedID = display
+		path := tables.gameObjectModel(loader, display)
+		if path == "" {
+			return nil
+		}
+		model, err := buildWorldCreatureModel(loader, worldCreatureDefinition{path: path, scale: 1, displayScale: 1, modelScale: 1})
+		if err != nil {
+			return err
+		}
+		scale := float32(1)
+		if bits, ok := entity.fields[world.ObjectScaleField]; ok {
+			if value := math.Float32frombits(bits); value > 0 {
+				scale = value
+			}
+		}
+		entity.node = wrapWorldModel(model, entity.movement.Position, scale)
+		entity.displayID, entity.modelPath = display, path
+		scene.Add(entity.node)
+	}
+	if entity.node != nil {
+		entity.node.SetPosition(entity.movement.Position.X, entity.movement.Position.Y, entity.movement.Position.Z)
+		entity.node.SetRotation(0, 0, entity.movement.Position.Orientation)
+	}
+	return nil
 }
 
 type worldEntity struct {
@@ -47,6 +113,8 @@ type worldEntity struct {
 	modelPath     string
 	extra         worldCreatureExtra
 	equipment     *worldEquipment
+	animPending   float64
+	geoHeight     float32
 	light         worldLightState
 }
 
@@ -92,6 +160,9 @@ func (tables *worldCreatureTables) definition(loader *ui.Loader, displayID, nati
 		scale:        displayScale * modelScale,
 		displayScale: displayScale,
 		modelScale:   modelScale,
+	}
+	if tables.models.fields >= 23 {
+		definition.geoHeight = tables.models.valueFloat(model, 22) - tables.models.valueFloat(model, 19)
 	}
 	for index := range definition.variations {
 		definition.variations[index] = tables.displays.string(display, 6+index)
@@ -157,6 +228,12 @@ func wrapWorldModel(model *core.Node, position world.WorldPosition, scale float3
 		model.SetPosition(offsetX, offsetY, offsetZ)
 	}
 	root.Add(model)
+	// The shadow is added after the model, which stays the node's first child.
+	radius := float32(0.6)
+	if info, ok := model.UserData().(glueModelInfo); ok && info.rawHeight > 0 {
+		radius = float32(math.Max(0.3, math.Min(float64(info.rawHeight)*0.3, 6)))
+	}
+	addBlobShadow(root, radius)
 	return root
 }
 
@@ -311,6 +388,9 @@ func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64, _ f
 }
 
 func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureTables, entity *worldEntity, ownGUID uint64, _ func(float32, float32, float32) (float32, bool)) error {
+	if entity.objectType == world.ObjectTypeGameObject && entity.hasPosition {
+		return syncWorldGameObject(scene, loader, tables, entity)
+	}
 	if entity.guid == ownGUID || !entity.hasPosition || (entity.objectType != world.ObjectTypeUnit && entity.objectType != world.ObjectTypePlayer) {
 		return nil
 	}
@@ -324,6 +404,10 @@ func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureT
 		return nil
 	}
 	if entity.node == nil && entity.attemptedID != modelID {
+		// A crowd arrives in one batch; its models are built over several frames.
+		if !worldBuildDeadline.IsZero() && time.Now().After(worldBuildDeadline) {
+			return nil
+		}
 		entity.attemptedID = modelID
 		definition, err := tables.definition(loader, displayID, nativeDisplayID)
 		if err != nil {
@@ -335,7 +419,7 @@ func syncWorldEntity(scene *core.Node, loader *ui.Loader, tables *worldCreatureT
 		}
 		entity.node = wrapWorldModel(model, entity.movement.Position, worldEntityScale(entity, definition.displayScale, definition.modelScale))
 		entity.displayID = modelID
-		entity.modelPath, entity.extra = definition.path, definition.extra
+		entity.modelPath, entity.extra, entity.geoHeight = definition.path, definition.extra, definition.geoHeight
 		scene.Add(entity.node)
 	}
 	if entity.node != nil {
@@ -428,4 +512,74 @@ func applyWorldUpdateBlocks(scene *core.Node, loader *ui.Loader, tables *worldCr
 		}
 	}
 	return created, errors
+}
+
+// worldEntitySkinSkipped reports whether a unit's vertices need no new pose this
+// frame: it is outside the view, or far enough that a slower pose is not seen.
+// Its bones still advance, so what attaches to them stays in place.
+func worldEntitySkinSkipped(node *core.Node, info glueModelInfo, frustum *math32.Frustum, camera math32.Vector3, frame uint32, guid uint64) (skipped, idle bool) {
+	position := node.Position()
+	scale := node.Scale().Y
+	height := info.modelTop * scale
+	if height < 1.5 {
+		height = 1.5
+	}
+	// The sphere holds the model with room for a mount or a weapon.
+	centre := math32.NewVector3(position.X, position.Y, position.Z+height/2)
+	sphere := math32.NewSphere(centre, height/2*1.5+3)
+	if !frustum.IntersectsSphere(sphere) {
+		return true, true
+	}
+	dx, dy, dz := position.X-camera.X, position.Y-camera.Y, position.Z-camera.Z
+	distance := dx*dx + dy*dy + dz*dz
+	interval := uint32(1)
+	switch {
+	case distance > 60*60:
+		interval = 4
+	case distance > 30*30:
+		interval = 3
+	case distance > 15*15:
+		interval = 2
+	}
+	idle = distance > 60*60
+	if (frame+uint32(guid))%interval != 0 {
+		return true, idle
+	}
+	// A crowd is posed a number at a time; the rest keep their last pose.
+	if worldSkinBudget <= 0 {
+		return true, idle
+	}
+	worldSkinBudget--
+	return false, idle
+}
+
+// worldSkinBudget is how many units may be re-posed this frame.
+var worldSkinBudget int
+
+// worldBuildDeadline, when set, is when this frame stops building entity models.
+var worldBuildDeadline time.Time
+
+// syncPendingWorldEntities builds the models of units that have arrived and have
+// none yet, nearest first, until the frame's build time is spent.
+func syncPendingWorldEntities(scene *core.Node, loader *ui.Loader, tables *worldCreatureTables, entities map[uint64]*worldEntity, ownGUID uint64, floor func(float32, float32, float32) (float32, bool), near [3]float32) {
+	var pending []*worldEntity
+	for _, entity := range entities {
+		if entity.node == nil && entity.hasPosition && entity.guid != ownGUID {
+			pending = append(pending, entity)
+		}
+	}
+	if len(pending) == 0 {
+		return
+	}
+	distance := func(entity *worldEntity) float32 {
+		dx, dy := entity.movement.Position.X-near[0], entity.movement.Position.Y-near[1]
+		return dx*dx + dy*dy
+	}
+	sort.Slice(pending, func(i, j int) bool { return distance(pending[i]) < distance(pending[j]) })
+	for _, entity := range pending {
+		if time.Now().After(worldBuildDeadline) {
+			return
+		}
+		_ = syncWorldEntity(scene, loader, tables, entity, ownGUID, floor)
+	}
 }

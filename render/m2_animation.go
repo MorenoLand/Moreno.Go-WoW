@@ -23,6 +23,9 @@ type m2AnimatedMesh struct {
 }
 
 type m2Animation struct {
+	// skipSkin leaves the vertices, tints and texture coordinates as they are
+	// while the bones still advance, for a model nobody can see this frame.
+	skipSkin         bool
 	boneMatrices     []m2BoneMatrix
 	model            *parsedM2
 	skin             parsedSkin
@@ -286,6 +289,9 @@ func (animation *m2Animation) Update(elapsed float64) []uint32 {
 	}
 	updateM2AnimatedValues(animation.model, animation.sequence, uint32(animation.clock), uint32(animation.globalClock))
 	animation.boneMatrices = buildM2BoneMatrices(bones, animation.boneMatrices)
+	if animation.skipSkin {
+		return animation.crossedSounds(animation.sequence, previous, current, sequence.duration, wrapped)
+	}
 	for _, animatedMesh := range animation.meshes {
 		if animatedMesh == nil || animatedMesh.part == nil || len(animatedMesh.part.vertexRefs) != len(animatedMesh.part.positions)/3 {
 			continue

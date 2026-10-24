@@ -3,10 +3,12 @@ package render
 import (
 	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"image"
 	"image/color"
 	"math"
 	"strings"
+	"sync"
 
 	"github.com/MorenoLand/Moreno.WoW/ui"
 	"github.com/MorenoLand/Moreno.WoW/world"
@@ -60,7 +62,10 @@ type worldADTChunk struct {
 	texture   int
 	layers    []worldADTLayer
 	alphaMaps [][]byte
-	liquids   []worldLiquidSheet
+	// shadow is the 64 by 64 map of what the sun does not reach on the chunk
+	// (MCSH, the shadows the objects cast on the ground), 255 where it is shadowed.
+	shadow  []byte
+	liquids []worldLiquidSheet
 }
 
 type worldADTLayer struct {
@@ -150,6 +155,19 @@ type worldWMOMeshKey struct {
 	outdoor bool
 }
 
+// worldWMOInstanceID names a WMO placement: the same placement read again from
+// a neighbouring tile has the same one.
+func worldWMOInstanceID(placement worldWMOPlacement) int {
+	hash := fnv.New32a()
+	hash.Write([]byte(placement.path))
+	for _, value := range placement.position {
+		var bits [4]byte
+		binary.LittleEndian.PutUint32(bits[:], math.Float32bits(value))
+		hash.Write(bits[:])
+	}
+	return int(hash.Sum32()&0x7fffffff) | 1
+}
+
 type worldWMOMeshBuilder struct {
 	positions math32.ArrayF32
 	normals   math32.ArrayF32
@@ -193,6 +211,10 @@ type worldSceneCollision struct {
 	liquid     *worldLiquidAnimator
 	// owned are textures made for this tile alone, released when it unloads.
 	owned []*texture.Texture2D
+	// wmoInstances are the WMO placements the tile shows, shared with its neighbours.
+	wmoInstances []int
+	// particles are the doodads of the tile that run particle emitters.
+	particles []*worldParticleSource
 }
 
 type worldCollisionRef struct {
@@ -226,6 +248,8 @@ type worldCollisionMesh struct {
 	// the sun); ambient is that group's WMO ambient light.
 	indoor  bool
 	ambient [3]float32
+	// instance names the WMO placement the group belongs to.
+	instance int
 	// groupLights are the omni lights the group refers to, in the world.
 	groupLights []worldPointLight
 	// lights are the omni lights of a WMO placement, carried by a mesh of no
@@ -287,6 +311,96 @@ type worldSceneAssetCache struct {
 	wmoModels          map[string]worldWMORoot
 	m2Parts            map[string]map[string]*m2Part
 	liquid             *worldLiquidAnimator
+	// wmoBuilt keeps what a WMO placement was built into, for the other tiles
+	// that list the same placement: a building on a tile edge is on both.
+	wmoMu sync.Mutex
+	// m2Emitters are the parsed models of doodads that have particle emitters.
+	m2Emitters map[string]*parsedM2
+	wmoBuilt   map[int]*worldBuiltWMO
+}
+
+// worldMeshTemplate is a mesh to make again over the same geometry and
+// material.
+type worldMeshTemplate struct {
+	geometry *geometry.Geometry
+	material material.IMaterial
+	order    int
+}
+
+// worldBuiltWMO is a built WMO placement, shared by the tiles that show it.
+type worldBuiltWMO struct {
+	meshes  []worldMeshTemplate
+	solids  []worldCollisionMesh
+	doodads []core.INode
+	// emitters are the doodads with particle emitters.
+	emitters []worldEmitterPlacement
+	indoor   map[uint16]worldLocalLight
+	users    int
+}
+
+// cloneWorldNode makes a tree of nodes and meshes again, the copies drawing the
+// same geometry (which counts them).
+func cloneWorldNode(source core.INode) core.INode {
+	if mesh, ok := source.(*graphic.Mesh); ok {
+		geom := mesh.GetGeometry()
+		geom.Incref()
+		clone := graphic.NewMesh(geom, mesh.GetMaterial(0))
+		clone.SetRenderOrder(mesh.RenderOrder())
+		copyWorldTransform(source, clone)
+		return clone
+	}
+	clone := core.NewNode()
+	copyWorldTransform(source, clone)
+	for _, child := range source.GetNode().Children() {
+		clone.Add(cloneWorldNode(child))
+	}
+	return clone
+}
+
+func copyWorldTransform(from, to core.INode) {
+	source, target := from.GetNode(), to.GetNode()
+	position := source.Position()
+	target.SetPositionVec(&position)
+	rotation := source.Quaternion()
+	target.SetRotationQuat(&rotation)
+	scale := source.Scale()
+	target.SetScaleVec(&scale)
+	target.SetVisible(source.Visible())
+}
+
+// releaseWMO lets go of the placements a tile showed; the last tile to let go
+// frees them.
+func (cache *worldSceneAssetCache) releaseWMO(ids []int) {
+	cache.wmoMu.Lock()
+	defer cache.wmoMu.Unlock()
+	for _, id := range ids {
+		built := cache.wmoBuilt[id]
+		if built == nil {
+			continue
+		}
+		built.users--
+		if built.users > 0 {
+			continue
+		}
+		for _, template := range built.meshes {
+			template.geometry.Dispose()
+		}
+		for _, doodad := range built.doodads {
+			disposeWorldNode(doodad)
+		}
+		delete(cache.wmoBuilt, id)
+	}
+}
+
+func disposeWorldNode(node core.INode) {
+	if mesh, ok := node.(*graphic.Mesh); ok {
+		if geom := mesh.GetGeometry(); geom != nil {
+			geom.Dispose()
+		}
+	}
+	for _, child := range node.GetNode().Children() {
+		disposeWorldNode(child)
+	}
 }
 
 func newWorldSceneAssetCache() *worldSceneAssetCache {
@@ -294,7 +408,7 @@ func newWorldSceneAssetCache() *worldSceneAssetCache {
 		textures: make(map[string]*texture.Texture2D), placeholder: texture.NewTexture2DFromRGBA(worldPlaceholderTexture()),
 		terrainPlaceholder: texture.NewTexture2DFromRGBA(worldSolidTexture(color.RGBA{R: 255, G: 255, B: 255, A: 255})),
 		zeroAlpha:          texture.NewTexture2DFromRGBA(worldAlphaTexture(nil, false)), opaqueAlpha: texture.NewTexture2DFromRGBA(worldAlphaTexture(nil, true)),
-		wmoModels: make(map[string]worldWMORoot), m2Parts: make(map[string]map[string]*m2Part), liquid: newWorldLiquidAnimator(),
+		m2Emitters: make(map[string]*parsedM2), wmoBuilt: make(map[int]*worldBuiltWMO), wmoModels: make(map[string]worldWMORoot), m2Parts: make(map[string]map[string]*m2Part), liquid: newWorldLiquidAnimator(),
 	}
 }
 
@@ -566,6 +680,14 @@ func (collision worldSceneCollision) cameraPosition(focus, eye math32.Vector3) m
 
 func loadWorldTerrain(loader *ui.Loader, position world.WorldPosition) (*core.Node, worldSceneInfo, error) {
 	return loadWorldTerrainProgress(loader, position, nil)
+}
+
+// worldTerrainLoad is what loadWorldTerrainProgress returns, for handing over
+// from the thread that ran it.
+type worldTerrainLoad struct {
+	node *core.Node
+	info worldSceneInfo
+	err  error
 }
 
 func loadWorldTerrainProgress(loader *ui.Loader, position world.WorldPosition, progress func(float64)) (*core.Node, worldSceneInfo, error) {
@@ -1092,8 +1214,9 @@ func worldFloat32s(data []byte, components int) []float32 {
 	return result
 }
 
-func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int) {
+func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int, []*worldParticleSource) {
 	root := core.NewNode()
+	var particles []*worldParticleSource
 	builders := make(map[string]*worldM2MeshBuilder)
 	for _, placement := range adt.m2Placements {
 		origin := worldWMOPosition(placement.position)
@@ -1104,11 +1227,20 @@ func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.World
 		parts, ok := cache.m2Parts[placement.path]
 		if !ok {
 			var err error
-			parts, err = loadWorldM2Parts(loader, placement.path)
+			var emitters *parsedM2
+			parts, emitters, err = loadWorldM2PartsAndEmitters(loader, placement.path)
 			if err != nil {
 				continue
 			}
 			cache.m2Parts[placement.path] = parts
+			if emitters != nil {
+				cache.m2Emitters[placement.path] = emitters
+			}
+		}
+		if model := cache.m2Emitters[placement.path]; model != nil && len(particles) < worldParticleBudget {
+			if source := newWorldParticleSource(loader, model, cache, origin, worldM2Rotation(placement.rotation), placement.scale); source != nil {
+				particles = append(particles, source)
+			}
 		}
 		rotation := worldM2Rotation(placement.rotation)
 		for key, part := range parts {
@@ -1144,10 +1276,13 @@ func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.World
 			meshCount++
 		}
 	}
-	if meshCount == 0 {
-		return nil, 0
+	for _, source := range particles {
+		root.Add(source.node)
 	}
-	return root, meshCount
+	if meshCount == 0 && len(particles) == 0 {
+		return nil, 0, nil
+	}
+	return root, meshCount, particles
 }
 
 func rotateWorldM2Vector(rotation *math32.Quaternion, value [3]float32) [3]float32 {
@@ -1173,6 +1308,7 @@ func buildWorldM2BatchedMesh(loader *ui.Loader, builder *worldM2MeshBuilder, tex
 	}
 	mat := newWorldMaterial()
 	mat.lit = true
+	mat.envMask = float32(builder.part.envMask)
 	mat.noFog = !worldFoggedBlending(m2MaterialBlending(builder.part.material.blend))
 	if builder.part.material.blend == 1 {
 		mat.SetShader("morenowow_world_m2_alpha_key")
@@ -1222,29 +1358,39 @@ func buildWorldM2BatchedMesh(loader *ui.Loader, builder *worldM2MeshBuilder, tex
 }
 
 func loadWorldM2Parts(loader *ui.Loader, modelPath string) (map[string]*m2Part, error) {
+	parts, _, err := loadWorldM2PartsAndEmitters(loader, modelPath)
+	return parts, err
+}
+
+// loadWorldM2PartsAndEmitters also returns the parsed model when it has
+// particle emitters, which a placed doodad needs to run them.
+func loadWorldM2PartsAndEmitters(loader *ui.Loader, modelPath string) (map[string]*m2Part, *parsedM2, error) {
 	modelPath = normalizeModelPath(modelPath)
 	if modelPath == "" {
-		return nil, fmt.Errorf("empty M2 path")
+		return nil, nil, fmt.Errorf("empty M2 path")
 	}
 	modelData, err := loader.ReadFile(modelPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	model, err := parseM2(modelData)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	skinData, err := loader.ReadFile(worldM2SkinPath(modelPath))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	skin, err := parseSkin(skinData)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	parts := buildM2Parts(model, skin)
 	convertWorldM2Parts(parts)
-	return parts, nil
+	if len(model.particles) == 0 {
+		return parts, nil, nil
+	}
+	return parts, &model, nil
 }
 
 func convertWorldM2Parts(parts map[string]*m2Part) {
@@ -1277,6 +1423,7 @@ func buildWorldM2Instance(loader *ui.Loader, parts map[string]*m2Part, textures 
 		}
 		mat := newWorldMaterial()
 		mat.lit = true
+		mat.envMask = float32(part.envMask)
 		mat.noFog = !worldFoggedBlending(m2MaterialBlending(part.material.blend))
 		if part.material.blend == 1 {
 			mat.SetShader("morenowow_world_m2_alpha_key")
@@ -1397,13 +1544,49 @@ func buildWorldPlayer(loader *ui.Loader, character world.Character, position wor
 	return wrapWorldModel(model, position, 1), nil
 }
 
-func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int, []worldCollisionMesh) {
+func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int, []worldCollisionMesh, []int, []*worldParticleSource) {
 	root := core.NewNode()
 	meshCount := 0
 	doodadCount := 0
 	solids := make([]worldCollisionMesh, 0)
+	var ids []int
+	var particles []*worldParticleSource
 	for _, placement := range adt.wmoPlacements {
 		if !worldWMOPlacementInRange(placement, position) {
+			continue
+		}
+		id := worldWMOInstanceID(placement)
+		cache.wmoMu.Lock()
+		built := cache.wmoBuilt[id]
+		if built != nil {
+			built.users++
+		}
+		cache.wmoMu.Unlock()
+		if built != nil {
+			// Another tile built this placement; this one draws the same geometry.
+			ids = append(ids, id)
+			for _, template := range built.meshes {
+				template.geometry.Incref()
+				mesh := graphic.NewMesh(template.geometry, template.material)
+				mesh.SetRenderOrder(template.order)
+				root.Add(mesh)
+				meshCount++
+			}
+			solids = append(solids, built.solids...)
+			for _, doodad := range built.doodads {
+				clone := cloneWorldNode(doodad)
+				root.Add(clone)
+				meshCount += len(clone.GetNode().Children())
+				doodadCount++
+			}
+			for _, emitter := range built.emitters {
+				if len(particles) < worldParticleBudget {
+					if source := newWorldParticleSource(loader, emitter.model, cache, emitter.origin, emitter.rotation, emitter.scale); source != nil {
+						root.Add(source.node)
+						particles = append(particles, source)
+					}
+				}
+			}
 			continue
 		}
 		model, ok := cache.wmoModels[placement.path]
@@ -1419,7 +1602,9 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 			cache.wmoModels[placement.path] = model
 		}
 		meshes, placementSolids, indoorDoodads := buildWorldWMOPlacement(loader, placement, model, cache.textures, cache.placeholder)
-		solids = append(solids, placementSolids...)
+		built = &worldBuiltWMO{users: 1, indoor: indoorDoodads}
+		ids = append(ids, id)
+		builtSolids := append([]worldCollisionMesh(nil), placementSolids...)
 		if len(model.lights) > 0 {
 			placed := make([]worldPointLight, 0, len(model.lights))
 			for _, light := range model.lights {
@@ -1428,9 +1613,14 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 				light.end *= placement.scale
 				placed = append(placed, light)
 			}
-			solids = append(solids, worldCollisionMesh{lights: placed})
+			builtSolids = append(builtSolids, worldCollisionMesh{lights: placed})
 		}
+		built.solids = builtSolids
+		solids = append(solids, builtSolids...)
 		for _, mesh := range meshes {
+			geom := mesh.GetGeometry()
+			geom.Incref()
+			built.meshes = append(built.meshes, worldMeshTemplate{geometry: geom, material: mesh.GetMaterial(0), order: mesh.RenderOrder()})
 			root.Add(mesh)
 			meshCount++
 		}
@@ -1445,11 +1635,15 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 				parts := cache.m2Parts[doodad.path]
 				if parts == nil {
 					var err error
-					parts, err = loadWorldM2Parts(loader, doodad.path)
+					var emitters *parsedM2
+					parts, emitters, err = loadWorldM2PartsAndEmitters(loader, doodad.path)
 					if err != nil {
 						continue
 					}
 					cache.m2Parts[doodad.path] = parts
+					if emitters != nil {
+						cache.m2Emitters[doodad.path] = emitters
+					}
 				}
 				instance := buildWorldM2Instance(loader, parts, cache.textures, cache.placeholder)
 				if instance == nil {
@@ -1464,15 +1658,30 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 				instance.SetRotationQuat(worldWMODoodadRotation(doodad.rotation, placement.rotation))
 				instance.SetScale(placement.scale*doodad.scale, placement.scale*doodad.scale, placement.scale*doodad.scale)
 				root.Add(instance)
+				built.doodads = append(built.doodads, cloneWorldNode(instance))
+				if model := cache.m2Emitters[doodad.path]; model != nil {
+					rotation := worldWMODoodadRotation(doodad.rotation, placement.rotation)
+					scale := placement.scale * doodad.scale
+					built.emitters = append(built.emitters, worldEmitterPlacement{model: model, origin: worldPosition, rotation: rotation, scale: scale})
+					if len(particles) < worldParticleBudget {
+						if source := newWorldParticleSource(loader, model, cache, worldPosition, rotation, scale); source != nil {
+							root.Add(source.node)
+							particles = append(particles, source)
+						}
+					}
+				}
 				meshCount += len(instance.Children())
 				doodadCount++
 			}
 		}
+		cache.wmoMu.Lock()
+		cache.wmoBuilt[id] = built
+		cache.wmoMu.Unlock()
 	}
 	if meshCount == 0 && len(solids) == 0 {
-		return nil, 0, nil
+		return nil, 0, nil, ids, nil
 	}
-	return root, meshCount, solids
+	return root, meshCount, solids, ids, particles
 }
 
 func worldWMOPlacementInRange(placement worldWMOPlacement, position world.WorldPosition) bool {
@@ -1500,6 +1709,8 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 	indoorDoodads := make(map[uint16]worldLocalLight)
 	builders := make(map[worldWMOMeshKey]*worldWMOMeshBuilder)
 	solids := make([]worldCollisionMesh, 0)
+	transform := newWorldWMOTransform(placement)
+	instance := worldWMOInstanceID(placement)
 	for groupIndex := 0; groupIndex < model.groupCount; groupIndex++ {
 		groupData, err := loader.ReadFile(worldWMOGroupPath(placement.path, groupIndex))
 		if err != nil {
@@ -1524,7 +1735,7 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 				indoorDoodads[ref] = groupLit
 			}
 		}
-		collisionMesh := worldCollisionMesh{triangles: make([]worldCollisionTriangle, 0, len(group.indices)/3), indoor: group.flags&0x2000 != 0, ambient: groupAverageColour(group, model.ambient)}
+		collisionMesh := worldCollisionMesh{triangles: make([]worldCollisionTriangle, 0, len(group.indices)/3), indoor: group.flags&0x2000 != 0, ambient: groupAverageColour(group, model.ambient), instance: instance}
 		if collisionMesh.indoor {
 			collisionMesh.groupLights = groupLights(model, group, placement)
 		}
@@ -1544,13 +1755,16 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 				break
 			}
 		}
+		world := make([][3]float32, len(group.vertices)/3)
+		for index := range world {
+			world[index] = transform.point([3]float32{group.vertices[index*3], group.vertices[index*3+1], group.vertices[index*3+2]})
+		}
 		for triangleIndex := 0; triangleIndex+2 < len(group.indices); triangleIndex += 3 {
 			point := func(index uint16) ([3]float32, bool) {
-				at := int(index) * 3
-				if at+2 >= len(group.vertices) {
+				if int(index) >= len(world) {
 					return [3]float32{}, false
 				}
-				return transformWorldWMOPoint([3]float32{group.vertices[at], group.vertices[at+1], group.vertices[at+2]}, placement), true
+				return world[index], true
 			}
 			if anyBlocking && !blocks(triangleIndex/3) {
 				continue
@@ -1588,7 +1802,13 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 		if len(batches) == 0 {
 			batches = []worldWMOBatch{{start: 0, count: len(group.indices)}}
 		}
-		bases := make(map[worldWMOMeshKey]uint32)
+		// An interior group is lit by its map object's ambient and the group's
+		// omni lights, which the original works out per vertex and multiplies into
+		// the baked colour; the lights do not move, so it is done once here.
+		interiorLights := groupLights(model, group, placement)
+		// Each mesh takes only the vertices its own batches use.
+		remaps := make(map[worldWMOMeshKey][]int32)
+		vertexCount := len(group.vertices) / 3
 		for _, batch := range batches {
 			if batch.start < 0 || batch.count <= 0 || batch.start+batch.count > len(group.indices) {
 				continue
@@ -1597,42 +1817,54 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 			if int(batch.material) < len(model.materials) {
 				materialInfo = model.materials[batch.material]
 			}
-			key := worldWMOMeshKey{material: materialInfo, batchFlags: batch.flags, outdoor: group.flags&0x8 != 0 && group.flags&0x2000 == 0}
+			// Wow.exe (FUN_007a9380) lights a group by the sun and sky when it is
+			// exterior (flags 0x8 or 0x40), from inside otherwise.
+			key := worldWMOMeshKey{material: materialInfo, batchFlags: batch.flags, outdoor: group.flags&0x48 != 0}
 			builder := builders[key]
 			if builder == nil {
-				builder = &worldWMOMeshBuilder{positions: math32.NewArrayF32(0, len(group.vertices)), normals: math32.NewArrayF32(0, len(group.vertices)), uvs: math32.NewArrayF32(0, len(group.vertices)/3*2), colors: math32.NewArrayF32(0, len(group.vertices)), indices: math32.NewArrayU32(0, batch.count)}
+				builder = &worldWMOMeshBuilder{positions: math32.NewArrayF32(0, 0), normals: math32.NewArrayF32(0, 0), uvs: math32.NewArrayF32(0, 0), colors: math32.NewArrayF32(0, 0), indices: math32.NewArrayU32(0, batch.count)}
 				builders[key] = builder
 			}
-			base, exists := bases[key]
-			if !exists {
-				base = uint32(len(builder.positions) / 3)
-				bases[key] = base
-				for index := 0; index+2 < len(group.vertices); index += 3 {
-					point := transformWorldWMOPoint([3]float32{group.vertices[index], group.vertices[index+1], group.vertices[index+2]}, placement)
+			remap := remaps[key]
+			if remap == nil {
+				remap = make([]int32, vertexCount)
+				for index := range remap {
+					remap[index] = -1
+				}
+				remaps[key] = remap
+			}
+			for _, index := range group.indices[batch.start : batch.start+batch.count] {
+				vertex := int(index)
+				if vertex >= vertexCount {
+					continue
+				}
+				if remap[vertex] < 0 {
+					remap[vertex] = int32(len(builder.positions) / 3)
+					point := world[vertex]
 					builder.positions.Append(point[0], point[1], point[2])
+					at := vertex * 3
 					normal := [3]float32{0, 0, 1}
-					if index+2 < len(group.normals) {
-						normal = transformWorldWMONormal([3]float32{group.normals[index], group.normals[index+1], group.normals[index+2]}, placement)
+					if at+2 < len(group.normals) {
+						normal = transform.rotate([3]float32{group.normals[at], group.normals[at+1], group.normals[at+2]})
 					}
 					builder.normals.Append(normal[0], normal[1], normal[2])
-					uvIndex := index / 3 * 2
+					uvIndex := vertex * 2
 					if uvIndex+1 < len(group.uvs) {
 						builder.uvs.Append(group.uvs[uvIndex], group.uvs[uvIndex+1])
 					} else {
 						builder.uvs.Append(0, 0)
 					}
-					colorIndex := index
-					if colorIndex+2 < len(group.colors) {
-						builder.colors.Append(group.colors[colorIndex], group.colors[colorIndex+1], group.colors[colorIndex+2])
-					} else {
-						builder.colors.Append(1, 1, 1)
+					baked := [3]float32{1, 1, 1}
+					if at+2 < len(group.colors) {
+						baked = [3]float32{group.colors[at], group.colors[at+1], group.colors[at+2]}
 					}
+					if !key.outdoor && materialInfo.flags&0x1 == 0 {
+						light := worldInteriorLight(worldInteriorBase, interiorLights, point, normal)
+						baked = [3]float32{baked[0] * light[0], baked[1] * light[1], baked[2] * light[2]}
+					}
+					builder.colors.Append(baked[0], baked[1], baked[2])
 				}
-			}
-			for _, index := range group.indices[batch.start : batch.start+batch.count] {
-				if int(index)*3+2 < len(group.vertices) {
-					builder.indices.Append(base + uint32(index))
-				}
+				builder.indices.Append(uint32(remap[vertex]))
 			}
 		}
 	}
@@ -1662,7 +1894,16 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 		geom.AddVBO(gls.NewVBO(builder.colors).AddAttrib(gls.VertexColor))
 		mat := newWorldMaterial()
 		mat.noFog = key.material.blend == 3 || key.material.blend == 4
-		mat.lit = key.outdoor
+		mat.instance = instance
+		switch {
+		case key.material.flags&0x1 != 0:
+			mat.wmoMode = wmoUnlit
+		case key.outdoor:
+			mat.wmoMode = wmoExterior
+		default:
+			mat.wmoMode = wmoInterior
+		}
+		mat.lit = key.outdoor && key.material.flags&0x1 == 0
 		shader := "morenowow_world_wmo"
 		if key.material.blend == 1 {
 			shader = "morenowow_world_wmo_alpha_key"
@@ -1710,18 +1951,40 @@ func worldWMOPosition(raw [3]float32) [3]float32 {
 	return [3]float32{32*worldTileSize - raw[2], 32*worldTileSize - raw[0], raw[1]}
 }
 
-func transformWorldWMOPoint(point [3]float32, placement worldWMOPlacement) [3]float32 {
-	point[0] *= placement.scale
-	point[1] *= placement.scale
-	point[2] *= placement.scale
+// worldWMOTransform is a placement's rotation, scale and position with the
+// trigonometry done once, for transforming a group's many vertices.
+type worldWMOTransform struct {
+	scale                              float32
+	cosX, sinX, cosY, sinY, cosZ, sinZ float32
+	origin                             [3]float32
+}
+
+func newWorldWMOTransform(placement worldWMOPlacement) worldWMOTransform {
 	roll := float64(placement.rotation[2]) * math.Pi / 180
 	pitch := -float64(placement.rotation[0]) * math.Pi / 180
 	yaw := (float64(placement.rotation[1]) + 180) * math.Pi / 180
-	point = rotateWorldWMOX(point, roll)
-	point = rotateWorldWMOY(point, pitch)
-	point = rotateWorldWMOZ(point, yaw)
-	origin := worldWMOPosition(placement.position)
-	return [3]float32{point[0] + origin[0], point[1] + origin[1], point[2] + origin[2]}
+	return worldWMOTransform{
+		scale: placement.scale,
+		cosX:  float32(math.Cos(roll)), sinX: float32(math.Sin(roll)),
+		cosY: float32(math.Cos(pitch)), sinY: float32(math.Sin(pitch)),
+		cosZ: float32(math.Cos(yaw)), sinZ: float32(math.Sin(yaw)),
+		origin: worldWMOPosition(placement.position),
+	}
+}
+
+func (t worldWMOTransform) rotate(point [3]float32) [3]float32 {
+	point = [3]float32{point[0], point[1]*t.cosX - point[2]*t.sinX, point[1]*t.sinX + point[2]*t.cosX}
+	point = [3]float32{point[0]*t.cosY + point[2]*t.sinY, point[1], -point[0]*t.sinY + point[2]*t.cosY}
+	return [3]float32{point[0]*t.cosZ - point[1]*t.sinZ, point[0]*t.sinZ + point[1]*t.cosZ, point[2]}
+}
+
+func (t worldWMOTransform) point(point [3]float32) [3]float32 {
+	point = t.rotate([3]float32{point[0] * t.scale, point[1] * t.scale, point[2] * t.scale})
+	return [3]float32{point[0] + t.origin[0], point[1] + t.origin[1], point[2] + t.origin[2]}
+}
+
+func transformWorldWMOPoint(point [3]float32, placement worldWMOPlacement) [3]float32 {
+	return newWorldWMOTransform(placement).point(point)
 }
 
 func rotateWorldWMOX(point [3]float32, angle float64) [3]float32 {
@@ -1777,6 +2040,18 @@ func parseWorldMCNK(data []byte, offset, fallbackX, fallbackY int, textures []st
 	if mcnr, found := worldSubChunk(data, offset, int(binary.LittleEndian.Uint32(payload[0x18:0x1c])), "MCNR"); found && len(mcnr) >= worldHeightCount*3 {
 		for index := range chunk.normals {
 			chunk.normals[index] = [3]int8{int8(mcnr[index*3]), int8(mcnr[index*3+1]), int8(mcnr[index*3+2])}
+		}
+	}
+	if chunk.flags&0x1 != 0 {
+		if mcsh, found := worldSubChunk(data, offset, int(binary.LittleEndian.Uint32(payload[0x2c:0x30])), "MCSH"); found && len(mcsh) >= 512 {
+			chunk.shadow = make([]byte, 64*64)
+			for y := 0; y < 64; y++ {
+				for x := 0; x < 64; x++ {
+					if mcsh[y*8+x/8]>>(uint(x)%8)&1 != 0 {
+						chunk.shadow[y*64+x] = 255
+					}
+				}
+			}
 		}
 	}
 	layers := int(binary.LittleEndian.Uint32(payload[0x0c:0x10]))
@@ -2021,6 +2296,14 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 			addTerrainTexture(layerIndices[index])
 			addTerrainAlpha(index - 1)
 		}
+		if len(chunk.shadow) > 0 {
+			// The last texture, which only a chunk with shadows has (an even count).
+			shadowTexture := texture.NewTexture2DFromRGBA(worldAlphaTexture(chunk.shadow, false))
+			shadowTexture.SetWrapS(gls.CLAMP_TO_EDGE)
+			shadowTexture.SetWrapT(gls.CLAMP_TO_EDGE)
+			owned = append(owned, shadowTexture)
+			mat.AddTexture(shadowTexture)
+		}
 		mesh := graphic.NewMesh(geom, mat)
 		mesh.SetRenderOrder(-90)
 		root.Add(mesh)
@@ -2037,11 +2320,11 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 	for _, mesh := range buildWorldLiquids(loader, adt.chunks, cache.liquid) {
 		root.Add(mesh)
 	}
-	wmoRoot, wmoCount, wmoSolids := buildWorldWMOInstances(loader, adt, position, cache)
+	wmoRoot, wmoCount, wmoSolids, wmoIDs, wmoParticles := buildWorldWMOInstances(loader, adt, position, cache)
 	if wmoRoot != nil {
 		root.Add(wmoRoot)
 	}
-	m2Root, m2Count := buildWorldM2Instances(loader, adt, position, cache)
+	m2Root, m2Count, m2Particles := buildWorldM2Instances(loader, adt, position, cache)
 	if m2Root != nil {
 		root.Add(m2Root)
 	}
@@ -2055,6 +2338,8 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 	}
 	tileCollision := newWorldSceneCollision(adt.chunks, wmoSolids)
 	tileCollision.owned = owned
+	tileCollision.wmoInstances = wmoIDs
+	tileCollision.particles = append(m2Particles, wmoParticles...)
 	root.SetUserData(tileCollision)
 	return root, info, nil
 }
@@ -2137,12 +2422,7 @@ func worldChunkNormal(chunk worldADTChunk, index int) (float32, float32, float32
 // transformWorldWMONormal turns a group normal the way a placement turns the
 // group's points, without the scale and position.
 func transformWorldWMONormal(normal [3]float32, placement worldWMOPlacement) [3]float32 {
-	roll := float64(placement.rotation[2]) * math.Pi / 180
-	pitch := -float64(placement.rotation[0]) * math.Pi / 180
-	yaw := (float64(placement.rotation[1]) + 180) * math.Pi / 180
-	normal = rotateWorldWMOX(normal, roll)
-	normal = rotateWorldWMOY(normal, pitch)
-	return rotateWorldWMOZ(normal, yaw)
+	return newWorldWMOTransform(placement).rotate(normal)
 }
 
 // groupLights are the lights a WMO group refers to, placed in the world.
@@ -2175,4 +2455,45 @@ func groupAverageColour(group worldWMOGroup, fallback [3]float32) [3]float32 {
 		average[2] += group.colors[index+2]
 	}
 	return [3]float32{average[0] / float32(count), average[1] / float32(count), average[2] / float32(count)}
+}
+
+// worldInteriorBase is the light an interior surface has before any omni light
+// reaches it. The original starts from the map object's own ambient (MOHD,
+// about 0.02 in Ironforge) and the lights; that leaves the city far darker than
+// it plays, so the baked colour is kept as it was and the lights add to it.
+var worldInteriorBase = [3]float32{0.5, 0.5, 0.5}
+
+// worldInteriorLight is the light an interior surface point takes: the map
+// object's ambient plus each omni light fading out between its start and end,
+// by the cosine of the angle to the surface.
+func worldInteriorLight(ambient [3]float32, lights []worldPointLight, point, normal [3]float32) [3]float32 {
+	total := ambient
+	for _, light := range lights {
+		dx, dy, dz := light.position[0]-point[0], light.position[1]-point[1], light.position[2]-point[2]
+		distance := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+		if light.end <= 0 || distance < 0.0001 || distance >= light.end {
+			continue
+		}
+		span := light.end - light.start
+		if span < 0.001 {
+			span = 0.001
+		}
+		fade := (light.end - distance) / span
+		if fade > 1 {
+			fade = 1
+		}
+		cosine := (dx*normal[0] + dy*normal[1] + dz*normal[2]) / distance
+		if cosine <= 0 {
+			continue
+		}
+		for channel := range total {
+			total[channel] += light.colour[channel] * fade * cosine
+		}
+	}
+	for channel := range total {
+		if total[channel] > 1 {
+			total[channel] = 1
+		}
+	}
+	return total
 }

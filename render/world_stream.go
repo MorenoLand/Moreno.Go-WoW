@@ -11,6 +11,7 @@ import (
 	"github.com/MorenoLand/Moreno.WoW/ui"
 	"github.com/MorenoLand/Moreno.WoW/world"
 	"github.com/g3n/engine/core"
+	"github.com/g3n/engine/geometry"
 	"github.com/g3n/engine/graphic"
 	"github.com/g3n/engine/math32"
 )
@@ -80,7 +81,10 @@ type worldTerrainStreamer struct {
 	position world.WorldPosition
 	bigAlpha bool
 	cache    *worldSceneAssetCache
-	root     *core.Node
+	// compacted are the geometries whose CPU copies have been released.
+	compacted   map[*geometry.Geometry]bool
+	compactedAt time.Time
+	root        *core.Node
 
 	collision *worldCollisionHolder
 	liquid    *worldLiquidAnimator
@@ -105,7 +109,7 @@ type worldTerrainStreamer struct {
 
 func newWorldTerrainStreamer(loader *ui.Loader, mapName string, position world.WorldPosition, bigAlpha bool, cache *worldSceneAssetCache, root *core.Node) *worldTerrainStreamer {
 	return &worldTerrainStreamer{
-		loader: loader, mapName: mapName, position: position, bigAlpha: bigAlpha, cache: cache, root: root,
+		loader: loader, mapName: mapName, position: position, bigAlpha: bigAlpha, cache: cache, root: root, compacted: make(map[*geometry.Geometry]bool),
 		collision: &worldCollisionHolder{}, liquid: cache.liquid,
 		tiles: make(map[[2]int]*worldStreamedTile), inflight: make(map[[2]int]bool),
 		requests: make(chan [2]int, 64), results: make(chan worldTileResult, 16),
@@ -168,9 +172,26 @@ func (s *worldTerrainStreamer) adopt(key [2]int, tile *worldStreamedTile) {
 func (s *worldTerrainStreamer) rebuildCollision(synchronous bool) {
 	var chunks []worldADTChunk
 	var solids []worldCollisionMesh
+	// A placement on a tile edge is in both tiles' lists but is one thing.
+	seen := make(map[*worldCollisionTriangle]bool)
+	seenLights := make(map[*worldPointLight]bool)
 	for _, tile := range s.tiles {
 		chunks = append(chunks, tile.collision.chunks...)
-		solids = append(solids, tile.collision.solids...)
+		for _, solid := range tile.collision.solids {
+			switch {
+			case len(solid.triangles) > 0:
+				if seen[&solid.triangles[0]] {
+					continue
+				}
+				seen[&solid.triangles[0]] = true
+			case len(solid.lights) > 0:
+				if seenLights[&solid.lights[0]] {
+					continue
+				}
+				seenLights[&solid.lights[0]] = true
+			}
+			solids = append(solids, solid)
+		}
 	}
 	generation := s.collisionGeneration.Add(1)
 	build := func() {
@@ -262,6 +283,11 @@ func (s *worldTerrainStreamer) update(x, y float32) {
 	if changed {
 		s.rebuildCollision(false)
 	}
+	s.updateParticles(x, y, math.Min(frame.Seconds(), 0.1))
+	if now.Sub(s.compactedAt) > 2*time.Second {
+		s.compactedAt = now
+		s.compact()
+	}
 }
 
 // release takes a tile out of the scene and frees what only it used. Textures
@@ -275,6 +301,7 @@ func (s *worldTerrainStreamer) release(key [2]int, tile *worldStreamedTile) {
 		if mesh, ok := node.(*graphic.Mesh); ok {
 			meshes[mesh] = true
 			if geometry := mesh.GetGeometry(); geometry != nil {
+				delete(s.compacted, geometry)
 				geometry.Dispose()
 			}
 		}
@@ -287,6 +314,7 @@ func (s *worldTerrainStreamer) release(key [2]int, tile *worldStreamedTile) {
 	for _, tex := range tile.collision.owned {
 		tex.Dispose()
 	}
+	s.cache.releaseWMO(tile.collision.wmoInstances)
 }
 
 // requestNeighbours asks for the tiles around the player that are neither

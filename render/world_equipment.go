@@ -77,6 +77,15 @@ func equipmentDisplayTable(loader *ui.Loader) (charSectionsTable, bool) {
 	return equipDisplayTable, equipDisplayTable.records > 0 && equipDisplayTable.fields >= 5
 }
 
+// cachedModelAttachments are the attachment points of a model file already
+// read, and whether it has been.
+func cachedModelAttachments(path string) ([]m2Attachment, bool) {
+	equipTableMu.Lock()
+	defer equipTableMu.Unlock()
+	cached, ok := attachmentCache[path]
+	return cached, ok
+}
+
 // modelAttachments are the attachment points of a model file.
 func modelAttachments(loader *ui.Loader, path string) []m2Attachment {
 	equipTableMu.Lock()

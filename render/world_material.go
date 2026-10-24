@@ -23,6 +23,16 @@ type worldMaterial struct {
 	// local lights the surface from inside a WMO instead of by the sun and sky.
 	local *worldLocalLight
 
+	// wmoMode is how a map object surface is lit (wmoUnlit, wmoExterior,
+	// wmoInterior) and instance the WMO placement it belongs to.
+	wmoMode float32
+	// envMask has a bit for each texture of an M2 surface drawn with the
+	// reflected environment coordinates.
+	envMask           float32
+	envMaskUniform    gls.Uniform
+	instance          int
+	wmoParams, wmoAdd gls.Uniform
+
 	indoorAmbient, pointPositions, pointColours      gls.Uniform
 	ambient, diffuse, direction, fogColor, fogParams gls.Uniform
 	waterShallow, waterDeep, waterAlpha, skyColors   gls.Uniform
@@ -30,6 +40,9 @@ type worldMaterial struct {
 
 func newWorldMaterial() *worldMaterial {
 	m := &worldMaterial{Standard: material.NewStandard(&math32.Color{R: 1, G: 1, B: 1}), water: -1}
+	m.envMaskUniform.Init("M2EnvMask")
+	m.wmoParams.Init("WmoParams")
+	m.wmoAdd.Init("WmoAdd")
 	m.indoorAmbient.Init("IndoorAmbient")
 	m.pointPositions.Init("PointLightPos")
 	m.pointColours.Init("PointLightColor")
@@ -45,10 +58,80 @@ func newWorldMaterial() *worldMaterial {
 	return m
 }
 
+// worldProgramKey identifies the shader program a material draws with.
+type worldProgramKey struct {
+	shader   string
+	textures int
+}
+
+// worldProgramUniforms is what the plain atmosphere uniforms of a program were
+// last set to; a program keeps its uniforms, so a draw that would set the same
+// values again skips the calls.
+type worldProgramUniforms struct {
+	set                              bool
+	ambient, diffuse, direction, fog [3]float32
+	fogStart, fogEnd                 float32
+	valid, lit, noFog                bool
+	wmoMode                          float32
+	envMask                          float32
+	wmoAdd                           [3]float32
+}
+
+// Wow.exe's three ways of lighting a map object surface (FUN_007a8b10).
+const (
+	wmoUnlit    = 0
+	wmoExterior = 1
+	wmoInterior = 3
+)
+
+// worldInsideInstance is the WMO placement the player stands in.
+var worldInsideInstance int
+
+// wmoAmbientAdd is what the light's ambient adds to the surfaces of the map
+// object the player stands in (the engine sets the vertex program's constant
+// 29 from it, halved, and the pixel stage doubles the result).
+func (m *worldMaterial) wmoAmbientAdd() [3]float32 {
+	if m.wmoMode == wmoUnlit || m.instance == 0 || m.instance != worldInsideInstance || !worldAtmo.valid {
+		return [3]float32{}
+	}
+	// Interior surfaces take half of it: their baked colour carries more of the
+	// light than a street's does.
+	share := float32(0.5)
+	if m.wmoMode == wmoInterior {
+		share = 0.25
+	}
+	var add [3]float32
+	for index := range add {
+		value := worldAtmo.ambient[index]
+		if value > 1 {
+			value = 1
+		}
+		add[index] = value * share
+	}
+	return add
+}
+
+var worldUniformCache = make(map[worldProgramKey]*worldProgramUniforms)
+
 // RenderSetup sets the standard material state and then the atmosphere uniforms.
 func (m *worldMaterial) RenderSetup(gs *gls.GLS) {
 	m.Standard.RenderSetup(gs)
 	a := &worldAtmo
+	key := worldProgramKey{m.Shader(), m.TextureCount()}
+	cached := worldUniformCache[key]
+	if cached == nil {
+		cached = &worldProgramUniforms{}
+		worldUniformCache[key] = cached
+	}
+	if m.local == nil && m.water < 0 && !m.sky {
+		current := worldProgramUniforms{set: true, ambient: a.ambient, diffuse: a.diffuse, direction: a.direction, fog: a.fog, fogStart: a.fogStart, fogEnd: a.fogEnd, valid: a.valid, lit: m.lit, noFog: m.noFog, wmoMode: m.wmoMode, envMask: m.envMask, wmoAdd: m.wmoAmbientAdd()}
+		if *cached == current {
+			return
+		}
+		*cached = current
+	} else {
+		cached.set = false
+	}
 	enabled := float32(0)
 	if a.valid {
 		enabled = 1
@@ -62,12 +145,19 @@ func (m *worldMaterial) RenderSetup(gs *gls.GLS) {
 	var indoorAmbient [3]float32
 	if m.local != nil && lit > 0 {
 		indoor, indoorAmbient = 1, m.local.ambient
+		if m.local.exterior {
+			indoor = 2
+		}
 		for index := 0; index < m.local.count; index++ {
 			light := m.local.lights[index]
 			copy(positions[index*4:], []float32{light.position[0], light.position[1], light.position[2], light.end})
 			copy(colours[index*4:], []float32{light.colour[0], light.colour[1], light.colour[2], light.start})
 		}
 	}
+	add := m.wmoAmbientAdd()
+	gs.Uniform1f(m.envMaskUniform.Location(gs), m.envMask)
+	gs.Uniform4f(m.wmoParams.Location(gs), m.wmoMode, 0, 0, 0)
+	gs.Uniform3f(m.wmoAdd.Location(gs), add[0], add[1], add[2])
 	gs.Uniform4f(m.indoorAmbient.Location(gs), indoorAmbient[0], indoorAmbient[1], indoorAmbient[2], indoor)
 	gs.Uniform4fv(m.pointPositions.Location(gs), worldLocalLightCount, &positions[0])
 	gs.Uniform4fv(m.pointColours.Location(gs), worldLocalLightCount, &colours[0])

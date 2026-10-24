@@ -410,6 +410,7 @@ type funcContext struct {
 	labelPc         map[int]int
 	gotosCount      int
 	unresolvedGotos map[int]*gotoLabelDesc
+	constIndex      map[LValue]int
 }
 
 func newFuncContext(sourcename string, parent *funcContext) *funcContext {
@@ -520,14 +521,15 @@ func (fc *funcContext) GetLabelPc(label int) int {
 }
 
 func (fc *funcContext) ConstIndex(value LValue) int {
-	ctype := value.Type()
-	for i, lv := range fc.Proto.Constants {
-		if lv.Type() == ctype && lv == value {
-			return i
-		}
+	if i, ok := fc.constIndex[value]; ok {
+		return i
 	}
 	fc.Proto.Constants = append(fc.Proto.Constants, value)
 	v := len(fc.Proto.Constants) - 1
+	if fc.constIndex == nil {
+		fc.constIndex = make(map[LValue]int)
+	}
+	fc.constIndex[value] = v
 	if v > opMaxArgBx {
 		raiseCompileError(fc, fc.Proto.LineDefined, "too many constants")
 	}

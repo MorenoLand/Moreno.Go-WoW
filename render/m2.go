@@ -168,9 +168,12 @@ type skinBatch struct {
 }
 
 type m2Part struct {
-	texturePaths            []string
-	textureFlags            []uint32
-	uvSets                  []int
+	texturePaths []string
+	textureFlags []uint32
+	uvSets       []int
+	// envMask has a bit for each texture drawn with the reflected environment
+	// coordinates (coordinate lookup 0xFFFF) instead of the model's own.
+	envMask                 uint32
 	positions               math32.ArrayF32
 	normals                 math32.ArrayF32
 	uvs                     math32.ArrayF32
@@ -241,9 +244,12 @@ type glueModelInfo struct {
 	hasStand      bool
 	modelBottom   float32
 	modelTop      float32 // highest point of the model in its own units, before any fit scale
-	stats         glueModelStats
-	particles     *m2ParticleSystem
-	animation     *m2Animation
+	attachments   []m2Attachment
+	// rawHeight is the model's height in its own units.
+	rawHeight float32
+	stats     glueModelStats
+	particles *m2ParticleSystem
+	animation *m2Animation
 }
 
 type glueModelStats struct {
@@ -349,6 +355,7 @@ func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model 
 		if light.world {
 			worldMat := newWorldMaterial()
 			worldMat.lit = true
+			worldMat.envMask = float32(part.envMask)
 			worldMat.noFog = !worldFoggedBlending(m2MaterialBlending(part.material.blend))
 			mat, meshMaterial = worldMat.Standard, worldMat
 			shaderName = strings.Replace(shaderName, "morenowow_", "morenowow_world_", 1)
@@ -434,10 +441,25 @@ func buildGlueModelWithNormalization(loader *ui.Loader, modelPath string, model 
 		stats.particlePoints = particles.pointCount
 	}
 	animation := buildM2Animation(&model, skin, animatedMeshes, modelPath)
-	info := glueModelInfo{stats: stats, particles: particles, animation: animation, modelScale: scale, modelBottom: modelBottom, modelTop: modelTop}
+	info := glueModelInfo{stats: stats, particles: particles, animation: animation, modelScale: scale, modelBottom: modelBottom, modelTop: modelTop, attachments: model.attachments}
+	if len(model.vertices) > 0 {
+		low, high := float32(math.MaxFloat32), float32(-math.MaxFloat32)
+		for _, vertex := range model.vertices {
+			low, high = float32(math.Min(float64(low), float64(vertex.position[2]))), float32(math.Max(float64(high), float64(vertex.position[2])))
+		}
+		info.rawHeight = high - low
+	}
 	for _, attachment := range model.attachments {
 		if attachment.id == 0 {
-			point := modelPoint(attachment.position, center, scale)
+			// The attachment sits in its bone's space, so the bone's pose moves it.
+			posed := attachment.position
+			if animation != nil && int(attachment.bone) < len(animation.boneMatrices) {
+				matrix := animation.boneMatrices[attachment.bone].point
+				for row := 0; row < 3; row++ {
+					posed[row] = matrix[row*4]*attachment.position[0] + matrix[row*4+1]*attachment.position[1] + matrix[row*4+2]*attachment.position[2] + matrix[row*4+3]
+				}
+			}
+			point := modelPoint(posed, center, scale)
 			info.standPosition = *math32.NewVector3(point[0], point[1], point[2])
 			info.hasStand = true
 			break
@@ -835,10 +857,14 @@ func buildM2PartsWithFilters(model parsedM2, skin parsedSkin, textureOverrides m
 			materialInfo = model.renderFlags[batch.materialIndex]
 		}
 		uvSets := make([]int, len(texturePaths))
+		envMask := uint32(0)
 		for textureIndex := range texturePaths {
 			coordIndex := int(batch.textureCoordIndex) + textureIndex
 			if coordIndex < len(model.textureCoords) {
 				uvSets[textureIndex] = int(model.textureCoords[coordIndex])
+				if uvSets[textureIndex] == 0xFFFF {
+					envMask |= 1 << uint(textureIndex)
+				}
 				if uvSets[textureIndex] > 1 {
 					uvSets[textureIndex] = 0
 				}
@@ -847,7 +873,7 @@ func buildM2PartsWithFilters(model parsedM2, skin parsedSkin, textureOverrides m
 		if len(uvSets) > 0 {
 			uvSet = uvSets[0]
 		}
-		key := fmt.Sprintf("%d\x00%d\x00%d\x00%d\x00%s", batchIndex, uvSet, materialInfo.flags, materialInfo.blend, strings.Join(texturePaths, "\x00"))
+		key := fmt.Sprintf("%d\x00%d\x00%d\x00%d\x00%d\x00%s", batchIndex, uvSet, materialInfo.flags, materialInfo.blend, envMask, strings.Join(texturePaths, "\x00"))
 		part := parts[key]
 		if part == nil {
 			colorIndex := -1
@@ -863,7 +889,7 @@ func buildM2PartsWithFilters(model parsedM2, skin parsedSkin, textureOverrides m
 			}
 			color, alpha := m2PartTintAt(&model, colorIndex, textureWeightIndex, 0, 0, 0)
 			textureCombiners := m2TextureCombiners(model, batch, materialInfo, len(texturePaths))
-			part = &m2Part{texturePaths: texturePaths, textureFlags: textureFlags, uvSets: uvSets, renderOrder: batchIndex, priorityPlane: batch.priorityPlane, materialLayer: batch.materialLayer, submeshID: submesh.submeshID, uvSet: uvSet, material: materialInfo, colorIndex: colorIndex, textureWeightIndex: textureWeightIndex, color: color, alpha: alpha, textureCombiners: textureCombiners, textureTransformIndices: textureTransformIndices}
+			part = &m2Part{texturePaths: texturePaths, textureFlags: textureFlags, uvSets: uvSets, envMask: envMask, renderOrder: batchIndex, priorityPlane: batch.priorityPlane, materialLayer: batch.materialLayer, submeshID: submesh.submeshID, uvSet: uvSet, material: materialInfo, colorIndex: colorIndex, textureWeightIndex: textureWeightIndex, color: color, alpha: alpha, textureCombiners: textureCombiners, textureTransformIndices: textureTransformIndices}
 			parts[key] = part
 		}
 		for index := start; index+2 < end; index += 3 {

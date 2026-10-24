@@ -247,6 +247,18 @@ func (rt *Runtime) beginLogout(quit bool) {
 	if rt == nil {
 		return
 	}
+	if rt.RequestLogout != nil {
+		// The server decides: SMSG_LOGOUT_RESPONSE says whether it is allowed and
+		// whether it is at once (a city or an inn), and only then does the camp
+		// timer and its prompt start.
+		if rt.logoutAwaiting || rt.logoutPending || rt.quitPending {
+			return
+		}
+		rt.logoutAwaiting = true
+		rt.quitPending = quit
+		rt.RequestLogout(quit)
+		return
+	}
 	rt.logoutPending = !quit
 	rt.quitPending = quit
 	rt.logoutRemaining = logoutCampSeconds
@@ -261,12 +273,72 @@ func (rt *Runtime) cancelLogout() {
 	if rt == nil {
 		return
 	}
-	if !rt.logoutPending && !rt.quitPending {
+	if !rt.logoutPending && !rt.quitPending && !rt.logoutAwaiting {
 		return
 	}
+	if rt.RequestLogoutCancel != nil {
+		rt.RequestLogoutCancel()
+	}
+	rt.logoutAwaiting = false
 	rt.logoutPending = false
 	rt.quitPending = false
 	rt.logoutRemaining = 0
+	rt.FireEvent("LOGOUT_CANCEL")
+}
+
+// LogoutResponse is the server's answer to a logout request: a reason that is
+// not zero refuses it, and an instant one needs no wait.
+func (rt *Runtime) LogoutResponse(reason uint32, instant bool) {
+	if rt == nil {
+		return
+	}
+	quit := rt.quitPending
+	rt.logoutAwaiting = false
+	if reason != 0 {
+		rt.logoutPending = false
+		rt.quitPending = false
+		rt.FireEvent("UI_ERROR_MESSAGE", lua.LString(rt.globalString("ERR_CANT_LOGOUT", "You can't logout now.")))
+		return
+	}
+	rt.logoutPending = !quit
+	rt.quitPending = quit
+	if instant {
+		// SMSG_LOGOUT_COMPLETE follows at once; no prompt.
+		rt.logoutRemaining = logoutCampSeconds
+		return
+	}
+	rt.logoutRemaining = logoutCampSeconds
+	if quit {
+		rt.FireEvent("PLAYER_QUITING")
+	} else {
+		rt.FireEvent("PLAYER_CAMPING")
+	}
+}
+
+// LogoutComplete is SMSG_LOGOUT_COMPLETE: the character is out of the world.
+func (rt *Runtime) LogoutComplete() {
+	if rt == nil {
+		return
+	}
+	quit := rt.quitPending
+	rt.logoutAwaiting = false
+	if quit {
+		rt.completeQuit()
+	} else {
+		rt.completeLogout()
+	}
+}
+
+// LogoutCancelled is SMSG_LOGOUT_CANCEL_ACK.
+func (rt *Runtime) LogoutCancelled() {
+	if rt == nil {
+		return
+	}
+	rt.logoutAwaiting = false
+	rt.logoutPending = false
+	rt.quitPending = false
+	rt.logoutRemaining = 0
+	rt.hideLogoutPopup("CAMP")
 	rt.FireEvent("LOGOUT_CANCEL")
 }
 
@@ -318,7 +390,12 @@ func (rt *Runtime) tickLogout(elapsed float64) bool {
 		return false
 	}
 	rt.logoutRemaining -= elapsed
-	if rt.logoutRemaining > 0 {
+	if rt.RequestLogout != nil {
+		// The server completes it; a long silence ends it here.
+		if rt.logoutRemaining > -10 {
+			return false
+		}
+	} else if rt.logoutRemaining > 0 {
 		return false
 	}
 	if rt.quitPending {

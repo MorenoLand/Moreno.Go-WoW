@@ -28,6 +28,10 @@ type debugPanelData struct {
 	modelError      string
 	terminalDebug   bool
 	rendererMats    int
+	uiRefreshes     float64
+	updateMS        float64
+	sceneMS         float64
+	swapMS          float64
 	rendererPanels  int
 	rendererOthers  int
 	worldParts      int
@@ -53,6 +57,7 @@ func debugPanelLines(data debugPanelData) []string {
 		fmt.Sprintf("UI cache %d decoded textures | assets %s", data.assetCache, dataSource),
 		"scene " + scene,
 		fmt.Sprintf("model %d parts | %d scene nodes", data.model.parts, data.sceneParts),
+		fmt.Sprintf("frame update %.1f ms | scene draw %.1f ms | swap %.1f ms | UI repaints %.1f/s", data.updateMS, data.sceneMS, data.swapMS, data.uiRefreshes),
 		fmt.Sprintf("renderer %d materials | %d panels | %d others", data.rendererMats, data.rendererPanels, data.rendererOthers),
 		fmt.Sprintf("world %d scene nodes", data.worldParts),
 		fmt.Sprintf("geometry %d vertices | %d triangles", data.model.vertices, data.model.triangles),

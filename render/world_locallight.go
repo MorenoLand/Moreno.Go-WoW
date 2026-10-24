@@ -18,6 +18,8 @@ type worldLocalLight struct {
 	ambient [3]float32
 	lights  [worldLocalLightCount]worldPointLight
 	count   int
+	// exterior keeps the sun and sky and only adds the lights.
+	exterior bool
 }
 
 // nearestWorldLights picks the lights that reach position, nearest first.
@@ -64,15 +66,18 @@ func applyWorldLocalLight(node core.INode, light *worldLocalLight) {
 func (collision worldSceneCollision) localLightAt(x, y, z float32) *worldLocalLight {
 	cell := [2]int{int(math.Floor(float64(x / worldCollisionCell))), int(math.Floor(float64(y / worldCollisionCell)))}
 	best := float32(-math.MaxFloat32)
-	indoor := false
+	indoor, inside := false, false
 	var ambient [3]float32
 	var groupLights []worldPointLight
 	for _, ref := range collision.cells[cell] {
 		mesh := collision.solids[ref.mesh]
-		if !mesh.indoor {
+		if mesh.instance == 0 {
 			continue
 		}
-		triangle := mesh.triangles[ref.triangle]
+		triangle := &mesh.triangles[ref.triangle]
+		if triangle.max[2] < z-6 || triangle.min[2] > z+0.75 {
+			continue
+		}
 		if math.Abs(float64(triangle.normal[2])) < worldFloorNormalZ || triangle.normal[2] == 0 || !worldPointInTriangle2D([2]float32{x, y}, [2]float32{triangle.a[0], triangle.a[1]}, [2]float32{triangle.b[0], triangle.b[1]}, [2]float32{triangle.c[0], triangle.c[1]}) {
 			continue
 		}
@@ -80,21 +85,90 @@ func (collision worldSceneCollision) localLightAt(x, y, z float32) *worldLocalLi
 		if height > z+0.75 || height < z-6 || height <= best {
 			continue
 		}
-		best, indoor, ambient, groupLights = height, true, mesh.ambient, mesh.groupLights
+		best, inside, indoor, ambient, groupLights = height, true, mesh.indoor, mesh.ambient, mesh.groupLights
 		if triangle.hasColours {
-			ambient = triangleColourAt(triangle, x, y)
+			ambient = triangleColourAt(*triangle, x, y)
 		}
 	}
-	if !indoor {
+	if !inside {
 		return nil
+	}
+	if !indoor {
+		// A group lit by the sun still has the map object's omni lights (the
+		// braziers of a city) light what stands near them, over the sun.
+		lights := collision.nearbyLights(cell)
+		if len(lights) == 0 {
+			return nil
+		}
+		light := nearestWorldLights(lights, [3]float32{x, y, z + 1}, [3]float32{})
+		if light.count == 0 {
+			return nil
+		}
+		light.exterior = true
+		return light
+	}
+	// An object inside a map object takes the light's ambient colour as its own
+	// (Wow.exe FUN_00743c70 copies the Light.dbc ambient into the object). That
+	// alone leaves what stands on a warm baked floor blue and dark, so half of it
+	// goes to what the floor itself shows: its baked colour plus the half of the
+	// ambient that its surfaces add inside the map object.
+	if worldAtmo.valid {
+		for channel := range ambient {
+			ambient[channel] += 0.5 * worldAtmo.ambient[channel]
+			if ambient[channel] > 1 {
+				ambient[channel] = 1
+			}
+		}
 	}
 	// The group's own lights (MOLR) light what stands in it; a group without a
 	// list falls back on the lights that reach the spot.
-	lights := groupLights
-	if len(lights) == 0 {
-		lights = collision.lightCells[cell]
-	}
+	lights := append(append([]worldPointLight(nil), groupLights...), collision.nearbyLights(cell)...)
 	return nearestWorldLights(lights, [3]float32{x, y, z + 1}, ambient)
+}
+
+// nearbyLights are the map object omni lights indexed in a cell and the cells
+// around it, which reach across the cell edges.
+func (collision worldSceneCollision) nearbyLights(cell [2]int) []worldPointLight {
+	var lights []worldPointLight
+	for dx := -1; dx <= 1; dx++ {
+		for dy := -1; dy <= 1; dy++ {
+			lights = append(lights, collision.lightCells[[2]int{cell[0] + dx, cell[1] + dy}]...)
+		}
+	}
+	return lights
+}
+
+// instanceAt is the WMO placement whose floor is under a point, or 0.
+func (collision worldSceneCollision) instanceAt(x, y, z float32) int {
+	cell := [2]int{int(math.Floor(float64(x / worldCollisionCell))), int(math.Floor(float64(y / worldCollisionCell)))}
+	best := float32(-math.MaxFloat32)
+	instance := 0
+	for _, ref := range collision.cells[cell] {
+		mesh := collision.solids[ref.mesh]
+		if mesh.instance == 0 {
+			continue
+		}
+		triangle := &mesh.triangles[ref.triangle]
+		if triangle.max[2] < z-6 || triangle.min[2] > z+0.75 {
+			continue
+		}
+		if math.Abs(float64(triangle.normal[2])) < worldFloorNormalZ || triangle.normal[2] == 0 || !worldPointInTriangle2D([2]float32{x, y}, [2]float32{triangle.a[0], triangle.a[1]}, [2]float32{triangle.b[0], triangle.b[1]}, [2]float32{triangle.c[0], triangle.c[1]}) {
+			continue
+		}
+		height := triangle.a[2] - (triangle.normal[0]*(x-triangle.a[0])+triangle.normal[1]*(y-triangle.a[1]))/triangle.normal[2]
+		if height > z+0.75 || height < z-6 || height <= best {
+			continue
+		}
+		best, instance = height, mesh.instance
+	}
+	return instance
+}
+
+func (h *worldCollisionHolder) instanceAt(x, y, z float32) int {
+	if c := h.current.Load(); c != nil {
+		return c.instanceAt(x, y, z)
+	}
+	return 0
 }
 
 func (h *worldCollisionHolder) localLightAt(x, y, z float32) *worldLocalLight {
@@ -111,12 +185,20 @@ type worldLightState struct {
 	indoor    bool
 }
 
+// worldLightChecksLeft is how many objects may look for their light this frame.
+var worldLightChecksLeft int
+
 // updateWorldLocalLight lights a moving object by the group of the WMO it
 // stands in, looking again every so often.
 func updateWorldLocalLight(node *core.Node, state *worldLightState, collision *worldCollisionHolder, now time.Time) {
 	if node == nil || collision == nil || now.Sub(state.checkedAt) < 150*time.Millisecond {
 		return
 	}
+	// A crowd's checks are spread over frames.
+	if worldLightChecksLeft <= 0 {
+		return
+	}
+	worldLightChecksLeft--
 	state.checkedAt = now
 	position := node.Position()
 	light := collision.localLightAt(position.X, position.Y, position.Z)

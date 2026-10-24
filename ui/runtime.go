@@ -110,6 +110,12 @@ type Runtime struct {
 	logoutPending   bool
 	quitPending     bool
 	logoutRemaining float64
+	// RequestLogout asks the server to log out (CMSG_LOGOUT_REQUEST) and
+	// RequestLogoutCancel to stop it; both are unset without a world session.
+	RequestLogout       func(quit bool)
+	RequestLogoutCancel func()
+	// logoutAwaiting is a request sent that the server has not answered.
+	logoutAwaiting bool
 
 	// The original client aborts runaway scripts through a Lua debug hook
 	// with a 110-instruction budget. The Go VM in use exposes no debug-hook

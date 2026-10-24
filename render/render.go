@@ -1,6 +1,7 @@
 package render
 
 import (
+	"encoding/binary"
 	"fmt"
 	"image"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -37,14 +39,14 @@ type loginResult struct {
 }
 
 type worldEntryResult struct {
-	position  world.WorldPosition
-	character world.Character
-	err       error
-	spells    map[uint32]ui.SpellInfo
-	skills    map[uint32]ui.SpellSkillLine
-	spellErr  error
-	mapData   *ui.MapCatalog
-	mapErr    error
+	position    world.WorldPosition
+	character   world.Character
+	err         error
+	spells      map[uint32]ui.SpellInfo
+	skills      map[uint32]ui.SpellSkillLine
+	spellErr    error
+	mapData     *ui.MapCatalog
+	mapErr      error
 	itemLocal   map[uint32]ui.ItemLocal
 	itemIcons   map[uint32]string
 	itemClasses ui.ItemClassNames
@@ -384,6 +386,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	sceneCameraFrameFraction := float32(1)
 	debugModelLoadMS := float64(0)
 	debugUIRenderMS := float64(0)
+	worldAnimFrame := uint32(0)
+	lastInstanceCheck := time.Time{}
+	debugUIRefreshes, debugUIRefreshCount := 0.0, 0
+	debugUpdateMS, debugSceneMS, debugSwapMS := 0.0, 0.0, 0.0
+	debugRateStarted := time.Now()
 	debugModelError := ""
 	worldMode := false
 	var worldCamera *worldCameraController
@@ -466,7 +473,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		return activeSession.SetSelection(guid)
 	}
 	host.setSelection = selectTarget
-// selectTarget tells the server and shows the selection at once; the	// server's own UNIT_FIELD_TARGET update then confirms it.	selectTarget := func(guid uint64) error {		if activeSession == nil {			return fmt.Errorf("world session is closed")		}		if player := worldEntities[worldCharacter.GUID]; player != nil {			player.fields[world.UnitTargetField] = uint32(guid)			player.fields[world.UnitTargetField+1] = uint32(guid >> 32)			syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend)		}		return activeSession.SetSelection(guid)	}	host.setSelection = selectTarget
+	// selectTarget tells the server and shows the selection at once; the	// server's own UNIT_FIELD_TARGET update then confirms it.	selectTarget := func(guid uint64) error {		if activeSession == nil {			return fmt.Errorf("world session is closed")		}		if player := worldEntities[worldCharacter.GUID]; player != nil {			player.fields[world.UnitTargetField] = uint32(guid)			player.fields[world.UnitTargetField+1] = uint32(guid >> 32)			syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend)		}		return activeSession.SetSelection(guid)	}	host.setSelection = selectTarget
 	var worldPress worldMousePress
 	worldClick := func(button window.MouseButton, x, y float64) {
 		if activeSession == nil || worldCamera == nil {
@@ -593,10 +600,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				return true
 			}
 			sceneLoadPending = true
-			requestedCharacter, requestedFacing := selectedCharacter, uiEngine.SceneCharacterFacing()
+			requestedCharacter, requestedFacing, requestedAspect := selectedCharacter, uiEngine.SceneCharacterFacing(), cam.Aspect()
 			go func() {
 				sceneLoadMu.Lock()
-				loaded := loadGlueSceneRequest(uiEngine.AssetLoader, &worldCreatureCache, sceneModels, path, sceneKey, characterKey, requestedCharacter, requestedFacing, debug)
+				loaded := loadGlueSceneRequest(uiEngine.AssetLoader, &worldCreatureCache, sceneModels, path, sceneKey, characterKey, requestedCharacter, requestedFacing, requestedAspect, debug)
 				sceneLoadMu.Unlock()
 				loaded.requestKey = requestKey
 				sceneResults <- loaded
@@ -674,6 +681,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			worldParts = len(worldModel.Children())
 		}
 		renderStats := r.Stats()
+		if span := time.Since(debugRateStarted).Seconds(); span > 0 {
+			debugUIRefreshes = float64(debugUIRefreshCount) / span
+		}
+		debugUIRefreshCount, debugRateStarted = 0, time.Now()
 		assetStats := uiEngine.AssetLoader.AssetStats()
 		uiEngine.SetDebugPanelLines(debugPanelLines(debugPanelData{
 			width: width, height: height, fps: debugFPS, frameMS: debugFrameMS, uiRenderMS: debugUIRenderMS,
@@ -682,7 +693,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			model: modelStats, sceneParts: parts, assetCache: len(uiEngine.Cache), mpqArchives: assetStats.Archives,
 			mpqCachedFiles: assetStats.CachedFiles, mpqMissingFiles: assetStats.MissingFiles, audio: host.audio != nil,
 			cursor: wowCursor != nil, modelError: debugModelError, terminalDebug: debug,
-			rendererMats: renderStats.GraphicMats, rendererPanels: renderStats.Panels, rendererOthers: renderStats.Others, worldParts: worldParts,
+			uiRefreshes: debugUIRefreshes, updateMS: debugUpdateMS, sceneMS: debugSceneMS, swapMS: debugSwapMS, rendererMats: renderStats.GraphicMats, rendererPanels: renderStats.Panels, rendererOthers: renderStats.Others, worldParts: worldParts,
 		}))
 	}
 
@@ -806,6 +817,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			}
 		}
 		debugUIRenderMS = time.Since(uiStarted).Seconds() * 1000
+		debugUIRefreshCount++
 		uiImage.SetSize(float32(width), float32(height))
 		refreshMinimap(width, height)
 		refreshChat(width, height)
@@ -897,7 +909,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			if worldMode {
 				cam.SetFov(70)
 				cam.SetNear(0.2)
-				cam.SetFar(6000)
+				cam.SetFar(worldFarClip(uiEngine.Rt))
 			} else {
 				setSceneCameraFOV(cam, sceneCameraDiagonalFOV, sceneCameraFrameFraction)
 				applyGlueSceneAspect(sceneModel, cam.Aspect())
@@ -1069,6 +1081,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				minimapChanged = uiEngine.SetWorldMinimapPosition(worldMapName, worldCamera.position[0], worldCamera.position[1])
 				uiEngine.Rt.SetPlayerMapPosition(worldMapID, worldCamera.position[0], worldCamera.position[1])
 				uiEngine.Rt.SetPlayerMapFacing(worldCamera.bodyYaw)
+				worldLightChecksLeft, worldSkinBudget = 6, 24
 				advanceWorldEntities(worldEntities, elapsed, worldFloor)
 				if worldPlayer != nil {
 					if info, ok := worldPlayer.UserData().(glueModelInfo); ok {
@@ -1092,7 +1105,20 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					}
 					poseWorldEquipment(worldPlayer, playerEquipment)
 					updateWorldLocalLight(worldPlayer, &playerLight, worldStreamer.collision, frameAt)
+					if frameAt.Sub(lastInstanceCheck) > 100*time.Millisecond {
+						lastInstanceCheck = frameAt
+						position := worldPlayer.Position()
+						worldInsideInstance = worldStreamer.collision.instanceAt(position.X, position.Y, position.Z)
+					}
 				}
+				worldAnimFrame++
+				cam.UpdateMatrixWorld()
+				var viewMatrix, projMatrix, viewProjection math32.Matrix4
+				cam.ViewMatrix(&viewMatrix)
+				cam.ProjMatrix(&projMatrix)
+				viewProjection.MultiplyMatrices(&projMatrix, &viewMatrix)
+				frustum := math32.NewFrustumFromMatrix(&viewProjection)
+				cameraAt := cam.Position()
 				for _, entity := range worldEntities {
 					if entity.node == nil {
 						continue
@@ -1127,7 +1153,16 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 								motion = worldAnimMount
 							}
 							info.animation.SetMotion(motion)
-							for _, soundID := range info.animation.Update(elapsed) {
+							skipped, idle := worldEntitySkinSkipped(entity.node, info, frustum, cameraAt, worldAnimFrame, entity.guid)
+							info.animation.skipSkin = skipped
+							// What nobody can see or make out moves a few frames at a time.
+							step := elapsed + entity.animPending
+							entity.animPending = 0
+							if idle && (worldAnimFrame+uint32(entity.guid))%4 != 0 {
+								entity.animPending = step
+								step = 0
+							}
+							for _, soundID := range info.animation.Update(step) {
 								if host.audio != nil {
 									host.audio.PlaySoundID(soundID)
 								}
@@ -1148,8 +1183,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					worldPlates.update(nameplateInputs{
 						scene: scene, engine: uiEngine, cam: cam, width: float32(screenWidth), height: float32(screenHeight),
 						entities: worldEntities, ownGUID: worldCharacter.GUID, playerNode: worldPlayer, cameraAt: worldCamera.position,
-						names: worldNameState, factions: worldFactionState, send: worldSend, playerFaction: playerFaction,
-						lineOfSight: worldStreamer.collision.cameraPosition, cameraPos: cam.Position(),
+						names: worldNameState, factions: worldFactionState, send: worldSend, playerFaction: playerFaction, ownModelPath: playerModelPath,
 					})
 				}
 				if worldSky != nil {
@@ -1197,6 +1231,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			if uiEngine.DebugPanelDragging() && (lastUIRefresh.IsZero() || frameAt.Sub(lastUIRefresh) >= time.Second/30) {
 				refreshDebugPanel()
 			}
+			worldBuildDeadline = time.Now().Add(8 * time.Millisecond)
 			select {
 			case loaded := <-sceneResults:
 				if loaded.requestKey != sceneRequestKey {
@@ -1310,10 +1345,30 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					worldItemCatalog = entry.itemLocal
 				}
 				seedWorldUnits(uiEngine.Rt, worldCharacter)
+				// The terrain is read and built on its own thread while the
+				// interface loads here.
+				var terrainProgress atomic.Uint64
+				terrainDone := make(chan worldTerrainLoad, 1)
+				go func(position world.WorldPosition) {
+					node, sceneInfo, err := loadWorldTerrainProgress(uiEngine.AssetLoader, position, func(progress float64) {
+						terrainProgress.Store(math.Float64bits(progress))
+					})
+					terrainDone <- worldTerrainLoad{node: node, info: sceneInfo, err: err}
+				}(entry.position)
 				loadingPath := worldLoadingScreenPath(uiEngine.AssetLoader, entry.position.Map)
 				uiEngine.SetLoadingScreen(loadingPath, 0)
 				if worldUIErr := uiEngine.LoadWorldUI(); worldUIErr != nil && debug {
 					log.Printf("world UI: %v", worldUIErr)
+				}
+				uiEngine.Rt.RequestLogout = func(bool) {
+					if activeSession != nil {
+						_ = activeSession.SendRaw(world.ClientOpcode(0x004B), nil) // CMSG_LOGOUT_REQUEST
+					}
+				}
+				uiEngine.Rt.RequestLogoutCancel = func() {
+					if activeSession != nil {
+						_ = activeSession.SendRaw(world.ClientOpcode(0x004E), nil) // CMSG_LOGOUT_CANCEL
+					}
 				}
 				if activeSession != nil {
 					worldPackets = activeSession.StartWorldPackets()
@@ -1341,7 +1396,16 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				}
 				win.SwapBuffers()
 				win.PollEvents()
-				loaded, info, loadErr := loadWorldTerrainProgress(uiEngine.AssetLoader, entry.position, showLoadingProgress)
+				var terrain worldTerrainLoad
+				for waiting := true; waiting; {
+					select {
+					case terrain = <-terrainDone:
+						waiting = false
+					case <-time.After(10 * time.Millisecond):
+						showLoadingProgress(math.Float64frombits(terrainProgress.Load()))
+					}
+				}
+				loaded, info, loadErr := terrain.node, terrain.info, terrain.err
 				if loadErr != nil {
 					worldLoading = false
 					uiEngine.SetWorldLoading(false)
@@ -1443,7 +1507,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						}
 					}
 				}
-				configureWorldCamera(cam, entry.position)
+				configureWorldCamera(cam, entry.position, worldFarClip(uiEngine.Rt))
 				worldCamera.update(1.0/60.0, cam, worldPlayer)
 				uiEngine.SetWorldMinimapPosition(worldMapName, worldCamera.position[0], worldCamera.position[1])
 				cameraPosition := cam.Position()
@@ -1590,6 +1654,17 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						}
 					}
 					// Entity model changes live in the GL scene; avoid a full software UI repaint.
+				case 0x004C: // SMSG_LOGOUT_RESPONSE: reason, instant
+					if body := event.Packet.Body; len(body) >= 5 {
+						uiEngine.Rt.LogoutResponse(binary.LittleEndian.Uint32(body[:4]), body[4] != 0)
+						refresh()
+					}
+				case 0x004D: // SMSG_LOGOUT_COMPLETE
+					uiEngine.Rt.LogoutComplete()
+					refresh()
+				case 0x004F: // SMSG_LOGOUT_CANCEL_ACK
+					uiEngine.Rt.LogoutCancelled()
+					refresh()
 				case world.MonsterMoveOpcode:
 					move, moveErr := world.ParseMonsterMove(event.Packet.Body)
 					if moveErr != nil {
@@ -1623,13 +1698,18 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				}
 			default:
 			}
+			if worldMode && worldCamera != nil {
+				syncPendingWorldEntities(scene, uiEngine.AssetLoader, &worldCreatureCache, worldEntities, worldCharacter.GUID, worldFloor, worldCamera.position)
+			}
 			if uiEngine.DebugPanelVisible() && (debugPanelRefresh.IsZero() || frameAt.Sub(debugPanelRefresh) >= time.Second) {
 				updateDebugPanel()
 				debugPanelRefresh = frameAt
 				refreshDebugPanel()
 			}
 		}
+		debugUpdateMS = time.Since(frameAt).Seconds() * 1000
 		gl.Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
+		sceneStarted := time.Now()
 		drawn := false
 		if !worldMode && sceneModel != nil {
 			frameWidth, frameHeight := win.GetSize()
@@ -1643,8 +1723,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				log.Printf("render: %v", renderErr)
 			}
 		}
+		debugSceneMS = time.Since(sceneStarted).Seconds() * 1000
+		swapStarted := time.Now()
 		win.SwapBuffers()
 		win.PollEvents()
+		debugSwapMS = time.Since(swapStarted).Seconds() * 1000
 	}
 	if width, height := win.GetSize(); width >= 640 && height >= 480 && (width != savedOptions.WindowWidth || height != savedOptions.WindowHeight) {
 		savedOptions.WindowWidth, savedOptions.WindowHeight = width, height
@@ -1786,12 +1869,13 @@ func resetSceneCamera(cam *camera.Camera) {
 	cam.LookAt(math32.NewVector3(0, 0, 0), math32.NewVector3(0, 1, 0))
 }
 
-func sceneCharacterTransform(background, character glueModelInfo, normalizedPosition math32.Vector3) (float32, math32.Vector3) {
+func sceneCharacterTransform(background, character glueModelInfo, normalizedPosition math32.Vector3, aspect float32) (float32, math32.Vector3) {
+	scale := background.modelScale * sceneCharacterFit(background, character, aspect)
 	factor := float32(1)
 	if character.modelScale > 0 {
-		factor = background.modelScale / character.modelScale
+		factor = scale / character.modelScale
 	}
-	return background.modelScale, *math32.NewVector3(background.standPosition.X+normalizedPosition.X*factor, background.standPosition.Y+(normalizedPosition.Y-character.modelBottom)*factor, background.standPosition.Z+normalizedPosition.Z*factor)
+	return scale, *math32.NewVector3(background.standPosition.X+normalizedPosition.X*factor, background.standPosition.Y+(normalizedPosition.Y-character.modelBottom)*factor, background.standPosition.Z+normalizedPosition.Z*factor)
 }
 
 func configureSceneCamera(cam *camera.Camera, model *core.Node) {
@@ -1811,11 +1895,30 @@ func configureSceneCamera(cam *camera.Camera, model *core.Node) {
 	}
 }
 
-func configureWorldCamera(cam *camera.Camera, position world.WorldPosition) {
+// worldFarClip is the distance the world is drawn to: Wow.exe projects with
+// the farclip cvar (177..1277, default 350) times horizonFarclipScale (default 4).
+func worldFarClip(rt *ui.Runtime) float32 {
+	farclip, scale := 350.0, 4.0
+	if rt != nil {
+		if value, ok := rt.GetCVar("farclip"); ok {
+			if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+				farclip = math.Min(1277, math.Max(177, parsed))
+			}
+		}
+		if value, ok := rt.GetCVar("horizonFarclipScale"); ok {
+			if parsed, err := strconv.ParseFloat(value, 64); err == nil && parsed >= 1 && parsed <= 6 {
+				scale = parsed
+			}
+		}
+	}
+	return float32(farclip * scale)
+}
+
+func configureWorldCamera(cam *camera.Camera, position world.WorldPosition, far float32) {
 	cam.SetPosition(position.X, position.Y, position.Z+4)
 	cam.SetFov(70)
 	cam.SetNear(0.2)
-	cam.SetFar(6000)
+	cam.SetFar(far)
 	directionX := math32.Cos(position.Orientation)
 	directionY := math32.Sin(position.Orientation)
 	target := math32.NewVector3(position.X+directionX*20, position.Y+directionY*20, position.Z+2)
@@ -1836,4 +1939,28 @@ func setSceneCameraFOV(cam *camera.Camera, fov, frameFraction float32) {
 		vertical = 2 * math32.Atan(math32.Tan(vertical/2)/frameFraction)
 	}
 	cam.SetFov(math32.RadToDeg(vertical))
+}
+
+// sceneCharacterFit shrinks a character that stands taller than the scene's
+// camera shows. Each race's scene is framed for the characters of that race at
+// their own size, with the camera looking at a point about a yard up; a model
+// that rises past the top of the view is brought down to fit it, and one that
+// fits is left alone.
+func sceneCharacterFit(background, character glueModelInfo, aspect float32) float32 {
+	if !background.hasStand || background.fov <= 0 || character.rawHeight <= 0 || aspect <= 0 {
+		return 1
+	}
+	vertical := float64(background.fov) / math.Sqrt(float64(aspect*aspect)+1)
+	dx, dy, dz := background.position.X-background.standPosition.X, background.position.Y-background.standPosition.Y, background.position.Z-background.standPosition.Z
+	distance := math.Sqrt(float64(dx*dx + dy*dy + dz*dz))
+	top := float64(background.target.Y) + 0.485*2*distance*math.Tan(vertical/2)
+	room := top - float64(background.standPosition.Y)
+	height := float64(character.rawHeight * background.modelScale)
+	if height <= 0 || room >= height {
+		return 1
+	}
+	if room <= 0 {
+		return 1
+	}
+	return float32(room / height)
 }

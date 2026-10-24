@@ -9,7 +9,7 @@ import (
 	"github.com/MorenoLand/Moreno.WoW/world"
 )
 
-func loadGlueSceneRequest(loader *ui.Loader, tables *worldCreatureTables, sceneModels []ui.GlueSceneModel, path, sceneKey, characterKey string, selected world.Character, facing float32, debug bool) sceneLoadResult {
+func loadGlueSceneRequest(loader *ui.Loader, tables *worldCreatureTables, sceneModels []ui.GlueSceneModel, path, sceneKey, characterKey string, selected world.Character, facing float32, aspect float32, debug bool) sceneLoadResult {
 	started := time.Now()
 	result := sceneLoadResult{path: path, sceneKey: sceneKey, characterKey: characterKey, characterFacing: facing}
 	var err error
@@ -31,7 +31,7 @@ func loadGlueSceneRequest(loader *ui.Loader, tables *worldCreatureTables, sceneM
 			} else {
 				if backgroundInfo, ok := result.model.UserData().(glueModelInfo); ok && backgroundInfo.hasStand {
 					characterInfo, _ := characterModel.UserData().(glueModelInfo)
-					characterScale, characterPosition := sceneCharacterTransform(backgroundInfo, characterInfo, characterModel.Position())
+					characterScale, characterPosition := sceneCharacterTransform(backgroundInfo, characterInfo, characterModel.Position(), aspect)
 					characterModel.SetScale(characterScale, characterScale, characterScale)
 					characterModel.SetPosition(characterPosition.X, characterPosition.Y, characterPosition.Z)
 				}

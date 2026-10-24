@@ -19,4 +19,5 @@ config.json
 *.dll
 *.pdb
 *_test.go
+TODO.md
 test/
