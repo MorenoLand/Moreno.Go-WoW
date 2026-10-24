@@ -191,6 +191,8 @@ type widget struct {
 	value              float64
 	valueStep          float64
 	orientation        string
+	// unanchored is set when a script took all the points off a widget.
+	unanchored bool
 	thumbTexture       *widget
 	verticalRange      float64
 	horizontalRange    float64
@@ -741,6 +743,8 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		},
 		"ClearAllPoints": func(L *lua.LState, w *widget) int {
 			w.points = nil
+			// A frame left without anchors has no place on the screen and is not drawn.
+			w.unanchored = true
 			return 0
 		},
 		"SetPoint": func(L *lua.LState, w *widget) int {
@@ -794,6 +798,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 				}
 			}
 			w.points = append(w.points, p)
+			w.unanchored = false
 			return 0
 		},
 		"SetAllPoints": func(L *lua.LState, w *widget) int {

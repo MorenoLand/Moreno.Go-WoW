@@ -238,6 +238,7 @@ func newUIEngine(rt *Runtime, loader *Loader, bgImagePath string) (*UIEngine, er
 		BgImagePath:  bgImagePath,
 		uiScale:      1,
 	}
+	rt.engine = eng
 	rt.measureText = eng.measureFontString
 	rt.layoutOf = eng.onDemandRect
 	rt.loadAddOn = eng.loadAddOn
@@ -259,9 +260,27 @@ func (eng *UIEngine) Close() {
 	}
 }
 
+// ClearHover ends the hover over a widget, with the leave its scripts expect
+// (a tooltip it showed is hidden). The mouse going to the world, or the widget
+// going away under it, would otherwise leave that tooltip up.
+func (eng *UIEngine) ClearHover() {
+	old := eng.hovered
+	if old == nil {
+		return
+	}
+	if !old.highlightLocked {
+		old.highlighted = false
+	}
+	eng.hovered = nil
+	eng.fireHoverChange(old, nil)
+}
+
 func (eng *UIEngine) Update(elapsed float64) bool {
 	if elapsed <= 0 {
 		return false
+	}
+	if eng.hovered != nil && !eng.hovered.visibleThroughParents() {
+		eng.ClearHover()
 	}
 	statusChanged := false
 	eng.Rt.scriptDirty = false
@@ -648,6 +667,9 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 		if eng.worldActive && w.name == "MinimapMap" {
 			return
 		}
+		if w.unanchored && len(w.points) == 0 && w.kind != kindTexture && w.kind != kindFontString {
+			return
+		}
 
 		scaledRect := Rect{
 			X0: rect.X0 * uiScale,
@@ -765,10 +787,24 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 				if !w.autoTextWidth {
 					text = strings.Join(wrapText(text, f, int(scaledRect.W())), "\n")
 				}
-				if w.maxLines > 0 {
+				maxLines := w.maxLines
+				if w.height > 0 && !w.autoTextWidth {
+					// Lines that do not fit the height a FontString was given are not
+					// drawn; a long name keeps its first line.
+					if lineHeight := float64(f.Metrics().Height) / 64; lineHeight > 0 {
+						fit := int(scaledRect.H()/lineHeight + 0.001)
+						if fit < 1 {
+							fit = 1
+						}
+						if maxLines == 0 || fit < maxLines {
+							maxLines = fit
+						}
+					}
+				}
+				if maxLines > 0 {
 					lines := strings.Split(text, "\n")
-					if len(lines) > w.maxLines {
-						text = strings.Join(lines[:w.maxLines], "\n")
+					if len(lines) > maxLines {
+						text = strings.Join(lines[:maxLines], "\n")
 					}
 				}
 				eng.drawTextAlignedWidget(target, f, text, scaledRect, float64(screenHeight), c, w)

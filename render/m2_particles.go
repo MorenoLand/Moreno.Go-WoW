@@ -390,7 +390,11 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 		geom.AddVBO(group.rotationVBO)
 		geom.AddVBO(group.cornerVBO)
 		mat := material.NewStandard(&math32.Color{R: 1, G: 1, B: 1})
-		mat.SetShader("morenowow_particle")
+		if emitter.blend == 1 {
+			mat.SetShader("morenowow_particle_key")
+		} else {
+			mat.SetShader("morenowow_particle")
+		}
 		mat.SetShaderUnique(true)
 		mat.SetEmissiveColor(&math32.Color{R: 1, G: 1, B: 1})
 		mat.SetOpacity(alpha)
@@ -495,8 +499,10 @@ func newM2Particle(group *m2ParticleGroup, seed uint32, age float32, offset, dir
 		}
 		drag = 0
 	}
-	rotation := float32(emitter.textureRotation)*math.Pi/180 + random()*2*math.Pi
-	spin := emitter.baseSpin + emitter.baseSpinVary*(random()*2-1) + emitter.spin + emitter.spinVary*(random()*2-1)
+	// The sprite starts turned by the emitter's base spin (and its variation),
+	// not by a random angle, so a symbol keeps facing the way it was drawn.
+	rotation := float32(emitter.textureRotation)*math.Pi/180 + emitter.baseSpin + emitter.baseSpinVary*(random()*2-1)
+	spin := emitter.spin + emitter.spinVary*(random()*2-1)
 	return m2Particle{origin: addParticleVector(group.base, offset), velocity: velocity, gravity: gravity, age: age, life: life, seed: seed, rotation: rotation, spin: spin, drag: drag}
 }
 

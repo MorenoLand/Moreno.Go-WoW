@@ -1,6 +1,10 @@
 package render
 
-import "github.com/g3n/engine/renderer"
+import (
+	"strings"
+
+	"github.com/g3n/engine/renderer"
+)
 
 const m2VertexShader = `#include <attributes>
 uniform mat4 MVP;
@@ -60,10 +64,10 @@ vec3 m2Light() {
     if (LightAmbient.w < 0.5) {
         return vec3(1.0);
     }
+    // A two-sided surface (hair, a cloak, leaves) is lit by the one normal the
+    // model gives it from both sides, as the fixed-function lighting does; the
+    // far side is not turned around.
     vec3 n = normalize(FragNormal);
-    if (!gl_FrontFacing) {
-        n = -n;
-    }
     if (IndoorAmbient.w > 0.5) {
         vec3 total = IndoorAmbient.rgb;
         if (IndoorAmbient.w > 1.5) {
@@ -174,6 +178,10 @@ void main() {
     FragColor = vec4(result.rgb * ParticleColor, result.a * ParticleAlpha * MatOpacity);
 }`
 
+// m2ParticleKeyFragmentShader draws a particle of blending type 1 (alpha key):
+// texels that are mostly clear are not drawn.
+var m2ParticleKeyFragmentShader = strings.Replace(m2ParticleFragmentShader, "    FragColor = vec4(", "    if (result.a < 0.5) { discard; }\n    FragColor = vec4(", 1)
+
 const m2AlphaKeyFragmentShader = `precision highp float;
 #include <material>
 in vec2 FragTexcoord;
@@ -197,9 +205,6 @@ vec3 m2Light() {
         return vec3(1.0);
     }
     vec3 n = normalize(FragNormal);
-    if (!gl_FrontFacing) {
-        n = -n;
-    }
     return clamp(LightAmbient.rgb + LightDiffuse * max(dot(n, LightDirection), 0.0), 0.0, 1.0);
 }
 vec4 m2Combine(vec4 base, vec4 layer, float operation) {
@@ -416,6 +421,7 @@ func installM2Shaders(r *renderer.Renderer) {
 	r.Shaman.AddShader("morenowow_m2_fragment", m2FragmentShader)
 	r.Shaman.AddShader("morenowow_particle_vertex", m2ParticleVertexShader)
 	r.Shaman.AddShader("morenowow_particle_fragment", m2ParticleFragmentShader)
+	r.Shaman.AddShader("morenowow_particle_key_fragment", m2ParticleKeyFragmentShader)
 	r.Shaman.AddShader("morenowow_m2_alpha_key_fragment", m2AlphaKeyFragmentShader)
 	r.Shaman.AddShader("morenowow_world_terrain_vertex", worldTerrainVertexShader)
 	r.Shaman.AddShader("morenowow_world_terrain_fragment", worldTerrainFragmentShader)
@@ -429,6 +435,7 @@ func installM2Shaders(r *renderer.Renderer) {
 	r.Shaman.AddShader("morenowow_world_sky_fragment", worldSkyFragmentShader)
 	r.Shaman.AddProgram("morenowow_m2", "morenowow_m2_vertex", "morenowow_m2_fragment")
 	r.Shaman.AddProgram("morenowow_particle", "morenowow_particle_vertex", "morenowow_particle_fragment")
+	r.Shaman.AddProgram("morenowow_particle_key", "morenowow_particle_vertex", "morenowow_particle_key_fragment")
 	r.Shaman.AddProgram("morenowow_m2_alpha_key", "morenowow_m2_vertex", "morenowow_m2_alpha_key_fragment")
 	// World models use their own programs: uniforms belong to a program, so the
 	// sun-lit, fogged variants must not share state with the menu scenes.
@@ -442,6 +449,8 @@ func installM2Shaders(r *renderer.Renderer) {
 	r.Shaman.AddShader("morenowow_blob_shadow_vertex", blobShadowVertexShader)
 	r.Shaman.AddShader("morenowow_blob_shadow_fragment", blobShadowFragmentShader)
 	r.Shaman.AddProgram("morenowow_blob_shadow", "morenowow_blob_shadow_vertex", "morenowow_blob_shadow_fragment")
+	r.Shaman.AddShader("morenowow_select_ring_fragment", selectRingFragmentShader)
+	r.Shaman.AddProgram("morenowow_select_ring", "morenowow_blob_shadow_vertex", "morenowow_select_ring_fragment")
 	r.Shaman.AddShader("morenowow_nameplate_vertex", nameplateVertexShader)
 	r.Shaman.AddShader("morenowow_nameplate_fragment", nameplateFragmentShader)
 	r.Shaman.AddProgram("morenowow_nameplate", "morenowow_nameplate_vertex", "morenowow_nameplate_fragment")

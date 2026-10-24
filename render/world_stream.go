@@ -108,6 +108,7 @@ type worldTerrainStreamer struct {
 }
 
 func newWorldTerrainStreamer(loader *ui.Loader, mapName string, position world.WorldPosition, bigAlpha bool, cache *worldSceneAssetCache, root *core.Node) *worldTerrainStreamer {
+	cache.setFocus(position.X, position.Y)
 	return &worldTerrainStreamer{
 		loader: loader, mapName: mapName, position: position, bigAlpha: bigAlpha, cache: cache, root: root, compacted: make(map[*geometry.Geometry]bool),
 		collision: &worldCollisionHolder{}, liquid: cache.liquid,
@@ -235,6 +236,7 @@ func (s *worldTerrainStreamer) update(x, y float32) {
 	if s == nil {
 		return
 	}
+	s.cache.setFocus(x, y)
 	changed := false
 	for done := false; !done; {
 		select {

@@ -191,7 +191,7 @@ func registerSurveyedAPIDefaults(rt *Runtime) {
 		define(name, func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	}
 	for _, name := range emptyActionAPI {
-		if strings.HasPrefix(name, "Get") && hasNumericSuffix(name) {
+		if (strings.HasPrefix(name, "Get") && hasNumericSuffix(name)) || strings.HasPrefix(name, "BNGetNum") {
 			define(name, func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
 			continue
 		}

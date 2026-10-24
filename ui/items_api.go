@@ -671,6 +671,10 @@ func (rt *Runtime) autoStoreCursor(L *lua.LState, dstBagID int) {
 // useItem uses an item through the spell it carries, or equips it when it is
 // wearable and the bags are open.
 func (rt *Runtime) useItem(L *lua.LState, item *ItemInstance, bag, slot uint8) {
+	// At a merchant using an item sells it.
+	if rt.sellToMerchant(item) {
+		return
+	}
 	template := rt.itemTemplate(item.Entry)
 	if template == nil {
 		return

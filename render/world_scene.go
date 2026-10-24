@@ -7,8 +7,10 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/MorenoLand/Moreno.WoW/ui"
 	"github.com/MorenoLand/Moreno.WoW/world"
@@ -38,7 +40,7 @@ const (
 	// worldTileObjectDistance is how far from a tile centre its placed objects are
 	// built: the whole tile.
 	worldTileObjectDistance = worldTileSize * 0.75
-	worldWMODoodadBudget    = 128
+	worldWMODoodadBudget    = 384
 )
 
 type worldADT struct {
@@ -53,10 +55,10 @@ type worldADT struct {
 }
 
 type worldADTChunk struct {
-	gridX     int
-	gridY     int
-	flags     uint32
-	holes     uint16
+	gridX int
+	gridY int
+	flags uint32
+	holes uint16
 	// area is the AreaTable id the chunk lies in.
 	area      uint32
 	position  [3]float32
@@ -144,6 +146,9 @@ type worldWMOGroup struct {
 	flags uint32
 	// groupID is the id WMOAreaTable names the group by.
 	groupID uint32
+	// liquidType is the LiquidType row the group's liquid (MLIQ) is made of.
+	liquidType uint32
+	liquid     *worldWMOLiquid
 	// doodadRefs are the doodads (indices into the root's list) placed in the group.
 	doodadRefs []uint16
 	// lightRefs are the lights of the root's list the group is lit by (MOLR).
@@ -314,6 +319,9 @@ func newWorldSceneCollision(chunks []worldADTChunk, solids []worldCollisionMesh)
 }
 
 type worldSceneAssetCache struct {
+	// focus is where the player stands (x, y as float32 bits), for building the
+	// nearest doodads of a large map object first.
+	focus              atomic.Uint64
 	textures           map[string]*texture.Texture2D
 	placeholder        *texture.Texture2D
 	terrainPlaceholder *texture.Texture2D
@@ -327,6 +335,12 @@ type worldSceneAssetCache struct {
 	wmoMu sync.Mutex
 	// m2Emitters are the parsed models of doodads that have particle emitters.
 	m2Emitters map[string]*parsedM2
+	// animated says which doodad models move.
+	animated   map[string]bool
+	animatedMu sync.Mutex
+	// m2Collision are the collision meshes of doodad models.
+	m2Collision map[string]*worldM2Collision
+	collisionMu sync.Mutex
 	wmoBuilt   map[int]*worldBuiltWMO
 }
 
@@ -419,7 +433,7 @@ func newWorldSceneAssetCache() *worldSceneAssetCache {
 		textures: make(map[string]*texture.Texture2D), placeholder: texture.NewTexture2DFromRGBA(worldPlaceholderTexture()),
 		terrainPlaceholder: texture.NewTexture2DFromRGBA(worldSolidTexture(color.RGBA{R: 255, G: 255, B: 255, A: 255})),
 		zeroAlpha:          texture.NewTexture2DFromRGBA(worldAlphaTexture(nil, false)), opaqueAlpha: texture.NewTexture2DFromRGBA(worldAlphaTexture(nil, true)),
-		m2Emitters: make(map[string]*parsedM2), wmoBuilt: make(map[int]*worldBuiltWMO), wmoModels: make(map[string]worldWMORoot), m2Parts: make(map[string]map[string]*m2Part), liquid: newWorldLiquidAnimator(),
+		m2Emitters: make(map[string]*parsedM2), animated: make(map[string]bool), m2Collision: make(map[string]*worldM2Collision), wmoBuilt: make(map[int]*worldBuiltWMO), wmoModels: make(map[string]worldWMORoot), m2Parts: make(map[string]map[string]*m2Part), liquid: newWorldLiquidAnimator(),
 	}
 }
 
@@ -1174,12 +1188,17 @@ func parseWorldWMOGroup(data []byte) (worldWMOGroup, error) {
 	if len(mogp) >= 0x3c {
 		group.groupID = binary.LittleEndian.Uint32(mogp[0x38:0x3c])
 	}
+	if len(mogp) >= 0x38 {
+		group.liquidType = binary.LittleEndian.Uint32(mogp[0x34:0x38])
+	}
 	for offset := 68; offset < len(mogp); {
 		id, _, payload, _, next, ok := worldChunk(mogp, offset)
 		if !ok {
 			break
 		}
 		switch id {
+		case "MLIQ":
+			group.liquid = parseWorldWMOLiquid(payload)
 		case "MOVT":
 			group.vertices = append(group.vertices, worldFloat32s(payload, 3)...)
 		case "MONR":
@@ -1232,14 +1251,24 @@ func worldFloat32s(data []byte, components int) []float32 {
 	return result
 }
 
-func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int, []*worldParticleSource) {
+func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int, []*worldParticleSource, []worldCollisionMesh) {
 	root := core.NewNode()
 	var particles []*worldParticleSource
+	var doodadSolid worldCollisionMesh
 	builders := make(map[string]*worldM2MeshBuilder)
 	for _, placement := range adt.m2Placements {
 		origin := worldWMOPosition(placement.position)
 		dx, dy := origin[0]-position.X, origin[1]-position.Y
 		if dx*dx+dy*dy > worldTileObjectDistance*worldTileObjectDistance {
+			continue
+		}
+		doodadSolid.triangles = append(doodadSolid.triangles, cache.m2CollisionTriangles(loader, placement.path, origin, worldM2Rotation(placement.rotation), placement.scale)...)
+		if cache.worldDoodadAnimated(loader, placement.path) {
+			if len(particles) < worldParticleBudget {
+				if source := newWorldAnimatedDoodad(loader, placement.path, origin, worldM2Rotation(placement.rotation), placement.scale); source != nil {
+					particles = append(particles, source)
+				}
+			}
 			continue
 		}
 		parts, ok := cache.m2Parts[placement.path]
@@ -1297,10 +1326,14 @@ func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.World
 	for _, source := range particles {
 		root.Add(source.node)
 	}
-	if meshCount == 0 && len(particles) == 0 {
-		return nil, 0, nil
+	var solids []worldCollisionMesh
+	if len(doodadSolid.triangles) > 0 {
+		solids = append(solids, doodadSolid)
 	}
-	return root, meshCount, particles
+	if meshCount == 0 && len(particles) == 0 {
+		return nil, 0, nil, solids
+	}
+	return root, meshCount, particles, solids
 }
 
 func rotateWorldM2Vector(rotation *math32.Quaternion, value [3]float32) [3]float32 {
@@ -1554,6 +1587,15 @@ func worldCharacterModelPath(character world.Character) string {
 	return fmt.Sprintf(`Character\%s\%s\%s%s.m2`, folder, sex, folder, sex)
 }
 
+func (cache *worldSceneAssetCache) setFocus(x, y float32) {
+	cache.focus.Store(uint64(math.Float32bits(x))<<32 | uint64(math.Float32bits(y)))
+}
+
+func (cache *worldSceneAssetCache) getFocus() (float32, float32) {
+	bits := cache.focus.Load()
+	return math.Float32frombits(uint32(bits >> 32)), math.Float32frombits(uint32(bits))
+}
+
 func buildWorldPlayer(loader *ui.Loader, character world.Character, position world.WorldPosition) (*core.Node, error) {
 	model, err := loadCharacterModel(loader, character, true)
 	if err != nil {
@@ -1599,7 +1641,13 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 			}
 			for _, emitter := range built.emitters {
 				if len(particles) < worldParticleBudget {
-					if source := newWorldParticleSource(loader, emitter.model, cache, emitter.origin, emitter.rotation, emitter.scale); source != nil {
+					var source *worldParticleSource
+					if emitter.path != "" {
+						source = newWorldAnimatedDoodad(loader, emitter.path, emitter.origin, emitter.rotation, emitter.scale)
+					} else {
+						source = newWorldParticleSource(loader, emitter.model, cache, emitter.origin, emitter.rotation, emitter.scale)
+					}
+					if source != nil {
 						root.Add(source.node)
 						particles = append(particles, source)
 					}
@@ -1619,7 +1667,7 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 			}
 			cache.wmoModels[placement.path] = model
 		}
-		meshes, placementSolids, indoorDoodads := buildWorldWMOPlacement(loader, placement, model, cache.textures, cache.placeholder)
+		meshes, placementSolids, indoorDoodads := buildWorldWMOPlacement(loader, placement, model, cache.textures, cache.placeholder, cache.liquid)
 		built = &worldBuiltWMO{users: 1, indoor: indoorDoodads}
 		ids = append(ids, id)
 		builtSolids := append([]worldCollisionMesh(nil), placementSolids...)
@@ -1646,9 +1694,42 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 			set := model.doodadSets[setIndex]
 			start := minWorldInt(int(set.start), len(model.doodads))
 			end := minWorldInt(start+int(set.count), len(model.doodads))
-			for doodadIndex, doodad := range model.doodads[start:end] {
+			// A city holds thousands of doodads; the ones nearest the player are built.
+			focusX, focusY := cache.getFocus()
+			order := make([]int, 0, end-start)
+			for index := start; index < end; index++ {
+				order = append(order, index)
+			}
+			nearness := func(index int) float32 {
+				at := transformWorldWMOPoint(model.doodads[index].position, placement)
+				dx, dy := at[0]-focusX, at[1]-focusY
+				return dx*dx + dy*dy
+			}
+			sort.SliceStable(order, func(a, b int) bool { return nearness(order[a]) < nearness(order[b]) })
+			for _, index := range order {
+				doodadIndex, doodad := index-start, model.doodads[index]
 				if doodadCount >= worldWMODoodadBudget {
 					break
+				}
+				worldPosition := transformWorldWMOPoint(doodad.position, placement)
+				rotation := worldWMODoodadRotation(doodad.rotation, placement.rotation)
+				scale := placement.scale * doodad.scale
+				if triangles := cache.m2CollisionTriangles(loader, doodad.path, worldPosition, rotation, scale); len(triangles) > 0 {
+					solid := worldCollisionMesh{triangles: triangles}
+					built.solids = append(built.solids, solid)
+					solids = append(solids, solid)
+				}
+				if cache.worldDoodadAnimated(loader, doodad.path) {
+					// A moving doodad is its own animated model in every tile that shows it.
+					built.emitters = append(built.emitters, worldEmitterPlacement{path: doodad.path, origin: worldPosition, rotation: rotation, scale: scale})
+					if len(particles) < worldParticleBudget {
+						if source := newWorldAnimatedDoodad(loader, doodad.path, worldPosition, rotation, scale); source != nil {
+							root.Add(source.node)
+							particles = append(particles, source)
+						}
+					}
+					doodadCount++
+					continue
 				}
 				parts := cache.m2Parts[doodad.path]
 				if parts == nil {
@@ -1667,7 +1748,6 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 				if instance == nil {
 					continue
 				}
-				worldPosition := transformWorldWMOPoint(doodad.position, placement)
 				if group, indoor := indoorDoodads[uint16(start+doodadIndex)]; indoor {
 					lit := group
 					applyWorldLocalLight(instance, &lit)
@@ -1678,8 +1758,6 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 				root.Add(instance)
 				built.doodads = append(built.doodads, cloneWorldNode(instance))
 				if model := cache.m2Emitters[doodad.path]; model != nil {
-					rotation := worldWMODoodadRotation(doodad.rotation, placement.rotation)
-					scale := placement.scale * doodad.scale
 					built.emitters = append(built.emitters, worldEmitterPlacement{model: model, origin: worldPosition, rotation: rotation, scale: scale})
 					if len(particles) < worldParticleBudget {
 						if source := newWorldParticleSource(loader, model, cache, worldPosition, rotation, scale); source != nil {
@@ -1723,10 +1801,11 @@ func worldWMOPlacementInRange(placement worldWMOPlacement, position world.WorldP
 	return dx*dx+dy*dy <= worldTileObjectDistance*worldTileObjectDistance
 }
 
-func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, model worldWMORoot, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) ([]*graphic.Mesh, []worldCollisionMesh, map[uint16]worldLocalLight) {
+func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, model worldWMORoot, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D, animator *worldLiquidAnimator) ([]*graphic.Mesh, []worldCollisionMesh, map[uint16]worldLocalLight) {
 	indoorDoodads := make(map[uint16]worldLocalLight)
 	builders := make(map[worldWMOMeshKey]*worldWMOMeshBuilder)
 	solids := make([]worldCollisionMesh, 0)
+	var liquids []worldWMOGroupLiquid
 	transform := newWorldWMOTransform(placement)
 	instance := worldWMOInstanceID(placement)
 	for groupIndex := 0; groupIndex < model.groupCount; groupIndex++ {
@@ -1815,6 +1894,9 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 		}
 		if len(collisionMesh.triangles) > 0 {
 			solids = append(solids, collisionMesh)
+		}
+		if group.liquid != nil {
+			liquids = append(liquids, worldWMOGroupLiquid{liquid: group.liquid, liquidType: group.liquidType})
 		}
 		batches := group.batches
 		if len(batches) == 0 {
@@ -1954,6 +2036,7 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 		mesh.SetRenderOrder(-40 + int(key.material.blend))
 		meshes = append(meshes, mesh)
 	}
+	meshes = append(meshes, buildWorldWMOLiquids(loader, liquids, transform, animator)...)
 	return meshes, solids, indoorDoodads
 }
 
@@ -2359,7 +2442,7 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 	if wmoRoot != nil {
 		root.Add(wmoRoot)
 	}
-	m2Root, m2Count, m2Particles := buildWorldM2Instances(loader, adt, position, cache)
+	m2Root, m2Count, m2Particles, m2Solids := buildWorldM2Instances(loader, adt, position, cache)
 	if m2Root != nil {
 		root.Add(m2Root)
 	}
@@ -2371,7 +2454,7 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 	if progress != nil {
 		progress(0.98)
 	}
-	tileCollision := newWorldSceneCollision(adt.chunks, wmoSolids)
+	tileCollision := newWorldSceneCollision(adt.chunks, append(append([]worldCollisionMesh(nil), wmoSolids...), m2Solids...))
 	tileCollision.owned = owned
 	tileCollision.wmoInstances = wmoIDs
 	tileCollision.particles = append(m2Particles, wmoParticles...)

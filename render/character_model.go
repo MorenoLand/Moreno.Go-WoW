@@ -363,7 +363,13 @@ func resolveCharacterEquipment(loader *ui.Loader, character world.Character, sec
 				replace(13, uint16(1301+value))
 			}
 		} else if equipment.InventoryType == 7 {
+			// Legs: the first column picks the knee pads (group 9), the third the
+			// skirt or trousers shape (group 13); items that sell a skirt use only
+			// the third (ItemDisplayInfo of the skirted NPCs: 0, 0, 1).
 			if value := itemTable.value(record, 7); value > 0 {
+				replace(9, uint16(901+value))
+			}
+			if value := itemTable.value(record, 9); value > 0 {
 				replace(13, uint16(1301+value))
 			}
 		} else if equipment.InventoryType == 8 {

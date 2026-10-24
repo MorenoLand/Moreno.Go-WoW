@@ -92,6 +92,8 @@ type MonsterMove struct {
 	Duration uint32
 	Stopped  bool
 	Facing   MoveFacing
+	// Walking is set when the spline is travelled at the walk speed.
+	Walking bool
 }
 
 type UpdateBlock struct {
@@ -455,6 +457,7 @@ const (
 	monsterMoveFacingAngle  uint8  = 4
 	monsterSplineAnimation  uint32 = 0x00200000
 	monsterSplineParabolic  uint32 = 0x00000800
+	monsterSplineWalkmode   uint32 = 0x00001000
 	monsterSplineCatmullRom uint32 = 0x00040000
 	monsterSplineCyclic     uint32 = 0x00080000
 	monsterSplineFlying     uint32 = 0x00002000
@@ -521,6 +524,7 @@ func ParseMonsterMove(body []byte) (MonsterMove, error) {
 	if err != nil {
 		return MonsterMove{}, err
 	}
+	move.Walking = flags&monsterSplineWalkmode != 0
 	if flags&monsterSplineAnimation != 0 {
 		if err = r.Skip(5); err != nil {
 			return MonsterMove{}, err

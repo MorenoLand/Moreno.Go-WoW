@@ -35,6 +35,8 @@ type debugPanelData struct {
 	rendererPanels  int
 	rendererOthers  int
 	worldParts      int
+	// position is where the player stands and which way it faces, while in the world.
+	position string
 }
 
 func debugPanelLines(data debugPanelData) []string {
@@ -48,6 +50,7 @@ func debugPanelLines(data debugPanelData) []string {
 	}
 	lines := []string{
 		"G3N / OpenGL",
+		data.position,
 		"GPU " + shortenDebugPath(data.gpuRenderer, 52),
 		"vendor " + shortenDebugPath(data.gpuVendor, 46),
 		"GL " + shortenDebugPath(data.gpuVersion, 52),

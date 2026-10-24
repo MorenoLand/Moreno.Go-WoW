@@ -23,6 +23,14 @@ type worldAreaData struct {
 	// wmo maps a map object's id, name set and group id to an area; a group id
 	// of 0xFFFFFFFF names every group of the set.
 	wmo map[[3]uint32]uint32
+	// groups are the faction groups (FactionGroup.dbc) in table order, which
+	// name an area's controlling side.
+	groups []worldFactionGroup
+}
+
+type worldFactionGroup struct {
+	bit  uint32
+	name string
 }
 
 var (
@@ -44,6 +52,11 @@ func worldAreas(loader *ui.Loader) *worldAreaData {
 					data.areas[table.value(row, 0)] = area
 				}
 			}
+			if table, err := loadCharacterDBC(loader, `DBFilesClient\FactionGroup.dbc`); err == nil && table.fields >= 4 {
+				for row := 0; row < table.records; row++ {
+					data.groups = append(data.groups, worldFactionGroup{bit: 1 << (table.value(row, 1) & 31), name: table.string(row, 3)})
+				}
+			}
 			if table, err := loadCharacterDBC(loader, `DBFilesClient\WMOAreaTable.dbc`); err == nil && table.fields >= 11 {
 				for row := 0; row < table.records; row++ {
 					if area := table.value(row, 10); area != 0 {
@@ -55,6 +68,20 @@ func worldAreas(loader *ui.Loader) *worldAreaData {
 		worldAreaInfo = data
 	})
 	return worldAreaInfo
+}
+
+// factionText is the name of the side that holds an area, as GetZonePVPInfo
+// gives it: the first faction group of the table whose bit the area has.
+func (data *worldAreaData) factionText(row worldAreaRow) string {
+	if data == nil {
+		return ""
+	}
+	for _, group := range data.groups {
+		if row.factions&group.bit != 0 && group.name != "" {
+			return group.name
+		}
+	}
+	return ""
 }
 
 // wmoArea is the area a map object's group is in.

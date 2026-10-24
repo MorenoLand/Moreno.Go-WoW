@@ -35,6 +35,8 @@ type UnitInfo struct {
 	Connected  bool
 	Player     bool
 	Dead       bool
+	// Ghost is set for a player who has released the corpse (PLAYER_FLAGS_GHOST).
+	Ghost bool
 	Visible    bool
 	XP, XPMax  int
 	// Hostile and Friendly are the unit's reaction towards the player; neither
@@ -150,6 +152,9 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 	if value, ok := fields[0x36]; ok {
 		info.Level = int(value)
 	}
+	if value, ok := fields[playerFlagsField]; ok && unit == "player" {
+		info.Ghost = value&playerFlagGhost != 0
+	}
 	if value, ok := fields[634]; ok {
 		info.XP = int(value)
 	}
@@ -170,6 +175,23 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 		if entry.Changed {
 			changed = true
 			rt.FireEvent(entry.Event, lua.LString(unit))
+		}
+	}
+	if unit == "player" {
+		switch {
+		case !old.Dead && info.Dead:
+			rt.FireEvent("PLAYER_DEAD")
+			rt.Execute(`StaticPopup_Show("DEATH")`, "@death")
+		case old.Dead && !info.Dead:
+			rt.FireEvent("PLAYER_ALIVE")
+			rt.Execute(`StaticPopup_Hide("DEATH")`, "@alive")
+		}
+		if old.Ghost && !info.Ghost {
+			rt.FireEvent("PLAYER_UNGHOST")
+			rt.Execute(`StaticPopup_Hide("DEATH"); StaticPopup_Hide("RECOVER_CORPSE")`, "@unghost")
+		}
+		if old.Ghost != info.Ghost || old.Dead != info.Dead {
+			changed = true
 		}
 	}
 	if old.XP != info.XP || old.XPMax != info.XPMax {
@@ -559,10 +581,7 @@ func registerUnitAPI(rt *Runtime) {
 			L.Push(lua.LNil)
 			return 2
 		}
-		name := info.ClassName
-		if name == "" {
-			name = info.ClassFile
-		}
+		name := rt.unitClassText(info)
 		L.Push(lua.LString(name))
 		L.Push(lua.LString(info.ClassFile))
 		return 2
@@ -574,10 +593,7 @@ func registerUnitAPI(rt *Runtime) {
 			L.Push(lua.LNil)
 			return 2
 		}
-		name := info.RaceName
-		if name == "" {
-			name = info.RaceFile
-		}
+		name := rt.unitRaceText(info)
 		L.Push(lua.LString(name))
 		L.Push(lua.LString(info.RaceFile))
 		return 2
@@ -624,12 +640,12 @@ func registerUnitAPI(rt *Runtime) {
 	})
 	reg("UnitIsDeadOrGhost", func(L *lua.LState) int {
 		info := rt.unitInfo(L.OptString(1, ""))
-		L.Push(lua.LBool(info != nil && info.Dead))
+		L.Push(lua.LBool(info != nil && (info.Dead || info.Ghost)))
 		return 1
 	})
 	reg("UnitIsGhost", func(L *lua.LState) int {
 		info := rt.unitInfo(L.OptString(1, ""))
-		L.Push(lua.LBool(info != nil && info.Dead))
+		L.Push(lua.LBool(info != nil && info.Ghost))
 		return 1
 	})
 	reg("UnitIsVisible", func(L *lua.LState) int {
@@ -878,4 +894,39 @@ func (rt *Runtime) RefreshTarget(info UnitInfo) bool {
 	}
 	rt.FireEvent("PLAYER_TARGET_CHANGED")
 	return true
+}
+
+// unitRaceText is the name of a unit's race as the player reads it.
+func (rt *Runtime) unitRaceText(info *UnitInfo) string {
+	name := info.RaceName
+	if name == "" {
+		name = info.RaceFile
+	}
+	if strings.HasPrefix(name, "RACE_") {
+		name = createLocalizedValue(rt.L, name)
+	}
+	return name
+}
+
+// unitClassText is the name of a unit's class as the player reads it, in the
+// feminine form for a woman.
+func (rt *Runtime) unitClassText(info *UnitInfo) string {
+	name := info.ClassName
+	if name == "" {
+		name = info.ClassFile
+	}
+	token := strings.ToUpper(info.ClassFile)
+	if token == "" {
+		token = strings.ToUpper(name)
+	}
+	table := "LOCALIZED_CLASS_NAMES_MALE"
+	if info.Sex == 3 {
+		table = "LOCALIZED_CLASS_NAMES_FEMALE"
+	}
+	if names, ok := rt.L.GetGlobal(table).(*lua.LTable); ok {
+		if value, ok := names.RawGetString(token).(lua.LString); ok {
+			return string(value)
+		}
+	}
+	return createLocalizedValue(rt.L, strings.ToUpper(name))
 }

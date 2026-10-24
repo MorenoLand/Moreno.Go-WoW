@@ -240,3 +240,34 @@ func (c *Connection) CancelChannel(id uint32) error {
 	binary.LittleEndian.PutUint32(body, id)
 	return c.send(CancelChannelOpcode, body)
 }
+
+// ParseSpellGoHits reads the header of SMSG_SPELL_GO and the creatures it hit.
+func ParseSpellGoHits(body []byte) (SpellCastHeader, []uint64, error) {
+	header, err := ParseSpellCastHeader(body)
+	if err != nil {
+		return header, nil, err
+	}
+	r := NewReader(body, "SMSG_SPELL_GO")
+	if _, err = ReadPackedGUID(r); err != nil {
+		return header, nil, err
+	}
+	if _, err = ReadPackedGUID(r); err != nil {
+		return header, nil, err
+	}
+	if err = r.Skip(1 + 4 + 4 + 4); err != nil {
+		return header, nil, err
+	}
+	count, err := r.U8()
+	if err != nil {
+		return header, nil, err
+	}
+	hits := make([]uint64, 0, count)
+	for index := 0; index < int(count); index++ {
+		guid, err := r.U64()
+		if err != nil {
+			return header, hits, err
+		}
+		hits = append(hits, guid)
+	}
+	return header, hits, nil
+}

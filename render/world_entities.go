@@ -289,6 +289,12 @@ func applyWorldMonsterMove(entities map[uint64]*worldEntity, move world.MonsterM
 	entity.pathTotal = 0
 	entity.arrivalFacing = move.Facing
 	entity.movement.MovementFlags &^= world.MovementFlagForward | world.MovementFlagBackward | world.MovementFlagStrafeLeft | world.MovementFlagStrafeRight
+	// A spline walked at the walk speed plays the walk animation.
+	if move.Walking {
+		entity.movement.MovementFlags |= world.MovementFlagWalking
+	} else {
+		entity.movement.MovementFlags &^= world.MovementFlagWalking
+	}
 	if move.Stopped || move.Duration == 0 {
 		if facing, ok := worldEntityArrivalFacing(entities, entity, move.Facing); ok {
 			entity.movement.Position.Orientation = facing
@@ -371,7 +377,11 @@ func advanceWorldEntities(entities map[uint64]*worldEntity, elapsed float64, flo
 			}
 		}
 		if remaining >= 1 {
+			// Arriving, the unit keeps facing the way it walked unless the server
+			// names another way to face.
+			walked := entity.movement.Position.Orientation
 			entity.movement.Position = points[len(points)-1]
+			entity.movement.Position.Orientation = walked
 			switch entity.arrivalFacing.Kind {
 			case 2:
 				entity.movement.Position.Orientation = float32(math.Atan2(float64(entity.arrivalFacing.Y-entity.movement.Position.Y), float64(entity.arrivalFacing.X-entity.movement.Position.X)))

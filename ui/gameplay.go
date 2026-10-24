@@ -205,6 +205,14 @@ func (rt *Runtime) rebuildSpellBook() {
 			continue
 		}
 		line := rt.gameplay.Skills[info.SkillLine]
+		// A spell with no skill line, or one in the "Not Displayed" category
+		// (SkillLineCategory 12), belongs to no spellbook tab.
+		if info.SkillLine == 0 || line.Category == skillCategoryNotDisplayed {
+			continue
+		}
+		if !rt.showAllSpellRanks() && rt.hasHigherKnownRank(id, info) {
+			continue
+		}
 		key := uint32(0)
 		if line.Category == 7 || line.Category == 11 || line.Category == 9 && info.Recipe {
 			key = info.SkillLine
@@ -266,6 +274,43 @@ func (rt *Runtime) rebuildSpellBook() {
 		rt.gameplay.Book = append(rt.gameplay.Book, tab.IDs...)
 	}
 }
+// skillCategoryNotDisplayed is the SkillLineCategory the tables name "Not
+// Displayed".
+const skillCategoryNotDisplayed = 12
+
+func (rt *Runtime) showAllSpellRanks() bool {
+	value, ok := rt.GetCVar("ShowAllSpellRanks")
+	if !ok {
+		value, _ = defaultCVarValue("ShowAllSpellRanks")
+	}
+	return value == "1" || strings.EqualFold(value, "true")
+}
+
+// spellRankNumber is the number in a "Rank N" label, 0 for a spell without one.
+func spellRankNumber(rank string) int {
+	var number int
+	if _, err := fmt.Sscanf(rank, "Rank %d", &number); err != nil {
+		return 0
+	}
+	return number
+}
+
+// hasHigherKnownRank reports whether the character knows a later rank of the
+// same spell.
+func (rt *Runtime) hasHigherKnownRank(id uint32, info SpellInfo) bool {
+	rank := spellRankNumber(info.Rank)
+	if rank == 0 {
+		return false
+	}
+	for other := range rt.gameplay.Known {
+		candidate, ok := rt.gameplay.Catalog[other]
+		if ok && other != id && candidate.Name == info.Name && spellRankNumber(candidate.Rank) > rank {
+			return true
+		}
+	}
+	return false
+}
+
 func (rt *Runtime) spellForCall(L *lua.LState) uint32 {
 	if L.Get(1).Type() == lua.LTNumber {
 		id := uint32(L.CheckInt(1))

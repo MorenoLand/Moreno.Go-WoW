@@ -25,6 +25,20 @@ type Runtime struct {
 	// or nil while it is not ready (asking for it queues it).
 	PortraitSource   func(displayID uint32) image.Image
 	area             areaState
+	skills           skillState
+	factions         factionState
+	social           socialState
+	talents          talentState
+	loot             lootState
+	death            deathState
+	gossip           gossipState
+	merchant         merchantState
+	trainer          trainerState
+	repairPrice      func(entry uint32, lost int) int
+	quests           questState
+	// engine is the interface the runtime serves, for what only it knows (the
+	// mouse).
+	engine *UIEngine
 	// netLatency (ms) and netBandwidthIn (KB/s) are what GetNetStats answers.
 	netLatency       int
 	netBandwidthIn   float64
@@ -228,6 +242,17 @@ func NewRuntime(host Host) *Runtime {
 	registerAuraCancelAPI(rt)
 	registerAddonSupportAPI(rt)
 	registerCompanionAPI(rt)
+	registerSkillAPI(rt)
+	registerReputationAPI(rt)
+	registerMouseAPI(rt)
+	registerSocialAPI(rt)
+	registerTalentAPI(rt)
+	registerLootAPI(rt)
+	registerDeathAPI(rt)
+	registerGossipAPI(rt)
+	registerMerchantAPI(rt)
+	registerTrainerAPI(rt)
+	registerQuestAPI(rt)
 	registerWorldAPIDefaults(rt)
 	registerWorldMapDefaults(rt)
 	registerSurveyedAPIDefaults(rt)

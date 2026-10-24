@@ -383,9 +383,14 @@ func registerGlueAPI(rt *Runtime) {
 		} else {
 			L.Push(lua.LString(rt.area.pvp))
 		}
-		L.Push(lua.LFalse)
 		L.Push(lua.LNil)
-		return 3
+		switch rt.area.pvp {
+		case "friendly", "hostile", "contested":
+			// Wow.exe (FUN_0051ba50) names the side only for these.
+			L.Push(lua.LString(rt.area.faction))
+			return 3
+		}
+		return 2
 	})
 	reg("IsInInstance", func(L *lua.LState) int { L.Push(lua.LFalse); L.Push(lua.LNil); return 2 })
 	reg("GetNumWorldStateUI", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
@@ -582,8 +587,17 @@ func registerGlueAPI(rt *Runtime) {
 	})
 	reg("FillLocalizedClassList", func(L *lua.LState) int {
 		classes := L.CheckTable(1)
-		for _, name := range []string{"WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "DEATHKNIGHT", "SHAMAN", "MAGE", "WARLOCK", "DRUID"} {
-			classes.RawSetString(name, lua.LString(name))
+		male, female := rt.chrClassNames()
+		names := male
+		if L.ToBool(2) {
+			names = female
+		}
+		for _, token := range []string{"WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "DEATHKNIGHT", "SHAMAN", "MAGE", "WARLOCK", "DRUID"} {
+			name := names[token]
+			if name == "" {
+				name = token
+			}
+			classes.RawSetString(token, lua.LString(name))
 		}
 		return 0
 	})
@@ -1393,6 +1407,10 @@ func registerGlueAPI(rt *Runtime) {
 		if template != "" && rt.instantiateTemplate != nil {
 			rt.instantiateTemplate(w, template)
 		}
+		// A frame made by a script has no place until it is anchored.
+		if len(w.points) == 0 && w.kind == kindFrame {
+			w.unanchored = true
+		}
 		rt.register(w)
 		rt.fireHandler(w, "OnLoad")
 		L.Push(w.luaValue(L))
@@ -1439,6 +1457,10 @@ func cvarValue(rt *Runtime, name string) string {
 
 func setCVarValue(rt *Runtime, name, value string) {
 	rt.SetCVar(name, value)
+	if strings.EqualFold(name, "ShowAllSpellRanks") {
+		rt.rebuildSpellBook()
+		rt.FireEvent("SPELLS_CHANGED")
+	}
 	if host, ok := rt.Host.(AudioHost); ok {
 		host.SetAudioCVar(name, value)
 	}

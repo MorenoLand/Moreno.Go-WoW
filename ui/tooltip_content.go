@@ -205,7 +205,7 @@ func (rt *Runtime) fillUnitTooltip(w *widget, unit string) bool {
 	rt.tooltipAddLine(w, tooltipLine{left: info.Name})
 	if info.Level > 0 {
 		line := fmt.Sprintf("%s %d", rt.globalString("LEVEL", "Level"), info.Level)
-		for _, part := range []string{info.RaceName, info.ClassName} {
+		for _, part := range []string{rt.unitRaceText(info), rt.unitClassText(info)} {
 			if part != "" {
 				line += " " + part
 			}

@@ -344,6 +344,19 @@ func (rt *Runtime) tooltipMethods() map[string]func(L *lua.LState, w *widget) in
 			rt.showTooltip(w)
 			return 0
 		},
+		"Show": func(L *lua.LState, w *widget) int {
+			if len(w.tooltip().lines) > 0 {
+				rt.showTooltip(w)
+				return 0
+			}
+			if !w.shown {
+				w.shown = true
+				if w.visibleThroughParents() {
+					rt.fireShowCascade(w)
+				}
+			}
+			return 0
+		},
 		"AddLine": func(L *lua.LState, w *widget) int {
 			line := tooltipLine{left: L.OptString(2, ""), wrap: luaOptionalBool(L, 6)}
 			if color, ok := luaColorArgs(L, 3); ok {
