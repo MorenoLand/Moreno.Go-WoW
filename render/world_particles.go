@@ -12,6 +12,13 @@ import (
 // worldParticleBudget is how many particle emitting doodads one tile may run.
 const worldParticleBudget = 192
 
+// worldParticleDrawDistance is how far a source is drawn, worldParticleSourceRadius how
+// much room it is allowed when checking it against the view.
+const (
+	worldParticleDrawDistance = 95
+	worldParticleSourceRadius = 12
+)
+
 // worldParticleDistance is how far from the player a doodad's particles move.
 const worldParticleDistance = 120
 
@@ -24,6 +31,9 @@ type worldParticleSource struct {
 	// info is set for an animated doodad (a piston, a wheel, a waterfall), which
 	// plays its animation and runs its own emitters.
 	info *glueModelInfo
+	// pending is the time owed to a source that moves less often the further it is.
+	pending float64
+	tick    uint32
 }
 
 // worldEmitterPlacement is where a doodad with emitters stands, kept so every
@@ -96,18 +106,55 @@ func (s *worldTerrainStreamer) updateParticles(x, y float32, elapsed float64) {
 	for _, tile := range s.tiles {
 		for _, source := range tile.collision.particles {
 			dx, dy := source.centre[0]-x, source.centre[1]-y
-			if dx*dx+dy*dy > limit {
+			distanceSquared := dx*dx + dy*dy
+			if distanceSquared > limit {
+				source.node.SetVisible(false)
 				continue
 			}
+			// What is behind the viewer or beyond sight is not drawn, nor moved.
+			if frustum := s.viewFrustum; frustum != nil {
+				centre := math32.NewVector3(source.centre[0], source.centre[1], source.centre[2])
+				visible := distanceSquared <= worldParticleDrawDistance*worldParticleDrawDistance && frustum.IntersectsSphere(math32.NewSphere(centre, worldParticleSourceRadius))
+				source.node.SetVisible(visible)
+				if !visible {
+					continue
+				}
+			}
+			// What is far away moves every few frames, with the time it owes.
+			interval := uint32(1)
+			switch {
+			case distanceSquared > 90*90:
+				interval = 4
+			case distanceSquared > 50*50:
+				interval = 2
+			}
+			source.pending += elapsed
+			source.tick++
+			if source.tick%interval != 0 {
+				continue
+			}
+			step := source.pending
+			source.pending = 0
+			// Wow.exe thins emission by distance (FUN_0097dd20): full to 50 yards,
+			// a quarter from 87.5 on.
+			scale := float32(1)
+			if distanceSquared > 50*50 {
+				scale = float32(1 - (math.Sqrt(float64(distanceSquared))-50)*0.02)
+				if scale < 0.25 {
+					scale = 0.25
+				}
+			}
 			if source.system != nil {
-				source.system.Update(elapsed)
+				source.system.emissionScale = scale
+				source.system.Update(step)
 			}
 			if info := source.info; info != nil {
 				if info.animation != nil {
-					info.animation.Update(elapsed)
+					info.animation.Update(step)
 				}
 				if info.particles != nil {
-					info.particles.Update(elapsed)
+					info.particles.emissionScale = scale
+					info.particles.Update(step)
 				}
 			}
 		}

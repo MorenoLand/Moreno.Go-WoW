@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/MorenoLand/Moreno.WoW/ui"
 	"github.com/MorenoLand/Moreno.WoW/world"
@@ -36,7 +37,14 @@ type worldNameplate struct {
 	pixels [2]float32
 	// bucket is the pixel size the picture was drawn at.
 	bucket int
+	// hidden is whether ground or a wall stands between the player and the unit,
+	// looked at again every so often.
+	hidden    bool
+	checkedAt time.Time
 }
+
+// nameplateSightPeriod is how often a unit is checked for being behind a wall.
+const nameplateSightPeriod = 150 * time.Millisecond
 
 const (
 	nameplateVertexShader = `#include <attributes>
@@ -65,6 +73,9 @@ void main() {
 )
 
 // nameplateMaterial feeds a plate's size in world units to its shader.
+// worldPlateRenderOrder draws names after every blended surface.
+const worldPlateRenderOrder = 1 << 30
+
 type nameplateMaterial struct {
 	*material.Standard
 	size    [2]float32
@@ -101,15 +112,15 @@ func newNameplateMesh(tex *texture.Texture2D) (*graphic.Mesh, *nameplateMaterial
 	mat.SetShaderUnique(true)
 	mat.SetUseLights(material.UseLightNone)
 	mat.SetSide(material.SideDouble)
-	mat.SetDepthTest(true)
+	// Names are drawn over everything, far ones first, as the original's
+	// nameplates are: nothing nearer hides one (nor a unit's own parts).
+	mat.SetDepthTest(false)
 	mat.SetDepthMask(false)
 	mat.SetTransparent(true)
 	mat.SetBlending(material.BlendNormal)
 	mat.AddTexture(tex)
 	mesh := graphic.NewMesh(geom, mat)
-	// After the opaque surfaces and before blended model parts, which then
-	// draw over a name the unit they belong to stands in front of.
-	mesh.SetRenderOrder(0)
+	mesh.SetRenderOrder(worldPlateRenderOrder)
 	mesh.SetCullable(false)
 	return mesh, mat
 }
@@ -146,6 +157,8 @@ type nameplateInputs struct {
 	playerFaction uint32
 	// ownModelPath is the model file of the player's own character.
 	ownModelPath string
+	// collision answers whether a wall hides a unit.
+	collision *worldCollisionHolder
 }
 
 // nameplateColour is the colour of a unit's name from how it relates to the
@@ -235,6 +248,22 @@ func (n *worldNameplates) update(in nameplateInputs) {
 		lines := in.lines(entity)
 		if len(lines) == 0 {
 			continue
+		}
+		// A name is not shown through a wall or a hill.
+		if in.collision != nil && guid != in.ownGUID {
+			plate := n.plates[guid]
+			if plate == nil {
+				plate = &worldNameplate{}
+				n.plates[guid] = plate
+			}
+			if now := time.Now(); now.Sub(plate.checkedAt) > nameplateSightPeriod {
+				plate.checkedAt = now.Add(time.Duration(guid%7) * 12 * time.Millisecond)
+				at := node.Position()
+				plate.hidden = in.collision.segmentBlocked([3]float32{in.cameraAt[0], in.cameraAt[1], in.cameraAt[2] + 1.2}, [3]float32{at.X, at.Y, at.Z + 1.4})
+			}
+			if plate.hidden {
+				continue
+			}
 		}
 		modelPath := entity.modelPath
 		if guid == in.ownGUID {

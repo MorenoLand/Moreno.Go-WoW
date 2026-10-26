@@ -42,6 +42,9 @@ var optionsCVarMeta = map[string]cvarMeta{
 	"buffdurations": {Default: "1"},
 	// Wow.exe FUN_0051d9b0 registers ShowAllSpellRanks with the default "1".
 	"showallspellranks": {Default: "1"},
+	// targetFPS is the frame rate the world is drawn to hold: the view distance
+	// shrinks when a frame runs long (0 draws the whole view).
+	"targetfps": {Default: "100"},
 
 	// Gamma (FUN_00401b60): Gamma default DAT_009e1340 "1.0", DesktopGamma "0"
 	"gamma":        {Default: "1.0", Min: "-0.5", Max: "0.5"},

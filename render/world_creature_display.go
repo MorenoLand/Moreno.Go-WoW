@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/MorenoLand/Moreno.WoW/ui"
@@ -139,13 +140,15 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 	texturePaths := make(map[string]struct{})
 	stats := glueModelStats{}
 	animatedMeshes := make([]*m2AnimatedMesh, 0, len(parts))
-	for _, part := range parts {
-		if len(part.texturePaths) == 0 || len(part.indices) == 0 {
-			continue
+	// Parts that are drawn the same way (one texture, one blend) share a mesh:
+	// a unit was a draw for every piece of it, and most pieces share a texture.
+	for _, members := range groupWorldParts(parts) {
+		part := members[0]
+		stats.parts += len(members)
+		for _, member := range members {
+			stats.vertices += len(member.positions) / 3
+			stats.triangles += len(member.indices) / 3
 		}
-		stats.parts++
-		stats.vertices += len(part.positions) / 3
-		stats.triangles += len(part.indices) / 3
 		if part.material.blend >= 2 {
 			stats.transparentBatches++
 		} else {
@@ -154,22 +157,23 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 		for _, texturePath := range part.texturePaths {
 			texturePaths[texturePath] = struct{}{}
 		}
+		merged := mergeWorldParts(members)
 		geom := geometry.NewGeometry()
-		geom.SetIndices(part.indices)
-		positionVBO := gls.NewVBO(part.positions).AddAttrib(gls.VertexPosition)
-		normalVBO := gls.NewVBO(part.normals).AddAttrib(gls.VertexNormal)
+		geom.SetIndices(merged.indices)
+		positionVBO := gls.NewVBO(merged.positions).AddAttrib(gls.VertexPosition)
+		normalVBO := gls.NewVBO(merged.normals).AddAttrib(gls.VertexNormal)
 		geom.AddVBO(positionVBO)
 		geom.AddVBO(normalVBO)
-		uvVBO := gls.NewVBO(part.uvs).AddAttrib(gls.VertexTexcoord)
+		uvVBO := gls.NewVBO(merged.uvs).AddAttrib(gls.VertexTexcoord)
 		geom.AddVBO(uvVBO)
 		var uv2VBO *gls.VBO
 		if len(part.uvSets) > 1 {
-			uv2VBO = gls.NewVBO(part.uvs2).AddCustomAttrib("VertexTexcoord2", 2)
+			uv2VBO = gls.NewVBO(merged.uvs2).AddCustomAttrib("VertexTexcoord2", 2)
 			geom.AddVBO(uv2VBO)
 		}
-		colorVBO := gls.NewVBO(part.colors).AddAttrib(gls.VertexColor)
-		alphaVBO := gls.NewVBO(part.alphas).AddCustomAttrib("VertexM2Alpha", 1)
-		combinerVBO := gls.NewVBO(part.combiners).AddCustomAttrib("VertexM2Combiner", 2)
+		colorVBO := gls.NewVBO(merged.colors).AddAttrib(gls.VertexColor)
+		alphaVBO := gls.NewVBO(merged.alphas).AddCustomAttrib("VertexM2Alpha", 1)
+		combinerVBO := gls.NewVBO(merged.combiners).AddCustomAttrib("VertexM2Combiner", 2)
 		geom.AddVBO(colorVBO)
 		geom.AddVBO(alphaVBO)
 		geom.AddVBO(combinerVBO)
@@ -231,8 +235,19 @@ func buildWorldUnitModel(loader *ui.Loader, modelPath string, model parsedM2, sk
 		}
 		mesh := graphic.NewMesh(geom, mat)
 		mesh.SetRenderOrder(m2RenderOrder(part))
+		mesh.SetStateSort(true)
 		root.Add(mesh)
-		animatedMeshes = append(animatedMeshes, &m2AnimatedMesh{part: part, positionVBO: positionVBO, normalVBO: normalVBO, uvVBO: uvVBO, uv2VBO: uv2VBO, colorVBO: colorVBO, alphaVBO: alphaVBO, baseUVs: append(math32.ArrayF32(nil), part.uvs...), baseUVs2: append(math32.ArrayF32(nil), part.uvs2...), textureTransformIndices: append([]int(nil), part.textureTransformIndices...)})
+		var group *m2MeshGroup
+		if len(members) > 1 {
+			group = &m2MeshGroup{positionVBO: positionVBO, normalVBO: normalVBO, uvVBO: uvVBO, uv2VBO: uv2VBO, colorVBO: colorVBO, alphaVBO: alphaVBO, positions: merged.positions, normals: merged.normals, uvs: merged.uvs, uvs2: merged.uvs2, colors: merged.colors, alphas: merged.alphas}
+		}
+		for _, member := range members {
+			animated := &m2AnimatedMesh{part: member, group: group, baseUVs: append(math32.ArrayF32(nil), member.uvs...), baseUVs2: append(math32.ArrayF32(nil), member.uvs2...), textureTransformIndices: append([]int(nil), member.textureTransformIndices...)}
+			if group == nil {
+				animated.positionVBO, animated.normalVBO, animated.uvVBO, animated.uv2VBO, animated.colorVBO, animated.alphaVBO = positionVBO, normalVBO, uvVBO, uv2VBO, colorVBO, alphaVBO
+			}
+			animatedMeshes = append(animatedMeshes, animated)
+		}
 	}
 	if len(root.Children()) == 0 {
 		return nil, fmt.Errorf("%s: model textures or geometry unavailable", modelPath)
@@ -354,4 +369,105 @@ func buildWorldCreatureModelFromParts(loader *ui.Loader, path string, variations
 		}
 	}
 	return buildWorldUnitModel(loader, path, model, skin, overrides, activeGeosets, preloaded)
+}
+
+// groupWorldParts sorts the parts that can share a mesh together, in the order
+// each kind first appears. Parts with nothing to draw are left out.
+func groupWorldParts(parts map[string]*m2Part) [][]*m2Part {
+	type key struct {
+		order       int
+		blend       uint16
+		flags       uint16
+		envMask     uint32
+		textures    string
+		textureFlag string
+		secondUV    bool
+	}
+	index := make(map[key]int)
+	var groups [][]*m2Part
+	keys := make([]string, 0, len(parts))
+	for name := range parts {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	for _, name := range keys {
+		part := parts[name]
+		if len(part.texturePaths) == 0 || len(part.indices) == 0 {
+			continue
+		}
+		// Opaque pieces are drawn by depth, so the order a model lists them in does not
+		// matter; blended ones are layered in that order and keep it.
+		order := m2RenderOrder(part)
+		if part.material.blend < 2 {
+			order = 0
+		}
+		k := key{order: order, blend: uint16(part.material.blend), flags: uint16(part.material.flags), envMask: part.envMask, textures: strings.Join(part.texturePaths, "\x00"), textureFlag: fmt.Sprint(part.textureFlags), secondUV: len(part.uvSets) > 1}
+		if at, ok := index[k]; ok {
+			groups[at] = append(groups[at], part)
+			continue
+		}
+		index[k] = len(groups)
+		groups = append(groups, []*m2Part{part})
+	}
+	return groups
+}
+
+// mergedWorldParts are the arrays of a mesh made of several parts.
+type mergedWorldParts struct {
+	positions, normals, uvs, uvs2, colors, alphas, combiners math32.ArrayF32
+	indices                                                  math32.ArrayU32
+}
+
+// mergeWorldParts joins the arrays of parts into one set, and makes each
+// part's own arrays windows onto it, so that posing a part writes into the
+// shared buffers.
+func mergeWorldParts(members []*m2Part) mergedWorldParts {
+	if len(members) == 1 {
+		part := members[0]
+		return mergedWorldParts{part.positions, part.normals, part.uvs, part.uvs2, part.colors, part.alphas, part.combiners, part.indices}
+	}
+	var total, totalIndices int
+	for _, part := range members {
+		total += len(part.positions) / 3
+		totalIndices += len(part.indices)
+	}
+	merged := mergedWorldParts{
+		positions: make(math32.ArrayF32, 0, total*3), normals: make(math32.ArrayF32, 0, total*3),
+		uvs: make(math32.ArrayF32, 0, total*2), uvs2: make(math32.ArrayF32, 0, total*2),
+		colors: make(math32.ArrayF32, 0, total*3), alphas: make(math32.ArrayF32, 0, total),
+		combiners: make(math32.ArrayF32, 0, total*2), indices: make(math32.ArrayU32, 0, totalIndices),
+	}
+	for _, part := range members {
+		base := uint32(len(merged.positions) / 3)
+		merged.positions = append(merged.positions, part.positions...)
+		merged.normals = append(merged.normals, part.normals...)
+		merged.uvs = append(merged.uvs, part.uvs...)
+		merged.uvs2 = append(merged.uvs2, part.uvs2...)
+		merged.colors = append(merged.colors, part.colors...)
+		merged.alphas = append(merged.alphas, part.alphas...)
+		merged.combiners = append(merged.combiners, part.combiners...)
+		for _, index := range part.indices {
+			merged.indices = append(merged.indices, base+index)
+		}
+	}
+	// Each part now works in its own window of the shared arrays.
+	at := 0
+	for _, part := range members {
+		count := len(part.positions) / 3
+		window := func(source, shared math32.ArrayF32, width int) math32.ArrayF32 {
+			if len(source) == 0 {
+				return source
+			}
+			return shared[at*width : (at+count)*width : (at+count)*width]
+		}
+		part.positions = window(part.positions, merged.positions, 3)
+		part.normals = window(part.normals, merged.normals, 3)
+		part.uvs = window(part.uvs, merged.uvs, 2)
+		part.uvs2 = window(part.uvs2, merged.uvs2, 2)
+		part.colors = window(part.colors, merged.colors, 3)
+		part.alphas = window(part.alphas, merged.alphas, 1)
+		part.combiners = window(part.combiners, merged.combiners, 2)
+		at += count
+	}
+	return merged
 }

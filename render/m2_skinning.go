@@ -23,13 +23,14 @@ func buildM2BoneMatrices(bones []m2Bone, out []m2BoneMatrix) []m2BoneMatrix {
 		out = make([]m2BoneMatrix, len(bones))
 	}
 	out = out[:len(bones)]
-	for index, bone := range bones {
-		if int(bone.parent) >= index {
+	for index := range bones {
+		if int(bones[index].parent) >= index {
 			return buildM2BoneMatricesByWalk(bones, out)
 		}
 	}
 	axes := [3][3]float32{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}
-	for index, bone := range bones {
+	for index := range bones {
+		bone := &bones[index]
 		// The bone's own step: rotate about the pivot, scale per axis, then
 		// translate (only when the bone is animated, as in transformM2Point).
 		var local m2BoneMatrix

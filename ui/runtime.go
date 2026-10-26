@@ -264,6 +264,15 @@ func NewRuntime(host Host) *Runtime {
 // Close releases the Lua state.
 func (rt *Runtime) Close() { rt.L.Close() }
 
+// dropHiddenFocus takes keyboard focus off an edit box that is no longer shown
+// (a chat box that was closed, the login form once the world is up): typing and
+// Enter would otherwise go to something nobody can see.
+func (rt *Runtime) dropHiddenFocus() {
+	if rt.focused != nil && (!rt.focused.shown || !rt.focused.visibleThroughParents()) {
+		rt.setFocus(nil)
+	}
+}
+
 func (rt *Runtime) setFocus(w *widget) {
 	if w != nil && (!w.shown || !w.enabled) {
 		return

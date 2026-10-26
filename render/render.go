@@ -1,7 +1,6 @@
 package render
 
 import (
-	rdebug "runtime/debug"
 	"encoding/binary"
 	"fmt"
 	"image"
@@ -10,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	rdebug "runtime/debug"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -390,6 +390,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	debugModelLoadMS := float64(0)
 	debugUIRenderMS := float64(0)
 	worldAnimFrame := uint32(0)
+	var worldAnimJobs []worldAnimJob
+	worldDrawRadius := float32(worldObjectDistance)
+	var worldView worldViewLimiter
 	lastInstanceCheck := time.Time{}
 	debugUIRefreshes, debugUIRefreshCount := 0.0, 0
 	debugUpdateMS, debugSceneMS, debugSwapMS := 0.0, 0.0, 0.0
@@ -733,8 +736,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			facing = math.Mod(math.Mod(facing, 2*math.Pi)+2*math.Pi, 2*math.Pi)
 			position = fmt.Sprintf("pos %.2f %.2f %.2f | facing %.3f rad (%.1f deg) | map %d", worldCamera.position[0], worldCamera.position[1], worldCamera.position[2], facing, facing*180/math.Pi, worldMapID)
 		}
+		drawn := ""
+		if worldMode && worldModel != nil {
+			drawn = drawnBreakdown(r.Drawn(), scene, worldModel, worldEntities)
+		}
 		uiEngine.SetDebugPanelLines(debugPanelLines(debugPanelData{
-			position: position,
+			position: position, drawn: drawn,
 			width: width, height: height, fps: debugFPS, frameMS: debugFrameMS, uiRenderMS: debugUIRenderMS,
 			modelLoadMS: debugModelLoadMS, gpuVendor: gpuVendor, gpuRenderer: gpuRenderer, gpuVersion: gpuVersion,
 			dataPath: dataPath, scenePath: sceneModelPath, connection: connection, authAddress: clientConfig.AuthAddress,
@@ -871,7 +878,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		refreshChat(width, height)
 		lastUIRefresh = time.Now()
 	}
-	refresh := func() { refreshFrame(false) }
+	// Repainting the interface is a whole-screen job: what asks for it during a frame
+	// is served once, before the frame is drawn.
+	refreshPending := false
+	refresh := func() { refreshPending = true }
 	refreshDebugPanel := func() { refreshFrame(true) }
 	refreshMinimapOnly := func() {
 		if !worldMode || uiEngine == nil || uiMapImage == nil {
@@ -919,6 +929,8 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			worldModel.Dispose()
 			worldModel = nil
 		}
+		worldObjects.clear()
+		worldObjects = nil
 		if worldSky != nil {
 			scene.Remove(worldSky)
 			worldSky.Dispose()
@@ -985,8 +997,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						uiEngine.Rt.SetUnit("mouseover", worldNameState.unitInfoFor(entity, worldFactionState, worldEntities[worldCharacter.GUID].fields[unitFactionField]))
 						uiEngine.Rt.Execute(`GameTooltip_SetDefaultAnchor(GameTooltip, UIParent); GameTooltip:SetUnit("mouseover"); GameTooltip:Show()`, "@mouseover")
 					} else {
-						uiEngine.Rt.ClearUnit("mouseover")
+						// The tooltip is dropped while the unit still resolves: once
+						// the token is cleared GetUnit answers nil and it would stay.
 						uiEngine.Rt.Execute(`if GameTooltip:IsShown() and GameTooltip:GetUnit() then GameTooltip:Hide() end`, "@mouseover")
+						uiEngine.Rt.ClearUnit("mouseover")
 					}
 					refresh()
 				}
@@ -1131,11 +1145,19 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				if worldLight != nil {
 					worldAtmo = worldLight.sample(worldMapID, worldCamera.position[0], worldCamera.position[1], worldClock.minuteOfDay(time.Now()))
 				}
+				// How far is drawn follows what the frame can spare, and never passes the fog.
+				viewFar := worldViewFar(worldFarClip(uiEngine.Rt), worldView.next(debugSceneMS, worldSceneTarget(uiEngine.Rt)), &worldAtmo)
+				if viewFar != cam.Far() {
+					cam.SetFar(viewFar)
+					fitWorldSky(worldSky, cam)
+				}
+				worldDrawRadius = float32(math.Min(float64(viewFar), worldObjectDistance))
 				worldMovement.update(time.Now(), worldCamera)
 				worldNet.update(frameAt, activeSession, uiEngine.Rt)
 				if frameAt.Sub(lastEntityCompact) >= 3*time.Second {
 					lastEntityCompact = frameAt
 					compactEntityTextures(worldEntities)
+					worldObjects.compact()
 				}
 				if worldStreamer != nil && frameAt.Sub(lastAreaCheck) >= 250*time.Millisecond {
 					lastAreaCheck = frameAt
@@ -1211,14 +1233,19 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				viewProjection.MultiplyMatrices(&projMatrix, &viewMatrix)
 				frustum := math32.NewFrustumFromMatrix(&viewProjection)
 				cameraAt := cam.Position()
+				worldStreamer.viewFrustum = frustum
+				// Units are moved in two passes: what has to happen in order (who
+				// is visible, which pose each takes, the mounts) first, then the
+				// poses themselves, which touch nothing but each unit's own model
+				// and so run side by side, then what uses the poses.
+				worldObjects.update(uiEngine.AssetLoader, worldStreamer.collision, worldCamera.position, worldDrawRadius)
+				worldAnimJobs = worldAnimJobs[:0]
 				for _, entity := range worldEntities {
 					if entity.node == nil {
 						continue
 					}
 					if worldCamera != nil && entity.hasPosition {
-						dx := entity.movement.Position.X - worldCamera.position[0]
-						dy := entity.movement.Position.Y - worldCamera.position[1]
-						visible := dx*dx+dy*dy <= worldObjectDistance*worldObjectDistance
+						visible := worldEntityDrawn(entity, worldCamera.position, worldDrawRadius)
 						entity.node.SetVisible(visible)
 						if !visible {
 							continue
@@ -1235,7 +1262,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 							}
 						})
 					}
+					job := worldAnimJob{entity: entity}
 					if info, ok := entity.node.UserData().(glueModelInfo); ok {
+						job.info, job.hasInfo = info, true
 						if info.animation != nil {
 							motion := uint16(0)
 							if worldEntityMoving(entity) {
@@ -1254,19 +1283,37 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 								entity.animPending = step
 								step = 0
 							}
-							for _, soundID := range info.animation.Update(step) {
-								if host.audio != nil {
-									host.audio.PlaySoundID(soundID)
-								}
-							}
+							job.step = step
 						}
-						if info.particles != nil {
-							info.particles.Update(elapsed)
+					}
+					worldAnimJobs = append(worldAnimJobs, job)
+				}
+				runParallel(len(worldAnimJobs), func(index int) {
+					job := &worldAnimJobs[index]
+					if job.hasInfo && job.info.animation != nil {
+						job.sounds = job.info.animation.Update(job.step)
+					}
+				})
+				for index := range worldAnimJobs {
+					job := &worldAnimJobs[index]
+					entity := job.entity
+					for _, soundID := range job.sounds {
+						if host.audio != nil {
+							host.audio.PlaySoundID(soundID)
 						}
+					}
+					if job.hasInfo && job.info.particles != nil {
+						job.info.particles.Update(elapsed)
 					}
 					poseWorldEquipment(entity.node, entity.equipment)
 					updateWorldLocalLight(entity.node, &entity.light, worldStreamer.collision, frameAt)
-					updateWorldShadow(entity.node, &entity.shadow, worldStreamer.collision, uiEngine.AssetLoader, frameAt)
+					// A blob shadow is a draw of its own; far ones are not drawn.
+					dx, dy := entity.movement.Position.X-worldCamera.position[0], entity.movement.Position.Y-worldCamera.position[1]
+					entity.shadow.setInRange(dx*dx+dy*dy <= worldShadowRange*worldShadowRange)
+					if !entity.shadow.outOfRange {
+						updateWorldShadow(entity.node, &entity.shadow, worldStreamer.collision, uiEngine.AssetLoader, frameAt)
+					}
+					job.entity, job.sounds = nil, nil
 				}
 				updateCorpseNear(uiEngine.Rt, worldEntities, worldCharacter.GUID, worldCamera.position)
 				worldQuestMarks.update(scene, uiEngine.AssetLoader, worldEntities, worldCamera.position, worldSend, frameAt)
@@ -1290,7 +1337,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					return [3]float32{at.X, at.Y, at.Z}, rotation.Z, height, true
 				})
 				if targetGUID := uiEngine.Rt.UnitGUID("target"); targetGUID != 0 && worldEntities[targetGUID] != nil && worldEntities[targetGUID].node != nil && targetGUID != worldCharacter.GUID {
-					worldRing.update(scene, worldEntities[targetGUID].node, uiEngine.Rt.SelectionColor("target"), worldStreamer.collision, uiEngine.AssetLoader)
+					worldRing.update(scene, worldEntities[targetGUID].node, uiEngine.Rt.SelectionColor("target"), worldStreamer.collision, uiEngine.AssetLoader, [3]float32{cam.Position().X, cam.Position().Y, cam.Position().Z})
 				} else {
 					worldRing.hide()
 				}
@@ -1302,7 +1349,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					worldPlates.update(nameplateInputs{
 						scene: scene, engine: uiEngine, cam: cam, width: float32(screenWidth), height: float32(screenHeight),
 						entities: worldEntities, ownGUID: worldCharacter.GUID, playerNode: worldPlayer, cameraAt: worldCamera.position,
-						names: worldNameState, factions: worldFactionState, send: worldSend, playerFaction: playerFaction, ownModelPath: playerModelPath,
+						names: worldNameState, factions: worldFactionState, send: worldSend, playerFaction: playerFaction, ownModelPath: playerModelPath, collision: worldStreamer.collision,
 					})
 				}
 				if worldSky != nil {
@@ -1352,155 +1399,170 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				refreshDebugPanel()
 			}
 			worldBuildDeadline = time.Now().Add(8 * time.Millisecond)
-			select {
-			case loaded := <-sceneResults:
-				if loaded.requestKey != sceneRequestKey {
-					if loaded.model != nil {
-						loaded.model.Dispose()
+			// Every packet waiting is handled, within the time the frame can spare:
+			// taking one a frame left names and updates queued behind movement.
+			packetDeadline := time.Now().Add(worldPacketBudget)
+			for drained := 1; ; drained++ {
+				gotPacket := false
+				select {
+				case loaded := <-sceneResults:
+					if loaded.requestKey != sceneRequestKey {
+						if loaded.model != nil {
+							loaded.model.Dispose()
+						}
+						if loaded.characterModel != nil {
+							loaded.characterModel.Dispose()
+						}
+						if loaded.petModel != nil {
+							loaded.petModel.Dispose()
+						}
+						break
 					}
+					sceneLoadPending = false
+					debugModelLoadMS = loaded.loadMS
+					if loaded.err != nil || loaded.model == nil {
+						if loaded.err != nil {
+							debugModelError = loaded.err.Error()
+							if debug {
+								log.Printf("model %s: %v", loaded.path, loaded.err)
+							}
+						}
+						uiEngine.SetSceneBackground(true)
+						refresh()
+						break
+					}
+					debugModelError = ""
+					sceneModel = loaded.model
+					scene.Add(sceneModel)
+					sceneCameraDiagonalFOV = loaded.fov
+					sceneCameraFrameFraction = glueSceneFrameFraction(sceneModel)
+					configureSceneCamera(cam, sceneModel)
+					applyGlueSceneAspect(sceneModel, cam.Aspect())
+					sceneCharacterFacing = loaded.characterFacing
 					if loaded.characterModel != nil {
-						loaded.characterModel.Dispose()
+						sceneCharacterModel = loaded.characterModel
+						scene.Add(sceneCharacterModel)
 					}
 					if loaded.petModel != nil {
-						loaded.petModel.Dispose()
-					}
-					break
-				}
-				sceneLoadPending = false
-				debugModelLoadMS = loaded.loadMS
-				if loaded.err != nil || loaded.model == nil {
-					if loaded.err != nil {
-						debugModelError = loaded.err.Error()
-						if debug {
-							log.Printf("model %s: %v", loaded.path, loaded.err)
-						}
+						scenePetModel = loaded.petModel
+						scene.Add(scenePetModel)
 					}
 					uiEngine.SetSceneBackground(true)
+					if debug {
+						log.Printf("scene: loaded %s with %d parts", loaded.path, len(sceneModel.Children()))
+					}
 					refresh()
-					break
-				}
-				debugModelError = ""
-				sceneModel = loaded.model
-				scene.Add(sceneModel)
-				sceneCameraDiagonalFOV = loaded.fov
-				sceneCameraFrameFraction = glueSceneFrameFraction(sceneModel)
-				configureSceneCamera(cam, sceneModel)
-				applyGlueSceneAspect(sceneModel, cam.Aspect())
-				sceneCharacterFacing = loaded.characterFacing
-				if loaded.characterModel != nil {
-					sceneCharacterModel = loaded.characterModel
-					scene.Add(sceneCharacterModel)
-				}
-				if loaded.petModel != nil {
-					scenePetModel = loaded.petModel
-					scene.Add(scenePetModel)
-				}
-				uiEngine.SetSceneBackground(true)
-				if debug {
-					log.Printf("scene: loaded %s with %d parts", loaded.path, len(sceneModel.Children()))
-				}
-				refresh()
-			case result := <-results:
-				host.loginRunning = false
-				if result.err != nil {
-					if debug {
-						log.Printf("login: %v", result.err)
-					}
-					uiEngine.SetStatusKey("AUTH_FAILED")
-				} else {
-					glueCharacters = append(glueCharacters[:0], result.session.Characters...)
-					if debug {
-						for index, character := range glueCharacters {
-							equipment := make([]string, 0, len(character.Equipment))
-							for slot, item := range character.Equipment {
-								if item.DisplayID != 0 {
-									equipment = append(equipment, fmt.Sprintf("%d:%d/%d", slot, item.DisplayID, item.InventoryType))
-								}
-							}
-							log.Printf("character %d %s race=%d class=%d gender=%d appearance=%d/%d/%d/%d/%d/%d equipment=%v", index, character.Name, character.Race, character.Class, character.Gender, character.Skin, character.Face, character.HairStyle, character.HairColor, character.FacialHair, character.Map, equipment)
+				case result := <-results:
+					host.loginRunning = false
+					if result.err != nil {
+						if debug {
+							log.Printf("login: %v", result.err)
 						}
-					}
-					if activeSession != nil {
-						_ = activeSession.Close()
-					}
-					activeSession = result.session
-					if rememberMe {
-						if err := config.SavePassword(result.account, clientConfig.AuthAddress, result.password); err != nil && debug {
-							log.Printf("saving remembered password: %v", err)
-						}
+						uiEngine.SetStatusKey("AUTH_FAILED")
 					} else {
-						_ = config.DeletePassword(result.account, clientConfig.AuthAddress)
+						glueCharacters = append(glueCharacters[:0], result.session.Characters...)
+						if debug {
+							for index, character := range glueCharacters {
+								equipment := make([]string, 0, len(character.Equipment))
+								for slot, item := range character.Equipment {
+									if item.DisplayID != 0 {
+										equipment = append(equipment, fmt.Sprintf("%d:%d/%d", slot, item.DisplayID, item.InventoryType))
+									}
+								}
+								log.Printf("character %d %s race=%d class=%d gender=%d appearance=%d/%d/%d/%d/%d/%d equipment=%v", index, character.Name, character.Race, character.Class, character.Gender, character.Skin, character.Face, character.HairStyle, character.HairColor, character.FacialHair, character.Map, equipment)
+							}
+						}
+						if activeSession != nil {
+							_ = activeSession.Close()
+						}
+						activeSession = result.session
+						if rememberMe {
+							if err := config.SavePassword(result.account, clientConfig.AuthAddress, result.password); err != nil && debug {
+								log.Printf("saving remembered password: %v", err)
+							}
+						} else {
+							_ = config.DeletePassword(result.account, clientConfig.AuthAddress)
+						}
+						uiEngine.SetGlueState(glueState(result.session, uiEngine.AssetLoader))
 					}
-					uiEngine.SetGlueState(glueState(result.session, uiEngine.AssetLoader))
-				}
-				refresh()
-			case entry := <-worldResults:
-				if entry.err != nil {
-					worldLoading = false
-					uiEngine.SetWorldLoading(false)
-					if debug {
-						log.Printf("enter world: %v", entry.err)
-					}
-					uiEngine.SetStatusText(entry.err.Error())
 					refresh()
-					break
-				}
-				worldCharacter = entry.character
-				uiEngine.Rt.ResetGameplay()
-				if entry.spellErr != nil {
-					log.Printf("world spell catalog: %v", entry.spellErr)
-				} else {
-					uiEngine.Rt.SetSpellCatalog(entry.spells, entry.skills)
-				}
-				if entry.mapErr != nil {
-					log.Printf("world map catalog: %v", entry.mapErr)
-				} else {
-					uiEngine.Rt.SetMapCatalog(entry.mapData)
-				}
-				uiEngine.Rt.SetPlayerMapPosition(entry.position.Map, entry.position.X, entry.position.Y)
-				if entry.itemErr != nil {
-					log.Printf("world item catalog: %v", entry.itemErr)
-				} else {
-					uiEngine.Rt.SetItemCatalog(entry.itemLocal, entry.itemIcons, entry.itemClasses)
-					worldItemCatalog = entry.itemLocal
-				}
-				setLocalizedClassNames(uiEngine.Rt, uiEngine.AssetLoader)
-				worldQuestNames(uiEngine.Rt, worldNameState, uiEngine.AssetLoader)
-				seedWorldUnits(uiEngine.Rt, worldCharacter)
-				// The terrain is read and built on its own thread while the
-				// interface loads here.
-				var terrainProgress atomic.Uint64
-				terrainDone := make(chan worldTerrainLoad, 1)
-				go func(position world.WorldPosition) {
-					node, sceneInfo, err := loadWorldTerrainProgress(uiEngine.AssetLoader, position, func(progress float64) {
-						terrainProgress.Store(math.Float64bits(progress))
-					})
-					terrainDone <- worldTerrainLoad{node: node, info: sceneInfo, err: err}
-				}(entry.position)
-				loadingPath := worldLoadingScreenPath(uiEngine.AssetLoader, entry.position.Map)
-				uiEngine.SetLoadingScreen(loadingPath, 0)
-				if worldUIErr := uiEngine.LoadWorldUI(); worldUIErr != nil && debug {
-					log.Printf("world UI: %v", worldUIErr)
-				}
-				uiEngine.Rt.RequestLogout = func(bool) {
+				case entry := <-worldResults:
+					if entry.err != nil {
+						worldLoading = false
+						uiEngine.SetWorldLoading(false)
+						if debug {
+							log.Printf("enter world: %v", entry.err)
+						}
+						uiEngine.SetStatusText(entry.err.Error())
+						refresh()
+						break
+					}
+					worldCharacter = entry.character
+					uiEngine.Rt.ResetGameplay()
+					if entry.spellErr != nil {
+						log.Printf("world spell catalog: %v", entry.spellErr)
+					} else {
+						uiEngine.Rt.SetSpellCatalog(entry.spells, entry.skills)
+					}
+					if entry.mapErr != nil {
+						log.Printf("world map catalog: %v", entry.mapErr)
+					} else {
+						uiEngine.Rt.SetMapCatalog(entry.mapData)
+					}
+					uiEngine.Rt.SetPlayerMapPosition(entry.position.Map, entry.position.X, entry.position.Y)
+					if entry.itemErr != nil {
+						log.Printf("world item catalog: %v", entry.itemErr)
+					} else {
+						uiEngine.Rt.SetItemCatalog(entry.itemLocal, entry.itemIcons, entry.itemClasses)
+						worldItemCatalog = entry.itemLocal
+					}
+					setLocalizedClassNames(uiEngine.Rt, uiEngine.AssetLoader)
+					worldQuestNames(uiEngine.Rt, worldNameState, uiEngine.AssetLoader)
+					seedWorldUnits(uiEngine.Rt, worldCharacter)
+					// The terrain is read and built on its own thread while the
+					// interface loads here.
+					var terrainProgress atomic.Uint64
+					terrainDone := make(chan worldTerrainLoad, 1)
+					go func(position world.WorldPosition) {
+						node, sceneInfo, err := loadWorldTerrainProgress(uiEngine.AssetLoader, position, func(progress float64) {
+							terrainProgress.Store(math.Float64bits(progress))
+						})
+						terrainDone <- worldTerrainLoad{node: node, info: sceneInfo, err: err}
+					}(entry.position)
+					loadingPath := worldLoadingScreenPath(uiEngine.AssetLoader, entry.position.Map)
+					uiEngine.SetLoadingScreen(loadingPath, 0)
+					if worldUIErr := uiEngine.LoadWorldUI(); worldUIErr != nil && debug {
+						log.Printf("world UI: %v", worldUIErr)
+					}
+					uiEngine.Rt.RequestLogout = func(bool) {
+						if activeSession != nil {
+							_ = activeSession.SendRaw(world.ClientOpcode(0x004B), nil) // CMSG_LOGOUT_REQUEST
+						}
+					}
+					uiEngine.Rt.RequestLogoutCancel = func() {
+						if activeSession != nil {
+							_ = activeSession.SendRaw(world.ClientOpcode(0x004E), nil) // CMSG_LOGOUT_CANCEL
+						}
+					}
 					if activeSession != nil {
-						_ = activeSession.SendRaw(world.ClientOpcode(0x004B), nil) // CMSG_LOGOUT_REQUEST
+						worldPackets = activeSession.StartWorldPackets()
 					}
-				}
-				uiEngine.Rt.RequestLogoutCancel = func() {
-					if activeSession != nil {
-						_ = activeSession.SendRaw(world.ClientOpcode(0x004E), nil) // CMSG_LOGOUT_CANCEL
+					lastLoadingFrame := time.Time{}
+					showLoadingProgress := func(progress float64) {
+						if progress < 1 && !lastLoadingFrame.IsZero() && time.Since(lastLoadingFrame) < time.Second/30 {
+							return
+						}
+						uiEngine.SetLoadingScreen(loadingPath, progress)
+						refresh()
+						gl.Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
+						if renderErr := r.Render(scene, cam); renderErr != nil && debug {
+							log.Printf("loading render: %v", renderErr)
+						}
+						win.SwapBuffers()
+						win.PollEvents()
+						lastLoadingFrame = time.Now()
 					}
-				}
-				if activeSession != nil {
-					worldPackets = activeSession.StartWorldPackets()
-				}
-				lastLoadingFrame := time.Time{}
-				showLoadingProgress := func(progress float64) {
-					if progress < 1 && !lastLoadingFrame.IsZero() && time.Since(lastLoadingFrame) < time.Second/30 {
-						return
-					}
-					uiEngine.SetLoadingScreen(loadingPath, progress)
+					showLoadingProgress(0.05)
 					refresh()
 					gl.Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
 					if renderErr := r.Render(scene, cam); renderErr != nil && debug {
@@ -1508,386 +1570,384 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					}
 					win.SwapBuffers()
 					win.PollEvents()
-					lastLoadingFrame = time.Now()
-				}
-				showLoadingProgress(0.05)
-				refresh()
-				gl.Clear(gls.DEPTH_BUFFER_BIT | gls.STENCIL_BUFFER_BIT | gls.COLOR_BUFFER_BIT)
-				if renderErr := r.Render(scene, cam); renderErr != nil && debug {
-					log.Printf("loading render: %v", renderErr)
-				}
-				win.SwapBuffers()
-				win.PollEvents()
-				var terrain worldTerrainLoad
-				for waiting := true; waiting; {
-					select {
-					case terrain = <-terrainDone:
-						waiting = false
-					case <-time.After(10 * time.Millisecond):
-						showLoadingProgress(math.Float64frombits(terrainProgress.Load()))
+					var terrain worldTerrainLoad
+					for waiting := true; waiting; {
+						select {
+						case terrain = <-terrainDone:
+							waiting = false
+						case <-time.After(10 * time.Millisecond):
+							showLoadingProgress(math.Float64frombits(terrainProgress.Load()))
+						}
 					}
-				}
-				loaded, info, loadErr := terrain.node, terrain.info, terrain.err
-				if loadErr != nil {
+					loaded, info, loadErr := terrain.node, terrain.info, terrain.err
+					if loadErr != nil {
+						worldLoading = false
+						uiEngine.SetWorldLoading(false)
+						uiEngine.ClearLoadingScreen()
+						if debug {
+							log.Printf("world: %v", loadErr)
+						}
+						uiEngine.SetStatusText(loadErr.Error())
+						refresh()
+						break
+					}
+					worldMapName = info.mapName
+					worldMapID = entry.position.Map
+					if sceneModel != nil {
+						scene.Remove(sceneModel)
+						sceneModel.Dispose()
+						sceneModel = nil
+					}
+					if sceneCharacterModel != nil {
+						scene.Remove(sceneCharacterModel)
+						sceneCharacterModel.Dispose()
+						sceneCharacterModel = nil
+					}
+					if worldModel != nil {
+						scene.Remove(worldModel)
+						worldModel.Dispose()
+					}
+					if worldSky != nil {
+						scene.Remove(worldSky)
+						worldSky.Dispose()
+						worldSky = nil
+					}
+					if worldPlayer != nil {
+						scene.Remove(worldPlayer)
+						worldPlayer.Dispose()
+						worldPlayer = nil
+						if playerMount != nil {
+							playerMount.dispose(scene)
+							playerMount = nil
+						}
+					}
+					worldEntities = make(map[uint64]*worldEntity)
+					worldAuras.reset()
+					worldCreatureCache = worldCreatureTables{}
+					m2AnimationFallbacks = readAnimationFallbacks(uiEngine.AssetLoader)
+					if worldStreamer != nil {
+						worldStreamer.stop()
+						worldStreamer = nil
+					}
+					worldFloor = nil
+					worldModel = loaded
+					// Loading a world leaves a lot of garbage behind; give it back, and
+					// collect sooner from here on than the default of letting the heap double.
+					rdebug.SetGCPercent(50)
+					rdebug.FreeOSMemory()
+					scene.Add(worldModel)
+					worldObjects.clear()
+					worldObjects = newWorldObjectBatcher(scene)
+					worldSky = buildWorldSky()
+					worldSky.SetPosition(entry.position.X, entry.position.Y, entry.position.Z)
+					scene.Add(worldSky)
+					if entry.character.GUID != 0 {
+						if player, playerErr := buildWorldPlayer(uiEngine.AssetLoader, entry.character, entry.position); playerErr != nil {
+							if debug {
+								log.Printf("world player: %v", playerErr)
+							}
+						} else {
+							worldPlayer = player
+							playerEquipment, playerModelPath = nil, normalizeModelPath(worldCharacterModelPath(entry.character))
+							scene.Add(worldPlayer)
+							if debug {
+								log.Printf("world: player model children=%d position=%v scale=%v", len(worldPlayer.Children()), worldPlayer.Position(), worldPlayer.Scale())
+							}
+						}
+					}
+					worldCamera = newWorldCameraController(entry.position)
+					worldMoveNet = newWorldMovementNet(worldCharacter.GUID, time.Now(), func() *network.Session { return activeSession }, debug)
+					worldMovement = newWorldMovementReporter(worldCharacter.GUID, func(opcode world.ClientOpcode, info world.MovementInfo) error {
+						if activeSession == nil {
+							return fmt.Errorf("world session is closed")
+						}
+						return activeSession.SendMovement(opcode, worldCharacter.GUID, info)
+					})
+					if streamer, ok := loaded.UserData().(*worldTerrainStreamer); ok {
+						collision := streamer.collision
+						worldStreamer = streamer
+						worldCamera.setGround(collision.ground)
+						worldCamera.setFloor(collision.floor)
+						worldCamera.setMovement(collision.move)
+						worldCamera.setCameraTest(collision.cameraPosition)
+						worldCamera.setLiquid(collision.liquidAt)
+						worldLiquid = streamer.liquid
+						worldLight = readWorldLightTables(uiEngine.AssetLoader)
+						worldFactionState = readWorldFactions(uiEngine.AssetLoader)
+						*worldNameState = *newWorldNames()
+						worldCombatState.rt = uiEngine.Rt
+						worldCombatState.ownGUID = worldCharacter.GUID
+						worldCombatState.entities = func() map[uint64]*worldEntity { return worldEntities }
+						worldCombatState.factions = func() *worldFactions { return worldFactionState }
+						worldAtmo = worldLight.sample(entry.position.Map, entry.position.X, entry.position.Y, worldClock.minuteOfDay(time.Now()))
+						worldFloor = collision.floor
+						if debug {
+							if ground, found := collision.ground(entry.position.X, entry.position.Y); found {
+								log.Printf("world: ground at entry=%.3f delta=%.3f", ground, ground-entry.position.Z)
+							}
+						}
+					}
+					configureWorldCamera(cam, entry.position, worldFarClip(uiEngine.Rt))
+					worldCamera.update(1.0/60.0, cam, worldPlayer)
+					uiEngine.SetWorldMinimapPosition(worldMapName, worldCamera.position[0], worldCamera.position[1])
+					cameraPosition := cam.Position()
+					worldSky.SetPositionVec(&cameraPosition)
+					fitWorldSky(worldSky, cam)
+					if debug {
+						cameraPosition := cam.Position()
+						log.Printf("world: entry position=(%.3f,%.3f,%.3f) orientation=%.3f camera=(%.3f,%.3f,%.3f) near=%.3f far=%.3f", entry.position.X, entry.position.Y, entry.position.Z, entry.position.Orientation, cameraPosition.X, cameraPosition.Y, cameraPosition.Z, cam.Near(), cam.Far())
+					}
+					worldMode = true
 					worldLoading = false
 					uiEngine.SetWorldLoading(false)
+					sceneModelPath = ""
 					uiEngine.ClearLoadingScreen()
-					if debug {
-						log.Printf("world: %v", loadErr)
+					glueLayers.hide()
+					if uiImage != nil {
+						uiImage.SetVisible(true)
 					}
-					uiEngine.SetStatusText(loadErr.Error())
+					if uiMapImage != nil {
+						uiMapImage.SetVisible(true)
+					}
+					host.StopMusic()
+					gl.ClearColor(.08, .12, .16, 1)
+					if debug {
+						log.Printf("world: loaded %s tile %d,%d chunks=%d vertices=%d triangles=%d textures=%d wmoMeshes=%d m2Meshes=%d", info.mapName, info.tileX, info.tileY, info.chunks, info.vertices, info.triangles, info.textures, info.wmoMeshes, info.m2Meshes)
+					}
 					refresh()
-					break
-				}
-				worldMapName = info.mapName
-				worldMapID = entry.position.Map
-				if sceneModel != nil {
-					scene.Remove(sceneModel)
-					sceneModel.Dispose()
-					sceneModel = nil
-				}
-				if sceneCharacterModel != nil {
-					scene.Remove(sceneCharacterModel)
-					sceneCharacterModel.Dispose()
-					sceneCharacterModel = nil
-				}
-				if worldModel != nil {
-					scene.Remove(worldModel)
-					worldModel.Dispose()
-				}
-				if worldSky != nil {
-					scene.Remove(worldSky)
-					worldSky.Dispose()
-					worldSky = nil
-				}
-				if worldPlayer != nil {
-					scene.Remove(worldPlayer)
-					worldPlayer.Dispose()
-					worldPlayer = nil
-					if playerMount != nil {
-						playerMount.dispose(scene)
-						playerMount = nil
+				case event, ok := <-worldPackets:
+					gotPacket = true
+					if !ok {
+						worldPackets = nil
+						break
 					}
-				}
-				worldEntities = make(map[uint64]*worldEntity)
-				worldAuras.reset()
-				worldCreatureCache = worldCreatureTables{}
-				m2AnimationFallbacks = readAnimationFallbacks(uiEngine.AssetLoader)
-				if worldStreamer != nil {
-					worldStreamer.stop()
-					worldStreamer = nil
-				}
-				worldFloor = nil
-				worldModel = loaded
-				// Loading a world leaves a lot of garbage behind; give it back, and
-				// collect sooner from here on than the default of letting the heap double.
-				rdebug.SetGCPercent(50)
-				rdebug.FreeOSMemory()
-				scene.Add(worldModel)
-				worldSky = buildWorldSky()
-				worldSky.SetPosition(entry.position.X, entry.position.Y, entry.position.Z)
-				scene.Add(worldSky)
-				if entry.character.GUID != 0 {
-					if player, playerErr := buildWorldPlayer(uiEngine.AssetLoader, entry.character, entry.position); playerErr != nil {
+					if event.Err != nil {
 						if debug {
-							log.Printf("world player: %v", playerErr)
+							log.Printf("world packets: %v", event.Err)
 						}
-					} else {
-						worldPlayer = player
-						playerEquipment, playerModelPath = nil, normalizeModelPath(worldCharacterModelPath(entry.character))
-						scene.Add(worldPlayer)
-						if debug {
-							log.Printf("world: player model children=%d position=%v scale=%v", len(worldPlayer.Children()), worldPlayer.Position(), worldPlayer.Scale())
+						worldPackets = nil
+						break
+					}
+					if handled, err := worldCombatState.apply(event.Packet); handled {
+						if event.Packet.Opcode == world.NameQueryResponse {
+							worldSocialList.push(uiEngine.Rt, uiEngine.AssetLoader, worldNameState, worldSend)
 						}
-					}
-				}
-				worldCamera = newWorldCameraController(entry.position)
-				worldMoveNet = newWorldMovementNet(worldCharacter.GUID, time.Now(), func() *network.Session { return activeSession }, debug)
-				worldMovement = newWorldMovementReporter(worldCharacter.GUID, func(opcode world.ClientOpcode, info world.MovementInfo) error {
-					if activeSession == nil {
-						return fmt.Errorf("world session is closed")
-					}
-					return activeSession.SendMovement(opcode, worldCharacter.GUID, info)
-				})
-				if streamer, ok := loaded.UserData().(*worldTerrainStreamer); ok {
-					collision := streamer.collision
-					worldStreamer = streamer
-					worldCamera.setGround(collision.ground)
-					worldCamera.setFloor(collision.floor)
-					worldCamera.setMovement(collision.move)
-					worldCamera.setCameraTest(collision.cameraPosition)
-					worldCamera.setLiquid(collision.liquidAt)
-					worldLiquid = streamer.liquid
-					worldLight = readWorldLightTables(uiEngine.AssetLoader)
-					worldFactionState = readWorldFactions(uiEngine.AssetLoader)
-					*worldNameState = *newWorldNames()
-					worldCombatState.rt = uiEngine.Rt
-					worldCombatState.ownGUID = worldCharacter.GUID
-					worldCombatState.entities = func() map[uint64]*worldEntity { return worldEntities }
-					worldCombatState.factions = func() *worldFactions { return worldFactionState }
-					worldAtmo = worldLight.sample(entry.position.Map, entry.position.X, entry.position.Y, worldClock.minuteOfDay(time.Now()))
-					worldFloor = collision.floor
-					if debug {
-						if ground, found := collision.ground(entry.position.X, entry.position.Y); found {
-							log.Printf("world: ground at entry=%.3f delta=%.3f", ground, ground-entry.position.Z)
+						if err != nil && debug {
+							log.Printf("world combat packet: %v", err)
 						}
+						if player := worldEntities[worldCharacter.GUID]; player != nil {
+							syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend, &worldAuras, uiEngine.AssetLoader)
+						}
+						refresh()
+						break
 					}
-				}
-				configureWorldCamera(cam, entry.position, worldFarClip(uiEngine.Rt))
-				worldCamera.update(1.0/60.0, cam, worldPlayer)
-				uiEngine.SetWorldMinimapPosition(worldMapName, worldCamera.position[0], worldCamera.position[1])
-				cameraPosition := cam.Position()
-				worldSky.SetPositionVec(&cameraPosition)
-					fitWorldSky(worldSky, cam)
-				if debug {
-					cameraPosition := cam.Position()
-					log.Printf("world: entry position=(%.3f,%.3f,%.3f) orientation=%.3f camera=(%.3f,%.3f,%.3f) near=%.3f far=%.3f", entry.position.X, entry.position.Y, entry.position.Z, entry.position.Orientation, cameraPosition.X, cameraPosition.Y, cameraPosition.Z, cam.Near(), cam.Far())
-				}
-				worldMode = true
-				worldLoading = false
-				uiEngine.SetWorldLoading(false)
-				sceneModelPath = ""
-				uiEngine.ClearLoadingScreen()
-				glueLayers.hide()
-				if uiImage != nil {
-					uiImage.SetVisible(true)
-				}
-				if uiMapImage != nil {
-					uiMapImage.SetVisible(true)
-				}
-				host.StopMusic()
-				gl.ClearColor(.08, .12, .16, 1)
-				if debug {
-					log.Printf("world: loaded %s tile %d,%d chunks=%d vertices=%d triangles=%d textures=%d wmoMeshes=%d m2Meshes=%d", info.mapName, info.tileX, info.tileY, info.chunks, info.vertices, info.triangles, info.textures, info.wmoMeshes, info.m2Meshes)
-				}
-				refresh()
-			case event, ok := <-worldPackets:
-				if !ok {
-					worldPackets = nil
-					break
-				}
-				if event.Err != nil {
-					if debug {
-						log.Printf("world packets: %v", event.Err)
+					if event.Packet.Opcode == world.SpellStart || event.Packet.Opcode == world.SpellGo {
+						worldSpellFX.handle(scene, uiEngine.AssetLoader, event.Packet, time.Now())
 					}
-					worldPackets = nil
-					break
-				}
-				if handled, err := worldCombatState.apply(event.Packet); handled {
-					if event.Packet.Opcode == world.NameQueryResponse {
+					if handled, err := applyWorldSpellPacket(uiEngine.Rt, event.Packet, worldCharacter.GUID); handled {
+						if err != nil {
+							log.Printf("world spell packet: %v", err)
+						} else {
+							refresh()
+						}
+						break
+					}
+					if worldMoveNet != nil && worldMoveNet.handle(event.Packet, worldCamera, worldMovement, time.Now()) {
+						break
+					}
+					worldNet.received += len(event.Packet.Body) + 4
+					if (worldNPCContext{rt: uiEngine.Rt, names: worldNameState, entities: worldEntities}).handle(event.Packet) {
+						refresh()
+						break
+					}
+					if worldQuestMarks.handle(event.Packet) {
+						break
+					}
+					if handleProgressPacket(uiEngine.Rt, worldNameState, worldEntities, event.Packet, func(eventName, text string) {
+						chatLineID++
+						uiEngine.FireWorldChat(eventName, lua.LString(text), lua.LString(""), lua.LString(""), lua.LString(""), lua.LString(""), lua.LString(""), lua.LNumber(0), lua.LNumber(0), lua.LString(""), lua.LNumber(0), lua.LNumber(chatLineID), lua.LString(""))
+					}) {
+						refresh()
+						break
+					}
+					if handleDeathPacket(uiEngine.Rt, worldNameState, event.Packet) {
+						refresh()
+						break
+					}
+					if handleLootPacket(uiEngine.Rt, event.Packet) {
+						refresh()
+						break
+					}
+					if worldTalentList.handle(event.Packet) {
+						worldTalentList.push(uiEngine.Rt, uiEngine.AssetLoader, worldCharacter.Class)
+						refresh()
+						break
+					}
+					if worldSocialList.handle(event.Packet) {
 						worldSocialList.push(uiEngine.Rt, uiEngine.AssetLoader, worldNameState, worldSend)
-					}
-					if err != nil && debug {
-						log.Printf("world combat packet: %v", err)
-					}
-					if player := worldEntities[worldCharacter.GUID]; player != nil {
-						syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend, &worldAuras, uiEngine.AssetLoader)
-					}
-					refresh()
-					break
-				}
-				if event.Packet.Opcode == world.SpellStart || event.Packet.Opcode == world.SpellGo {
-					worldSpellFX.handle(scene, uiEngine.AssetLoader, event.Packet, time.Now())
-				}
-				if handled, err := applyWorldSpellPacket(uiEngine.Rt, event.Packet, worldCharacter.GUID); handled {
-					if err != nil {
-						log.Printf("world spell packet: %v", err)
-					} else {
 						refresh()
-					}
-					break
-				}
-				if worldMoveNet != nil && worldMoveNet.handle(event.Packet, worldCamera, worldMovement, time.Now()) {
-					break
-				}
-				worldNet.received += len(event.Packet.Body) + 4
-				if (worldNPCContext{rt: uiEngine.Rt, names: worldNameState, entities: worldEntities}).handle(event.Packet) {
-					refresh()
-					break
-				}
-				if worldQuestMarks.handle(event.Packet) {
-					break
-				}
-				if handleProgressPacket(uiEngine.Rt, worldNameState, worldEntities, event.Packet, func(eventName, text string) {
-					chatLineID++
-					uiEngine.FireWorldChat(eventName, lua.LString(text), lua.LString(""), lua.LString(""), lua.LString(""), lua.LString(""), lua.LString(""), lua.LNumber(0), lua.LNumber(0), lua.LString(""), lua.LNumber(0), lua.LNumber(chatLineID), lua.LString(""))
-				}) {
-					refresh()
-					break
-				}
-				if handleDeathPacket(uiEngine.Rt, worldNameState, event.Packet) {
-					refresh()
-					break
-				}
-				if handleLootPacket(uiEngine.Rt, event.Packet) {
-					refresh()
-					break
-				}
-				if worldTalentList.handle(event.Packet) {
-					worldTalentList.push(uiEngine.Rt, uiEngine.AssetLoader, worldCharacter.Class)
-					refresh()
-					break
-				}
-				if worldSocialList.handle(event.Packet) {
-					worldSocialList.push(uiEngine.Rt, uiEngine.AssetLoader, worldNameState, worldSend)
-					refresh()
-					break
-				}
-				if worldRep.handle(event.Packet) {
-					watched := uint32(0xFFFFFFFF)
-					if player := worldEntities[worldCharacter.GUID]; player != nil {
-						watched = player.fields[fieldWatchedFaction]
-					}
-					worldRep.push(uiEngine.Rt, uiEngine.AssetLoader, worldCharacter.Race, worldCharacter.Class, watched)
-					refresh()
-					break
-				}
-				switch event.Packet.Opcode {
-				case world.PongOpcode:
-					if sequence, pongErr := world.ParsePong(event.Packet.Body); pongErr == nil && sequence == worldNet.pingSequence && !worldNet.pingSent.IsZero() {
-						worldNet.latency = int(time.Since(worldNet.pingSent).Milliseconds())
-						worldNet.pingSent = time.Time{}
-						uiEngine.Rt.SetNetStats(worldNet.latency, worldNet.bandwidth)
-					}
-				case world.ItemQuerySingleResponse:
-					template, itemErr := world.ParseItemQueryResponse(event.Packet.Body)
-					if itemErr != nil {
-						log.Printf("world item query: %v", itemErr)
 						break
 					}
-					uiEngine.Rt.SetItemTemplate(template)
-					refresh()
-				case world.AuraUpdate, world.AuraUpdateAll:
-					all := event.Packet.Opcode == world.AuraUpdateAll
-					auraUpdate, auraErr := world.ParseAuraUpdate(event.Packet.Body, all)
-					if auraErr != nil {
-						if debug {
-							log.Printf("world aura update: %v", auraErr)
+					if worldRep.handle(event.Packet) {
+						watched := uint32(0xFFFFFFFF)
+						if player := worldEntities[worldCharacter.GUID]; player != nil {
+							watched = player.fields[fieldWatchedFaction]
 						}
-						break
-					}
-					if worldAuras.apply(uiEngine.Rt, uiEngine.AssetLoader, auraUpdate, all, worldCharacter.GUID) {
+						worldRep.push(uiEngine.Rt, uiEngine.AssetLoader, worldCharacter.Race, worldCharacter.Class, watched)
 						refresh()
-					}
-				case world.MessageChat, world.GMMessageChat:
-					parseChat := world.ParseMessageChat
-					if event.Packet.Opcode == world.GMMessageChat {
-						parseChat = world.ParseGMMessageChat
-					}
-					message, chatErr := parseChat(event.Packet.Body)
-					if chatErr != nil {
-						if debug {
-							log.Printf("world chat: %v", chatErr)
-						}
 						break
 					}
-					chatLineID++
-					eventName := message.Type.EventName()
-					if eventName == "" {
-						break
-					}
-					sender := message.SenderName
-					if sender == "" && message.Sender == worldCharacter.GUID {
-						sender = worldCharacter.Name
-					}
-					guid := ""
-					if message.Sender != 0 {
-						guid = fmt.Sprintf("0x%016X", message.Sender)
-					}
-					uiEngine.FireWorldChat(eventName,
-						lua.LString(message.Text), lua.LString(sender), lua.LString(message.LanguageName()),
-						lua.LString(message.Channel), lua.LString(""), lua.LString(""),
-						lua.LNumber(0), lua.LNumber(0), lua.LString(message.Channel), lua.LNumber(0), lua.LNumber(chatLineID), lua.LString(guid))
-					refresh()
-				case world.LoginSetTimeSpeed:
-					if gameTime, timeErr := world.ParseLoginSetTimeSpeed(event.Packet.Body); timeErr == nil {
-						worldClock.set(gameTime, time.Now())
-					} else if debug {
-						log.Printf("world game time: %v", timeErr)
-					}
-				case world.UpdateObject, world.CompressedUpdateObject:
-					var blocks []world.UpdateBlock
-					var parseErr error
-					if event.Packet.Opcode == world.CompressedUpdateObject {
-						blocks, parseErr = world.ParseCompressedUpdateObject(event.Packet.Body)
-					} else {
-						blocks, parseErr = world.ParseUpdateObject(event.Packet.Body)
-					}
-					if parseErr != nil {
-						if debug {
-							log.Printf("world update: %v", parseErr)
+					switch event.Packet.Opcode {
+					case world.PongOpcode:
+						if sequence, pongErr := world.ParsePong(event.Packet.Body); pongErr == nil && sequence == worldNet.pingSequence && !worldNet.pingSent.IsZero() {
+							worldNet.latency = int(time.Since(worldNet.pingSent).Milliseconds())
+							worldNet.pingSent = time.Time{}
+							uiEngine.Rt.SetNetStats(worldNet.latency, worldNet.bandwidth)
 						}
-						break
-					}
-					models, modelErrors := applyWorldUpdateBlocks(scene, uiEngine.AssetLoader, &worldCreatureCache, worldEntities, blocks, worldCharacter.GUID, worldFloor)
-					if player := worldEntities[worldCharacter.GUID]; player != nil {
-						if worldCamera != nil {
-							worldCamera.syncFromUpdate(player.movement)
-							worldCamera.mounted = syncWorldPlayerMount(scene, uiEngine.AssetLoader, &worldCreatureCache, &playerMount, player.fields)
+					case world.ItemQuerySingleResponse:
+						template, itemErr := world.ParseItemQueryResponse(event.Packet.Body)
+						if itemErr != nil {
+							log.Printf("world item query: %v", itemErr)
+							break
 						}
-						if uiEngine.Rt.ApplyUnitFields("player", player.fields) {
+						uiEngine.Rt.SetItemTemplate(template)
+						refresh()
+					case world.AuraUpdate, world.AuraUpdateAll:
+						all := event.Packet.Opcode == world.AuraUpdateAll
+						auraUpdate, auraErr := world.ParseAuraUpdate(event.Packet.Body, all)
+						if auraErr != nil {
+							if debug {
+								log.Printf("world aura update: %v", auraErr)
+							}
+							break
+						}
+						if worldAuras.apply(uiEngine.Rt, uiEngine.AssetLoader, auraUpdate, all, worldCharacter.GUID) {
 							refresh()
 						}
-						if syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend, &worldAuras, uiEngine.AssetLoader) {
+					case world.MessageChat, world.GMMessageChat:
+						parseChat := world.ParseMessageChat
+						if event.Packet.Opcode == world.GMMessageChat {
+							parseChat = world.ParseGMMessageChat
+						}
+						message, chatErr := parseChat(event.Packet.Body)
+						if chatErr != nil {
+							if debug {
+								log.Printf("world chat: %v", chatErr)
+							}
+							break
+						}
+						chatLineID++
+						eventName := message.Type.EventName()
+						if eventName == "" {
+							break
+						}
+						sender := message.SenderName
+						if sender == "" && message.Sender == worldCharacter.GUID {
+							sender = worldCharacter.Name
+						}
+						guid := ""
+						if message.Sender != 0 {
+							guid = fmt.Sprintf("0x%016X", message.Sender)
+						}
+						uiEngine.FireWorldChat(eventName,
+							lua.LString(message.Text), lua.LString(sender), lua.LString(message.LanguageName()),
+							lua.LString(message.Channel), lua.LString(""), lua.LString(""),
+							lua.LNumber(0), lua.LNumber(0), lua.LString(message.Channel), lua.LNumber(0), lua.LNumber(chatLineID), lua.LString(guid))
+						refresh()
+					case world.LoginSetTimeSpeed:
+						if gameTime, timeErr := world.ParseLoginSetTimeSpeed(event.Packet.Body); timeErr == nil {
+							worldClock.set(gameTime, time.Now())
+						} else if debug {
+							log.Printf("world game time: %v", timeErr)
+						}
+					case world.UpdateObject, world.CompressedUpdateObject:
+						var blocks []world.UpdateBlock
+						var parseErr error
+						if event.Packet.Opcode == world.CompressedUpdateObject {
+							blocks, parseErr = world.ParseCompressedUpdateObject(event.Packet.Body)
+						} else {
+							blocks, parseErr = world.ParseUpdateObject(event.Packet.Body)
+						}
+						if parseErr != nil {
+							if debug {
+								log.Printf("world update: %v", parseErr)
+							}
+							break
+						}
+						models, modelErrors := applyWorldUpdateBlocks(scene, uiEngine.AssetLoader, &worldCreatureCache, worldEntities, blocks, worldCharacter.GUID, worldFloor)
+						if player := worldEntities[worldCharacter.GUID]; player != nil {
+							if worldCamera != nil {
+								worldCamera.syncFromUpdate(player.movement)
+								worldCamera.mounted = syncWorldPlayerMount(scene, uiEngine.AssetLoader, &worldCreatureCache, &playerMount, player.fields)
+							}
+							if uiEngine.Rt.ApplyUnitFields("player", player.fields) {
+								refresh()
+							}
+							if syncWorldTarget(uiEngine.Rt, worldEntities, player, worldNameState, worldFactionState, worldSend, &worldAuras, uiEngine.AssetLoader) {
+								refresh()
+							}
+							syncWorldInventory(uiEngine.Rt, worldEntities, player)
+							syncWorldSkills(uiEngine.Rt, uiEngine.AssetLoader, &worldSkillTable, player, &worldSkillLast)
+							uiEngine.Rt.SetQuestLog(ui.QuestSlotsFrom(player.fields))
+							if watched := player.fields[fieldWatchedFaction]; worldRep.received && int(int32(watched)) != worldRep.watched {
+								worldRep.push(uiEngine.Rt, uiEngine.AssetLoader, worldCharacter.Race, worldCharacter.Class, watched)
+							}
+						}
+						if debug {
+							log.Printf("world update: blocks=%d entities=%d models=%d errors=%d", len(blocks), len(worldEntities), models, len(modelErrors))
+							for _, modelErr := range modelErrors {
+								log.Printf("world entity: %v", modelErr)
+							}
+						}
+						// Entity model changes live in the GL scene; avoid a full software UI repaint.
+					case 0x004C: // SMSG_LOGOUT_RESPONSE: reason, instant
+						if body := event.Packet.Body; len(body) >= 5 {
+							uiEngine.Rt.LogoutResponse(binary.LittleEndian.Uint32(body[:4]), body[4] != 0)
 							refresh()
 						}
-						syncWorldInventory(uiEngine.Rt, worldEntities, player)
-						syncWorldSkills(uiEngine.Rt, uiEngine.AssetLoader, &worldSkillTable, player, &worldSkillLast)
-						uiEngine.Rt.SetQuestLog(ui.QuestSlotsFrom(player.fields))
-						if watched := player.fields[fieldWatchedFaction]; worldRep.received && int(int32(watched)) != worldRep.watched {
-							worldRep.push(uiEngine.Rt, uiEngine.AssetLoader, worldCharacter.Race, worldCharacter.Class, watched)
-						}
-					}
-					if debug {
-						log.Printf("world update: blocks=%d entities=%d models=%d errors=%d", len(blocks), len(worldEntities), models, len(modelErrors))
-						for _, modelErr := range modelErrors {
-							log.Printf("world entity: %v", modelErr)
-						}
-					}
-					// Entity model changes live in the GL scene; avoid a full software UI repaint.
-				case 0x004C: // SMSG_LOGOUT_RESPONSE: reason, instant
-					if body := event.Packet.Body; len(body) >= 5 {
-						uiEngine.Rt.LogoutResponse(binary.LittleEndian.Uint32(body[:4]), body[4] != 0)
+					case 0x004D: // SMSG_LOGOUT_COMPLETE
+						uiEngine.Rt.LogoutComplete()
 						refresh()
-					}
-				case 0x004D: // SMSG_LOGOUT_COMPLETE
-					uiEngine.Rt.LogoutComplete()
-					refresh()
-				case 0x004F: // SMSG_LOGOUT_CANCEL_ACK
-					uiEngine.Rt.LogoutCancelled()
-					refresh()
-				case world.MonsterMoveOpcode:
-					move, moveErr := world.ParseMonsterMove(event.Packet.Body)
-					if moveErr != nil {
-						if debug {
-							log.Printf("world monster move: %v", moveErr)
+					case 0x004F: // SMSG_LOGOUT_CANCEL_ACK
+						uiEngine.Rt.LogoutCancelled()
+						refresh()
+					case world.MonsterMoveOpcode:
+						move, moveErr := world.ParseMonsterMove(event.Packet.Body)
+						if moveErr != nil {
+							if debug {
+								log.Printf("world monster move: %v", moveErr)
+							}
+							break
 						}
-						break
-					}
-					applyWorldMonsterMove(worldEntities, move)
-					if entity := worldEntities[move.GUID]; entity != nil {
-						if syncErr := syncWorldEntity(scene, uiEngine.AssetLoader, &worldCreatureCache, entity, worldCharacter.GUID, worldFloor); syncErr != nil && debug {
-							log.Printf("world monster entity: %v", syncErr)
+						applyWorldMonsterMove(worldEntities, move)
+						if entity := worldEntities[move.GUID]; entity != nil {
+							if syncErr := syncWorldEntity(scene, uiEngine.AssetLoader, &worldCreatureCache, entity, worldCharacter.GUID, worldFloor); syncErr != nil && debug {
+								log.Printf("world monster entity: %v", syncErr)
+							}
+						}
+					case world.DestroyObject:
+						guid, destroyErr := world.ParseDestroyObject(event.Packet.Body)
+						if destroyErr != nil {
+							if debug {
+								log.Printf("world destroy: %v", destroyErr)
+							}
+							break
+						}
+						if entity := worldEntities[guid]; entity != nil {
+							if entity.node != nil {
+								scene.Remove(entity.node)
+								entity.node.Dispose()
+							}
+							entity.mount.dispose(scene)
+							worldObjects.remove(guid)
+							delete(worldEntities, guid)
 						}
 					}
-				case world.DestroyObject:
-					guid, destroyErr := world.ParseDestroyObject(event.Packet.Body)
-					if destroyErr != nil {
-						if debug {
-							log.Printf("world destroy: %v", destroyErr)
-						}
-						break
-					}
-					if entity := worldEntities[guid]; entity != nil {
-						if entity.node != nil {
-							scene.Remove(entity.node)
-							entity.node.Dispose()
-						}
-						entity.mount.dispose(scene)
-						delete(worldEntities, guid)
-					}
+				default:
 				}
-			default:
+				if !gotPacket || drained >= worldPacketsPerFrame || time.Now().After(packetDeadline) {
+					break
+				}
 			}
 			if worldMode && worldCamera != nil {
 				syncPendingWorldEntities(scene, uiEngine.AssetLoader, &worldCreatureCache, worldEntities, worldCharacter.GUID, worldFloor, worldCamera.position)
@@ -1897,6 +1957,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				debugPanelRefresh = frameAt
 				refreshDebugPanel()
 			}
+		}
+		// The interface is painted at most thirty times a second in the world: a
+		// repaint is a whole-screen job, and the next frame shows what it left out.
+		if refreshPending && (!worldMode || frameAt.Sub(lastUIRefresh) >= worldUIRepaintInterval) {
+			refreshPending = false
+			refreshFrame(false)
 		}
 		debugUpdateMS = time.Since(frameAt).Seconds() * 1000
 		if worldMode {

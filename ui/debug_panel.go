@@ -25,6 +25,7 @@ type debugPanelState struct {
 
 func (eng *UIEngine) ToggleDebugPanel() bool {
 	eng.debugPanel.visible = !eng.debugPanel.visible
+	eng.worldBaseCanvas = nil
 	return eng.debugPanel.visible
 }
 

@@ -43,6 +43,9 @@ func loadSharedM2(loader *ui.Loader, path string) (parsedM2, error) {
 	}
 	model := *template
 	model.bones = append([]m2Bone(nil), template.bones...)
+	// The values animation writes into are each model's own, so units of one model can be posed side by side.
+	model.colors = append(model.colors[:0:0], template.colors...)
+	model.textureWeights = append(model.textureWeights[:0:0], template.textureWeights...)
 	return model, nil
 }
 

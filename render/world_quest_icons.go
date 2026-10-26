@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	questIconSize   = 0.9
-	questIconLift   = 0.9
+	questIconSize   = 0.6
+	questIconLift   = 0.45
 	questIconPeriod = 5 * time.Second
 	questIconRange  = 60.0
 )
@@ -116,6 +116,13 @@ func (icons *worldQuestIcons) update(scene *core.Node, loader *ui.Loader, entiti
 		if mesh == nil {
 			var mat *nameplateMaterial
 			mesh, mat = newNameplateMesh(tex)
+			// The material holds a reference of its own: the mark's texture is shared,
+			// and the first mark taken down would otherwise delete it from under the rest
+			// (they then drew black).
+			tex.Incref()
+			// A mark is part of the world: things in front of it hide it.
+			mat.SetDepthTest(true)
+			mesh.SetRenderOrder(0)
 			mat.size = [2]float32{questIconSize, questIconSize}
 			icons.meshes[guid] = mesh
 			scene.Add(mesh)

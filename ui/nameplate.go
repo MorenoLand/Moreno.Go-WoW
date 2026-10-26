@@ -44,9 +44,14 @@ func (eng *UIEngine) RenderNameplate(lines []NameplateLine, size float64) *image
 			drawer := font.Drawer{Dst: canvas, Src: image.NewUniform(c), Face: face, Dot: fixed.P(x+dx, y+dy)}
 			drawer.DrawString(line.Text)
 		}
-		black := color.RGBA{A: 255}
-		for _, d := range [][2]int{{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {1, 1}, {-1, 1}, {1, -1}} {
-			drawText(d[0], d[1], black)
+		// A full outline would swallow small letters; they get a soft shadow instead.
+		if size < 10 {
+			drawText(1, 1, color.RGBA{A: 150})
+		} else {
+			black := color.RGBA{A: 255}
+			for _, d := range [][2]int{{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {1, 1}, {-1, 1}, {1, -1}} {
+				drawText(d[0], d[1], black)
+			}
 		}
 		drawText(0, 0, color.RGBA{R: line.R, G: line.G, B: line.B, A: 255})
 	}

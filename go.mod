@@ -24,3 +24,5 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
 replace github.com/yuin/gopher-lua => ./third_party/gopher-lua
+
+replace github.com/g3n/engine => ./third_party/g3n

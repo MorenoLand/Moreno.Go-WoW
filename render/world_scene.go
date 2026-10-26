@@ -111,7 +111,10 @@ type worldWMORoot struct {
 	wmoID uint32
 	// ambient is the WMO's own ambient light (MOHD) and lights its omni lights
 	// (MOLT), in the WMO's coordinates.
-	ambient    [3]float32
+	ambient [3]float32
+	// flags are the MOHD flags: 0x2 lights vertices by the ambient colour, 0x8 leaves
+	// the baked vertex colours as stored.
+	flags      uint16
 	lights     []worldPointLight
 	materials  []worldWMOMaterial
 	doodadSets []worldWMODoodadSet
@@ -135,6 +138,8 @@ type worldWMOBatch struct {
 	count    int
 	flags    uint8
 	material uint8
+	// maxIndex is the highest vertex the batch uses.
+	maxIndex int
 }
 
 type worldWMOTriangle struct {
@@ -157,9 +162,13 @@ type worldWMOGroup struct {
 	normals   []float32
 	uvs       []float32
 	colors    []float32
-	indices   []uint16
-	batches   []worldWMOBatch
-	triangles []worldWMOTriangle
+	// colorAlpha is the alpha of each baked vertex colour, and transBatches how many
+	// of the first batches are the group's transition batches.
+	colorAlpha   []uint8
+	transBatches int
+	indices      []uint16
+	batches      []worldWMOBatch
+	triangles    []worldWMOTriangle
 }
 
 type worldWMOMeshKey struct {
@@ -341,7 +350,7 @@ type worldSceneAssetCache struct {
 	// m2Collision are the collision meshes of doodad models.
 	m2Collision map[string]*worldM2Collision
 	collisionMu sync.Mutex
-	wmoBuilt   map[int]*worldBuiltWMO
+	wmoBuilt    map[int]*worldBuiltWMO
 }
 
 // worldMeshTemplate is a mesh to make again over the same geometry and
@@ -350,6 +359,9 @@ type worldMeshTemplate struct {
 	geometry *geometry.Geometry
 	material material.IMaterial
 	order    int
+	// position is where the mesh stands (a merged batch of doodads stands at the
+	// middle of what it holds).
+	position math32.Vector3
 }
 
 // worldBuiltWMO is a built WMO placement, shared by the tiles that show it.
@@ -1107,6 +1119,9 @@ func parseWorldWMORoot(data []byte) (worldWMORoot, error) {
 	if len(mohd) >= 36 {
 		root.wmoID = binary.LittleEndian.Uint32(mohd[32:36])
 	}
+	if len(mohd) >= 0x3e {
+		root.flags = binary.LittleEndian.Uint16(mohd[0x3c:0x3e])
+	}
 	if len(mohd) >= 32 {
 		// The ambient colour is stored B, G, R, A.
 		root.ambient = [3]float32{float32(mohd[30]) / 255, float32(mohd[29]) / 255, float32(mohd[28]) / 255}
@@ -1191,6 +1206,9 @@ func parseWorldWMOGroup(data []byte) (worldWMOGroup, error) {
 	if len(mogp) >= 0x38 {
 		group.liquidType = binary.LittleEndian.Uint32(mogp[0x34:0x38])
 	}
+	if len(mogp) >= 0x2a {
+		group.transBatches = int(binary.LittleEndian.Uint16(mogp[0x28:0x2a]))
+	}
 	for offset := 68; offset < len(mogp); {
 		id, _, payload, _, next, ok := worldChunk(mogp, offset)
 		if !ok {
@@ -1208,6 +1226,7 @@ func parseWorldWMOGroup(data []byte) (worldWMOGroup, error) {
 		case "MOCV":
 			for index := 0; index+3 < len(payload); index += 4 {
 				group.colors = append(group.colors, float32(payload[index+2])/255, float32(payload[index+1])/255, float32(payload[index])/255)
+				group.colorAlpha = append(group.colorAlpha, payload[index+3])
 			}
 		case "MOLR":
 			for index := 0; index+2 <= len(payload); index += 2 {
@@ -1231,6 +1250,7 @@ func parseWorldWMOGroup(data []byte) (worldWMOGroup, error) {
 					start: int(binary.LittleEndian.Uint32(payload[index+12 : index+16])),
 					count: int(binary.LittleEndian.Uint16(payload[index+16 : index+18])),
 					flags: payload[index+22], material: payload[index+23],
+					maxIndex: int(binary.LittleEndian.Uint16(payload[index+20 : index+22])),
 				})
 			}
 		}
@@ -1629,6 +1649,7 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 				template.geometry.Incref()
 				mesh := graphic.NewMesh(template.geometry, template.material)
 				mesh.SetRenderOrder(template.order)
+				mesh.SetPositionVec(&template.position)
 				root.Add(mesh)
 				meshCount++
 			}
@@ -1706,6 +1727,10 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 				return dx*dx + dy*dy
 			}
 			sort.SliceStable(order, func(a, b int) bool { return nearness(order[a]) < nearness(order[b]) })
+			// The doodads of one placement are merged into a mesh per part of a model
+			// (and per light they stand in), not drawn one by one: a city's doodads
+			// were most of what a frame drew.
+			batches := make(map[worldDoodadBatchKey]*worldM2MeshBuilder)
 			for _, index := range order {
 				doodadIndex, doodad := index-start, model.doodads[index]
 				if doodadCount >= worldWMODoodadBudget {
@@ -1744,19 +1769,27 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 						cache.m2Emitters[doodad.path] = emitters
 					}
 				}
-				instance := buildWorldM2Instance(loader, parts, cache.textures, cache.placeholder)
-				if instance == nil {
+				group, indoor := indoorDoodads[uint16(start+doodadIndex)]
+				merged := 0
+				for key, part := range parts {
+					if len(part.texturePaths) == 0 || len(part.indices) == 0 || len(part.positions) == 0 {
+						continue
+					}
+					batchKey := worldDoodadBatchKey{part: key, indoor: indoor}
+					if indoor {
+						batchKey.light = group
+					}
+					builder := batches[batchKey]
+					if builder == nil {
+						builder = &worldM2MeshBuilder{part: part, positions: math32.NewArrayF32(0, len(part.positions)), normals: math32.NewArrayF32(0, len(part.normals)), uvs: math32.NewArrayF32(0, len(part.uvs)), uvs2: math32.NewArrayF32(0, len(part.uvs2)), colors: math32.NewArrayF32(0, len(part.colors)), alphas: math32.NewArrayF32(0, len(part.alphas)), combiners: math32.NewArrayF32(0, len(part.combiners)), indices: math32.NewArrayU32(0, len(part.indices))}
+						batches[batchKey] = builder
+					}
+					appendWorldM2Part(builder, part, worldPosition, rotation, scale)
+					merged++
+				}
+				if merged == 0 {
 					continue
 				}
-				if group, indoor := indoorDoodads[uint16(start+doodadIndex)]; indoor {
-					lit := group
-					applyWorldLocalLight(instance, &lit)
-				}
-				instance.SetPosition(worldPosition[0], worldPosition[1], worldPosition[2])
-				instance.SetRotationQuat(worldWMODoodadRotation(doodad.rotation, placement.rotation))
-				instance.SetScale(placement.scale*doodad.scale, placement.scale*doodad.scale, placement.scale*doodad.scale)
-				root.Add(instance)
-				built.doodads = append(built.doodads, cloneWorldNode(instance))
 				if model := cache.m2Emitters[doodad.path]; model != nil {
 					built.emitters = append(built.emitters, worldEmitterPlacement{model: model, origin: worldPosition, rotation: rotation, scale: scale})
 					if len(particles) < worldParticleBudget {
@@ -1766,8 +1799,22 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 						}
 					}
 				}
-				meshCount += len(instance.Children())
 				doodadCount++
+			}
+			for batchKey, builder := range batches {
+				mesh := buildWorldDoodadBatch(loader, builder, cache.textures, cache.placeholder)
+				if mesh == nil {
+					continue
+				}
+				if batchKey.indoor {
+					lit := batchKey.light
+					applyWorldLocalLight(mesh, &lit)
+				}
+				geom := mesh.GetGeometry()
+				geom.Incref()
+				built.meshes = append(built.meshes, worldMeshTemplate{geometry: geom, material: mesh.GetMaterial(0), order: mesh.RenderOrder(), position: mesh.Position()})
+				root.Add(mesh)
+				meshCount++
 			}
 		}
 		cache.wmoMu.Lock()
@@ -1958,6 +2005,9 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 					if at+2 < len(group.colors) {
 						baked = [3]float32{group.colors[at], group.colors[at+1], group.colors[at+2]}
 					}
+					if key.outdoor {
+						baked = group.bakedColour(model.flags, vertex)
+					}
 					if !key.outdoor && materialInfo.flags&0x1 == 0 {
 						light := worldInteriorLight(worldInteriorBase, interiorLights, point, normal)
 						baked = [3]float32{baked[0] * light[0], baked[1] * light[1], baked[2] * light[2]}
@@ -1998,6 +2048,8 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 		switch {
 		case key.material.flags&0x1 != 0:
 			mat.wmoMode = wmoUnlit
+		case key.outdoor && model.flags&0x2 != 0:
+			mat.wmoMode = wmoExteriorUnified
 		case key.outdoor:
 			mat.wmoMode = wmoExterior
 		default:
@@ -2614,4 +2666,104 @@ func worldInteriorLight(ambient [3]float32, lights []worldPointLight, point, nor
 		}
 	}
 	return total
+}
+
+// worldDoodadBatchKey says which doodads share a mesh: the same part of a model,
+// lit the same way.
+type worldDoodadBatchKey struct {
+	part   string
+	indoor bool
+	light  worldLocalLight
+}
+
+// appendWorldM2Part adds one placed copy of a model part to a builder, in the
+// world's coordinates.
+func appendWorldM2Part(builder *worldM2MeshBuilder, part *m2Part, origin [3]float32, rotation *math32.Quaternion, scale float32) {
+	base := uint32(len(builder.positions) / 3)
+	for index := 0; index+2 < len(part.positions); index += 3 {
+		point := rotateWorldM2Vector(rotation, [3]float32{part.positions[index], part.positions[index+1], part.positions[index+2]})
+		builder.positions.Append(point[0]*scale+origin[0], point[1]*scale+origin[1], point[2]*scale+origin[2])
+		normal := rotateWorldM2Vector(rotation, [3]float32{part.normals[index], part.normals[index+1], part.normals[index+2]})
+		builder.normals.Append(normal[0], normal[1], normal[2])
+	}
+	builder.colors = append(builder.colors, part.colors...)
+	builder.alphas = append(builder.alphas, part.alphas...)
+	builder.combiners = append(builder.combiners, part.combiners...)
+	builder.uvs = append(builder.uvs, part.uvs...)
+	builder.uvs2 = append(builder.uvs2, part.uvs2...)
+	for _, index := range part.indices {
+		builder.indices.Append(base + index)
+	}
+}
+
+// buildWorldDoodadBatch makes the mesh of a builder, standing at the middle of
+// what it holds so that blended ones sort by where they are, not by the origin.
+func buildWorldDoodadBatch(loader *ui.Loader, builder *worldM2MeshBuilder, textures map[string]*texture.Texture2D, placeholder *texture.Texture2D) *graphic.Mesh {
+	if len(builder.positions) < 3 {
+		return nil
+	}
+	low := [3]float32{builder.positions[0], builder.positions[1], builder.positions[2]}
+	high := low
+	for index := 0; index+2 < len(builder.positions); index += 3 {
+		for axis := 0; axis < 3; axis++ {
+			value := builder.positions[index+axis]
+			if value < low[axis] {
+				low[axis] = value
+			}
+			if value > high[axis] {
+				high[axis] = value
+			}
+		}
+	}
+	centre := [3]float32{(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, (low[2] + high[2]) / 2}
+	for index := 0; index+2 < len(builder.positions); index += 3 {
+		builder.positions[index] -= centre[0]
+		builder.positions[index+1] -= centre[1]
+		builder.positions[index+2] -= centre[2]
+	}
+	mesh := buildWorldM2BatchedMesh(loader, builder, textures, placeholder)
+	if mesh == nil {
+		return nil
+	}
+	mesh.SetPosition(centre[0], centre[1], centre[2])
+	return mesh
+}
+
+// bakedColour is the vertex colour an exterior group is drawn with. Wow.exe
+// (FUN_007d7380) halves the stored colour of the vertices of the first
+// transition batches and gives the rest (colour + colour*alpha/64)/2, unless the
+// map object says to leave them (MOHD flag 0x8); a group with no colours gets
+// mid grey, or black when the map object lights by its ambient (FUN_007c8560).
+// The pixel stage doubles texture times colour, so mid grey is neutral.
+func (group *worldWMOGroup) bakedColour(rootFlags uint16, vertex int) [3]float32 {
+	at := vertex * 3
+	if at+2 >= len(group.colors) || vertex >= len(group.colorAlpha) {
+		if rootFlags&0x2 != 0 {
+			return [3]float32{}
+		}
+		return [3]float32{0x7f / 255.0, 0x7f / 255.0, 0x7f / 255.0}
+	}
+	var out [3]float32
+	if rootFlags&0x8 != 0 {
+		copy(out[:], group.colors[at:at+3])
+		return out
+	}
+	transEnd := 0
+	if group.transBatches > 0 && group.transBatches <= len(group.batches) {
+		transEnd = group.batches[group.transBatches-1].maxIndex + 1
+	}
+	alpha := int(group.colorAlpha[vertex])
+	for channel := range out {
+		value := int(math.Round(float64(group.colors[at+channel]) * 255))
+		if vertex < transEnd {
+			value >>= 1
+		} else {
+			value = ((value*alpha)>>6 + value) >> 1
+			if value > 255 {
+				value = 255
+			}
+		}
+		out[channel] = float32(value) / 255
+	}
+	return out
 }

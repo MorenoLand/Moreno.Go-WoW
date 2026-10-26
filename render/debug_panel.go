@@ -37,6 +37,8 @@ type debugPanelData struct {
 	worldParts      int
 	// position is where the player stands and which way it faces, while in the world.
 	position string
+	// drawn says where the last frame's draws came from.
+	drawn string
 }
 
 func debugPanelLines(data debugPanelData) []string {
@@ -63,6 +65,7 @@ func debugPanelLines(data debugPanelData) []string {
 		fmt.Sprintf("frame update %.1f ms | scene draw %.1f ms | swap %.1f ms | UI repaints %.1f/s", data.updateMS, data.sceneMS, data.swapMS, data.uiRefreshes),
 		fmt.Sprintf("renderer %d materials | %d panels | %d others", data.rendererMats, data.rendererPanels, data.rendererOthers),
 		fmt.Sprintf("world %d scene nodes", data.worldParts),
+		data.drawn,
 		fmt.Sprintf("geometry %d vertices | %d triangles", data.model.vertices, data.model.triangles),
 		fmt.Sprintf("batches %d opaque | %d blended | %d textures", data.model.opaqueBatches, data.model.transparentBatches, data.model.textures),
 		fmt.Sprintf("particles %d emitters | %d points", data.model.particleEmitters, data.model.particlePoints),

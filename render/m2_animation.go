@@ -8,15 +8,74 @@ import (
 	"github.com/g3n/engine/math32"
 )
 
+// m2MeshGroup is a mesh several parts share: they each pose a window of its
+// arrays, and the mesh's buffers are sent whole.
+type m2MeshGroup struct {
+	positionVBO, normalVBO, uvVBO, uv2VBO, colorVBO, alphaVBO *gls.VBO
+	positions, normals, uvs, uvs2, colors, alphas             math32.ArrayF32
+}
+
+func (m *m2AnimatedMesh) uploadPositions() {
+	if g := m.group; g != nil {
+		g.positionVBO.SetBuffer(g.positions)
+		g.normalVBO.SetBuffer(g.normals)
+		return
+	}
+	if m.positionVBO != nil {
+		m.positionVBO.SetBuffer(m.part.positions)
+	}
+	if m.normalVBO != nil {
+		m.normalVBO.SetBuffer(m.part.normals)
+	}
+}
+
+func (m *m2AnimatedMesh) uploadTint() {
+	if g := m.group; g != nil {
+		g.colorVBO.SetBuffer(g.colors)
+		g.alphaVBO.SetBuffer(g.alphas)
+		return
+	}
+	if m.colorVBO != nil {
+		m.colorVBO.SetBuffer(m.part.colors)
+	}
+	if m.alphaVBO != nil {
+		m.alphaVBO.SetBuffer(m.part.alphas)
+	}
+}
+
+func (m *m2AnimatedMesh) uploadUVs(second bool) {
+	if g := m.group; g != nil {
+		if second {
+			if g.uv2VBO != nil {
+				g.uv2VBO.SetBuffer(g.uvs2)
+			}
+		} else {
+			g.uvVBO.SetBuffer(g.uvs)
+		}
+		return
+	}
+	if second {
+		if m.uv2VBO != nil {
+			m.uv2VBO.SetBuffer(m.part.uvs2)
+		}
+	} else if m.uvVBO != nil {
+		m.uvVBO.SetBuffer(m.part.uvs)
+	}
+}
+
 type m2AnimatedMesh struct {
-	part                    *m2Part
-	positionVBO             *gls.VBO
-	normalVBO               *gls.VBO
-	uvVBO                   *gls.VBO
-	uv2VBO                  *gls.VBO
-	colorVBO                *gls.VBO
-	alphaVBO                *gls.VBO
-	light                   m2SceneLight
+	// group is set when the part's mesh is shared with others.
+	group       *m2MeshGroup
+	part        *m2Part
+	positionVBO *gls.VBO
+	normalVBO   *gls.VBO
+	uvVBO       *gls.VBO
+	uv2VBO      *gls.VBO
+	colorVBO    *gls.VBO
+	alphaVBO    *gls.VBO
+	light       m2SceneLight
+	// tintKnown is set once the colour and alpha buffers hold the part's tint.
+	tintKnown               bool
 	baseUVs                 math32.ArrayF32
 	baseUVs2                math32.ArrayF32
 	textureTransformIndices []int
@@ -303,19 +362,20 @@ func (animation *m2Animation) Update(elapsed float64) []uint32 {
 			animatedMesh.part.positions.Set(index*3, position[0], position[1], position[2])
 			animatedMesh.part.normals.Set(index*3, normal[0], normal[1], normal[2])
 		}
-		if animatedMesh.positionVBO != nil {
-			animatedMesh.positionVBO.SetBuffer(animatedMesh.part.positions)
-		}
-		if animatedMesh.normalVBO != nil {
-			animatedMesh.normalVBO.SetBuffer(animatedMesh.part.normals)
-		}
+		animatedMesh.uploadPositions()
 	}
 	for _, animatedMesh := range animation.meshes {
 		if animatedMesh == nil || animatedMesh.part == nil {
 			continue
 		}
 		part := animatedMesh.part
-		part.color, part.alpha = m2PartTintAt(animation.model, part.colorIndex, part.textureWeightIndex, animation.sequence, uint32(animation.clock), uint32(animation.globalClock))
+		color, alpha := m2PartTintAt(animation.model, part.colorIndex, part.textureWeightIndex, animation.sequence, uint32(animation.clock), uint32(animation.globalClock))
+		// A tint that has not changed leaves the buffers as they are and the GPU copy alone.
+		if animatedMesh.tintKnown && !animatedMesh.light.enabled && color == part.color && alpha == part.alpha {
+			continue
+		}
+		part.color, part.alpha = color, alpha
+		animatedMesh.tintKnown = true
 		for index := 0; index+2 < len(part.colors); index += 3 {
 			part.colors[index] = part.color[0]
 			part.colors[index+1] = part.color[1]
@@ -325,12 +385,7 @@ func (animation *m2Animation) Update(elapsed float64) []uint32 {
 		for index := range part.alphas {
 			part.alphas[index] = part.alpha
 		}
-		if animatedMesh.colorVBO != nil {
-			animatedMesh.colorVBO.SetBuffer(part.colors)
-		}
-		if animatedMesh.alphaVBO != nil {
-			animatedMesh.alphaVBO.SetBuffer(part.alphas)
-		}
+		animatedMesh.uploadTint()
 	}
 	animation.updateTextureCoordinatesAt(uint32(animation.clock), uint32(animation.globalClock))
 	return animation.crossedSounds(animation.sequence, previous, current, sequence.duration, wrapped)
@@ -353,18 +408,14 @@ func (animation *m2Animation) updateTextureCoordinatesAt(timeMS, globalTimeMS ui
 			if index := animatedMesh.textureTransformIndices[0]; index >= 0 && index < len(animation.model.textureTransforms) {
 				applyM2TextureTransform(animatedMesh.part.uvs, animatedMesh.baseUVs, animation.model.textureTransforms[index], animation.sequence, timeMS, globalTimeMS, animation.model.globalLoops)
 			}
-			if animatedMesh.uvVBO != nil {
-				animatedMesh.uvVBO.SetBuffer(animatedMesh.part.uvs)
-			}
+			animatedMesh.uploadUVs(false)
 		}
 		if len(animatedMesh.baseUVs2) == len(animatedMesh.part.uvs2) && len(animatedMesh.textureTransformIndices) > 1 {
 			copy(animatedMesh.part.uvs2, animatedMesh.baseUVs2)
 			if index := animatedMesh.textureTransformIndices[1]; index >= 0 && index < len(animation.model.textureTransforms) {
 				applyM2TextureTransform(animatedMesh.part.uvs2, animatedMesh.baseUVs2, animation.model.textureTransforms[index], animation.sequence, timeMS, globalTimeMS, animation.model.globalLoops)
 			}
-			if animatedMesh.uv2VBO != nil {
-				animatedMesh.uv2VBO.SetBuffer(animatedMesh.part.uvs2)
-			}
+			animatedMesh.uploadUVs(true)
 		}
 	}
 }
@@ -421,12 +472,20 @@ func (animation *m2Animation) poseBonesAt(timeMS, globalTimeMS uint32) []m2Bone 
 }
 
 func (animation *m2Animation) poseBonesAtReusable(timeMS, globalTimeMS uint32) []m2Bone {
-	if cap(animation.poseBuffer) < len(animation.model.bones) {
-		animation.poseBuffer = make([]m2Bone, len(animation.model.bones))
-	} else {
-		animation.poseBuffer = animation.poseBuffer[:len(animation.model.bones)]
+	bones := animation.model.bones
+	if len(animation.poseBuffer) != len(bones) {
+		// The fixed part of each bone is copied once; a pose only sets the moving part.
+		animation.poseBuffer = make([]m2Bone, len(bones))
+		copy(animation.poseBuffer, bones)
 	}
-	return animation.fillPoseBones(animation.poseBuffer, timeMS, globalTimeMS)
+	loops := animation.model.globalLoops
+	for index := range bones {
+		source, bone := &bones[index], &animation.poseBuffer[index]
+		bone.translation = source.translationTrack.value(animation.sequence, m2TrackTime(source.translationTrack.globalSequence, timeMS, globalTimeMS), loops, source.translation)
+		bone.rotation = source.rotationTrack.value(animation.sequence, m2TrackTime(source.rotationTrack.globalSequence, timeMS, globalTimeMS), loops, source.rotation)
+		bone.scale = source.scaleTrack.value(animation.sequence, m2TrackTime(source.scaleTrack.globalSequence, timeMS, globalTimeMS), loops, source.scale)
+	}
+	return animation.poseBuffer
 }
 
 func (animation *m2Animation) fillPoseBones(bones []m2Bone, timeMS, globalTimeMS uint32) []m2Bone {

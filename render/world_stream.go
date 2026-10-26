@@ -14,6 +14,7 @@ import (
 	"github.com/g3n/engine/geometry"
 	"github.com/g3n/engine/graphic"
 	"github.com/g3n/engine/math32"
+	"github.com/g3n/engine/texture"
 )
 
 // worldCollisionHolder is the collision the movement controller and entities
@@ -49,6 +50,14 @@ func (h *worldCollisionHolder) cameraPosition(focus, eye math32.Vector3) math32.
 		return c.cameraPosition(focus, eye)
 	}
 	return eye
+}
+
+// segmentBlocked reports whether ground or a wall lies between two points.
+func (h *worldCollisionHolder) segmentBlocked(from, to [3]float32) bool {
+	if c := h.current.Load(); c != nil {
+		return c.segmentBlocked(from, to)
+	}
+	return false
 }
 
 func (h *worldCollisionHolder) liquidAt(x, y, z float32) (float32, bool) {
@@ -103,8 +112,10 @@ type worldTerrainStreamer struct {
 	// reveal holds the parts of freshly attached tiles that are still hidden; a few
 	// are shown each frame so their first draw (buffer and texture uploads) is
 	// spread over many frames instead of stalling one.
-	reveal     []core.INode
-	lastUpdate time.Time
+	reveal []worldRevealItem
+	// viewFrustum is what the camera sees this frame, for leaving out what is not.
+	viewFrustum *math32.Frustum
+	lastUpdate  time.Time
 }
 
 func newWorldTerrainStreamer(loader *ui.Loader, mapName string, position world.WorldPosition, bigAlpha bool, cache *worldSceneAssetCache, root *core.Node) *worldTerrainStreamer {
@@ -157,7 +168,7 @@ func (s *worldTerrainStreamer) adopt(key [2]int, tile *worldStreamedTile) {
 	hide = func(node core.INode) {
 		if _, drawable := node.(graphic.IGraphic); drawable {
 			node.GetNode().SetVisible(false)
-			s.reveal = append(s.reveal, node)
+			s.reveal = append(s.reveal, newWorldRevealItem(node))
 		}
 		for _, child := range node.GetNode().Children() {
 			hide(child)
@@ -166,6 +177,11 @@ func (s *worldTerrainStreamer) adopt(key [2]int, tile *worldStreamedTile) {
 	hide(tile.node)
 	s.root.Add(tile.node)
 	s.tiles[key] = tile
+	// What is nearest the player appears first.
+	focusX, focusY := s.cache.getFocus()
+	sort.SliceStable(s.reveal, func(i, j int) bool {
+		return s.reveal[i].distance(focusX, focusY) < s.reveal[j].distance(focusX, focusY)
+	})
 }
 
 // rebuildCollision merges the loaded tiles' collision in the background and
@@ -257,17 +273,22 @@ func (s *worldTerrainStreamer) update(x, y float32) {
 	now := time.Now()
 	frame := now.Sub(s.lastUpdate)
 	s.lastUpdate = now
-	shown, budget := 0, worldRevealPerFrame
+	shown, budget, byteBudget := 0, worldRevealPerFrame, worldRevealBytes
 	switch {
 	case frame > 40*time.Millisecond:
-		budget = 1
+		budget, byteBudget = 1, worldRevealBytes/6
 	case frame > 28*time.Millisecond:
-		budget = 3
+		budget, byteBudget = 3, worldRevealBytes/3
 	case frame > 21*time.Millisecond:
-		budget = 8
+		budget, byteBudget = 8, worldRevealBytes/2
 	}
-	for shown < budget && len(s.reveal) > 0 {
-		s.reveal[0].GetNode().SetVisible(true)
+	// A part costs what it sends to the card when first drawn (buffers, textures not
+	// yet there): that, more than how many appear, is what stalls a frame.
+	spent := 0
+	for shown < budget && len(s.reveal) > 0 && (shown == 0 || spent < byteBudget) {
+		item := s.reveal[0]
+		item.node.GetNode().SetVisible(true)
+		spent += item.upload()
 		s.reveal = s.reveal[1:]
 		shown++
 	}
@@ -350,4 +371,66 @@ func (s *worldTerrainStreamer) requestNeighbours(x, y float32, tileX, tileY int)
 			return
 		}
 	}
+}
+
+// worldRevealBytes is how much a frame may send to the card for newly arrived
+// parts of the map.
+const worldRevealBytes = 3 << 20
+
+// worldRevealItem is a hidden part of a tile waiting to appear.
+type worldRevealItem struct {
+	node   core.INode
+	cx, cy float32
+}
+
+func newWorldRevealItem(node core.INode) worldRevealItem {
+	item := worldRevealItem{node: node}
+	if drawable, ok := node.(graphic.IGraphic); ok {
+		box := drawable.GetGeometry().BoundingBox()
+		at := node.GetNode().Position()
+		item.cx, item.cy = at.X+(box.Min.X+box.Max.X)/2, at.Y+(box.Min.Y+box.Max.Y)/2
+	}
+	return item
+}
+
+func (item worldRevealItem) distance(x, y float32) float32 {
+	dx, dy := item.cx-x, item.cy-y
+	return dx*dx + dy*dy
+}
+
+// upload is how many bytes drawing the part the first time sends to the card.
+func (item worldRevealItem) upload() int {
+	drawable, ok := item.node.(graphic.IGraphic)
+	if !ok {
+		return 0
+	}
+	bytes := 0
+	geom := drawable.GetGeometry()
+	if !geometryUploaded(geom) {
+		for _, vbo := range geom.VBOs() {
+			bytes += vbo.Buffer().Bytes()
+		}
+		bytes += len(geom.Indices()) * 4
+	}
+	for _, material := range drawable.GetGraphic().Materials() {
+		for _, tex := range materialTextures(material.IMaterial()) {
+			if tex != nil && !textureUploaded(tex) {
+				bytes += textureDataBytes(tex)
+			}
+		}
+	}
+	return bytes
+}
+
+// textureDataBytes is the size of a texture's pixels held for upload.
+func textureDataBytes(tex *texture.Texture2D) int {
+	data := unexportedField(tex, "data")
+	if data.IsNil() {
+		return 0
+	}
+	switch pixels := data.Interface().(type) {
+	case []byte:
+		return len(pixels)
+	}
+	return 256 << 10
 }

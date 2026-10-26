@@ -238,6 +238,9 @@ func (rt *Runtime) clearTooltip(w *widget) {
 	state.lines = nil
 	state.unit, state.itemLink, state.spellID, state.spellKind = "", "", 0, ""
 	state.hasContents = false
+	// What a tooltip was widened by (a money line, say) lasts only until it is
+	// cleared, as in the client.
+	state.minWidth, state.padding = 0, 0
 	rt.layoutTooltip(w)
 	rt.fire(w, "OnTooltipCleared", []lua.LValue{w.luaValue(rt.L)})
 }
@@ -291,6 +294,9 @@ func (rt *Runtime) tooltipMethods() map[string]func(L *lua.LState, w *widget) in
 			}
 			state := w.tooltip()
 			rt.clearTooltip(w)
+			// A new owner starts from no anchors: ones left by the last owner would be
+			// joined by the one the caller sets, and stretch the tooltip between them.
+			w.points = nil
 			state.owner = owner
 			state.anchor = L.OptString(3, "ANCHOR_RIGHT")
 			state.anchorX = float64(L.OptNumber(4, 0))

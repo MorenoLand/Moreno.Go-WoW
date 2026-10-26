@@ -28,11 +28,11 @@ type worldMaterial struct {
 	wmoMode float32
 	// envMask has a bit for each texture of an M2 surface drawn with the
 	// reflected environment coordinates.
-	envMask           float32
-	envMaskUniform    gls.Uniform
+	envMask        float32
+	envMaskUniform gls.Uniform
 	// highlight is the colour a model under the mouse is lit up by.
-	highlight        [3]float32
-	highlightUniform gls.Uniform
+	highlight         [3]float32
+	highlightUniform  gls.Uniform
 	instance          int
 	wmoParams, wmoAdd gls.Uniform
 
@@ -86,7 +86,11 @@ type worldProgramUniforms struct {
 const (
 	wmoUnlit    = 0
 	wmoExterior = 1
-	wmoInterior = 3
+	// wmoExteriorUnified is an exterior surface of a map object whose header says
+	// it uses the unified path (MOHD flag 0x2): the MapObjU programs add the
+	// baked colour to half the light instead of multiplying it.
+	wmoExteriorUnified = 2
+	wmoInterior        = 3
 )
 
 // worldInsideInstance is the WMO placement the player stands in.

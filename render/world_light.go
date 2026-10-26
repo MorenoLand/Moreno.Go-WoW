@@ -274,22 +274,87 @@ func (t *worldLightTables) weightsAt(mapID uint32, x, y float32) []worldLightWei
 	return weights
 }
 
-// sunDirection is the direction towards the light for a time of day (minutes
-// since midnight): the sun climbs from the east at 06:00 to its highest at
-// noon and sets in the west at 18:00; at night the same arc is the moon's.
+// worldSunPolar is the polar angle of the light for a time of day, in radians:
+// four keys over the day (day fraction, angle) read cyclically as the original
+// client reads its light tables (0x00d390e4). The azimuth is fixed.
+var worldSunPolar = [4][2]float32{{0, 2.2152}, {0.25, 1.9197}, {0.5, 2.2152}, {0.75, 1.9197}}
+
+const worldSunAzimuth = 3.9270
+
+// worldCyclicLerp reads keys (position, value) sorted by position at t in
+// [0,1], wrapping from the last key to the first (the original's 0x007ed3b0).
+func worldCyclicLerp(keys [][2]float32, t float32) float32 {
+	if t < 0 {
+		t = 0
+	}
+	if t > 1 {
+		t = 1
+	}
+	next := len(keys)
+	for i, key := range keys {
+		if t <= key[0] {
+			next = i
+			break
+		}
+	}
+	var prev int
+	switch {
+	case next == len(keys):
+		next, prev = 0, len(keys)-1
+	case next == 0:
+		prev = len(keys) - 1
+	default:
+		prev = next - 1
+	}
+	span := keys[next][0] - keys[prev][0]
+	if span < 0 {
+		span++
+	}
+	if span < 1e-5 && span > -1e-5 {
+		return keys[prev][1]
+	}
+	along := t - keys[prev][0]
+	if along < 0 {
+		along++
+	}
+	return keys[prev][1] + (keys[next][1]-keys[prev][1])*(along/span)
+}
+
+// worldCosPi is the original's cubic stand-in for cos(pi*x): the fraction
+// of x below its floor is run through 1-(6-4f)f^2 and the sign follows the
+// parity of the floor (0x007eea90 with 0x005fe800).
+func worldCosPi(x float32) float32 {
+	whole := int(x)
+	if x <= 0 {
+		whole--
+	}
+	f := x - float32(whole)
+	v := 1 - (6-4*f)*f*f
+	if whole&1 != 0 {
+		v = -v
+	}
+	return v
+}
+
+// worldSunDirection is the direction towards the light for a time of day
+// (minutes since midnight). The original keeps one light for the sun and the
+// moon whose direction is spherical (polar angle from the day curve, azimuth
+// 225 degrees) and points down at every hour; the light shines along it, so
+// the way towards the light is its negation.
 func worldSunDirection(minuteOfDay float32) [3]float32 {
-	angle := float64(minuteOfDay/60-6) / 12 * math.Pi
-	if angle < 0 || angle > math.Pi {
-		angle = math.Mod(angle+2*math.Pi, math.Pi)
+	const invPi = float32(1 / math.Pi)
+	polar := worldCyclicLerp(worldSunPolar[:], minuteOfDay/1440)
+	sinPolar := worldCosPi(polar*invPi - 0.5)
+	cosPolar := worldCosPi(polar * invPi)
+	cosAzimuth := worldCosPi(worldSunAzimuth * invPi)
+	sinAzimuth := worldCosPi(worldSunAzimuth*invPi - 0.5)
+	x, y, z := -sinPolar*cosAzimuth, -sinPolar*sinAzimuth, -cosPolar
+	// The scene normalises what it is given (0x00834ae0).
+	if squared := x*x + y*y + z*z; squared > 1e-6 {
+		scale := float32(1 / math.Sqrt(float64(squared)))
+		x, y, z = x*scale, y*scale, z*scale
 	}
-	elevation := math.Sin(angle)
-	if elevation < 0.15 {
-		elevation = 0.15
-	}
-	// World x runs north and y runs west: the east horizon is -y.
-	x, y, z := -0.35*elevation, -math.Cos(angle), elevation
-	length := math.Sqrt(x*x + y*y + z*z)
-	return [3]float32{float32(x / length), float32(y / length), float32(z / length)}
+	return [3]float32{x, y, z}
 }
 
 // sample computes the atmosphere at a position and minute of the day.

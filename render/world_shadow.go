@@ -63,6 +63,19 @@ type worldShadowState struct {
 	checkedAt    time.Time
 	x, y, z, yaw float32
 	built        bool
+	// covered is whether ground lies under the shadow; outOfRange that the unit is
+	// too far for its shadow to be drawn.
+	covered    bool
+	outOfRange bool
+}
+
+// setInRange hides the shadow of a far unit and shows it again, if there is
+// ground under it, once the unit is near.
+func (state *worldShadowState) setInRange(inRange bool) {
+	state.outOfRange = !inRange
+	if state.mesh != nil {
+		state.mesh.SetVisible(inRange && state.covered)
+	}
 }
 
 // modelShadowHalfExtents is half the model's extent on x and y.
@@ -203,5 +216,6 @@ func updateWorldShadow(node *core.Node, state *worldShadowState, collision *worl
 		}
 	}
 	state.vbo.Update()
-	state.mesh.SetVisible(covered)
+	state.covered = covered
+	state.mesh.SetVisible(covered && !state.outOfRange)
 }

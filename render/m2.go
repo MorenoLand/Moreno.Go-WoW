@@ -1342,10 +1342,7 @@ func (track m2TrackVec3) value(sequence int, time uint32, globalLoops []uint32, 
 	if count == 1 {
 		return keys.values[0]
 	}
-	next := 0
-	for next < count && keys.times[next] <= time {
-		next++
-	}
+	next := m2KeyAfter(keys.times[:count], time)
 	if next == 0 {
 		return keys.values[0]
 	}
@@ -1385,10 +1382,7 @@ func (track m2TrackScalar) value(sequence int, time uint32, globalLoops []uint32
 	if count == 1 {
 		return keys.values[0]
 	}
-	next := 0
-	for next < count && keys.times[next] <= time {
-		next++
-	}
+	next := m2KeyAfter(keys.times[:count], time)
 	if next == 0 {
 		return keys.values[0]
 	}
@@ -1428,10 +1422,7 @@ func (track m2TrackQuat) value(sequence int, time uint32, globalLoops []uint32, 
 	if count == 1 {
 		return keys.values[0]
 	}
-	next := 0
-	for next < count && keys.times[next] <= time {
-		next++
-	}
+	next := m2KeyAfter(keys.times[:count], time)
 	if next == 0 {
 		return keys.values[0]
 	}
@@ -1798,4 +1789,19 @@ func normalizeModelPath(path string) string {
 		path = path[:len(path)-4] + ".m2"
 	}
 	return path
+}
+
+// m2KeyAfter is the index of the first key later than time: keys are sorted, so
+// it halves the search each step.
+func m2KeyAfter(times []uint32, time uint32) int {
+	low, high := 0, len(times)
+	for low < high {
+		middle := int(uint(low+high) >> 1)
+		if times[middle] <= time {
+			low = middle + 1
+		} else {
+			high = middle
+		}
+	}
+	return low
 }

@@ -355,6 +355,11 @@ vec3 wmoSurface(vec3 texel, vec3 vertexColor) {
         // Unlit material: the baked colour alone.
         return texel * clamp(vertexColor, 0.0, 1.0) * 2.0;
     }
+    if (WmoParams.x > 1.5 && WmoParams.x < 2.5) {
+        // The unified programs (MapObjU*_T1): half the light (constant 28 is mid
+        // grey) plus the baked colour plus the map object's ambient.
+        return texel * clamp(0.498 * wmoLight() + vertexColor + WmoAdd, 0.0, 1.0) * 2.0;
+    }
     // Exterior groups take the sun and sky light; interior ones keep their baked
     // colour. The ambient of the map object the player stands in is added.
     vec3 light = WmoParams.x < 1.5 ? wmoLight() : vec3(1.0);

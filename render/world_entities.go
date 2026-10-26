@@ -73,6 +73,26 @@ func syncWorldGameObject(scene *core.Node, loader *ui.Loader, tables *worldCreat
 		if path == "" {
 			return nil
 		}
+		// An object that stays where it is is merged with its neighbours.
+		if worldObjects != nil && !gameObjectMoves(entity) && worldObjects.batchable(loader, path) {
+			scale := float32(1)
+			if bits, ok := entity.fields[world.ObjectScaleField]; ok {
+				if value := math.Float32frombits(bits); value > 0 {
+					scale = value
+				}
+			}
+			node := core.NewNode()
+			node.SetPosition(entity.movement.Position.X, entity.movement.Position.Y, entity.movement.Position.Z)
+			node.SetRotation(0, 0, entity.movement.Position.Orientation)
+			node.SetScale(scale, scale, scale)
+			node.SetUserData(glueModelInfo{modelTop: worldObjects.top(path), modelScale: 1})
+			entity.node, entity.displayID, entity.modelPath = node, display, path
+			entity.batched = [3]float32{entity.movement.Position.X, entity.movement.Position.Y, entity.movement.Position.Z}
+			entity.batchedOn = true
+			scene.Add(node)
+			worldObjects.add(entity.guid, worldObjectEntry{path: path, origin: entity.batched, rotation: math32.NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(math32.NewVector3(0, 0, 1), entity.movement.Position.Orientation), scale: scale})
+			return nil
+		}
 		model, err := buildWorldCreatureModel(loader, worldCreatureDefinition{path: path, scale: 1, displayScale: 1, modelScale: 1})
 		if err != nil {
 			return err
@@ -90,8 +110,32 @@ func syncWorldGameObject(scene *core.Node, loader *ui.Loader, tables *worldCreat
 	if entity.node != nil {
 		entity.node.SetPosition(entity.movement.Position.X, entity.movement.Position.Y, entity.movement.Position.Z)
 		entity.node.SetRotation(0, 0, entity.movement.Position.Orientation)
+		if entity.batchedOn {
+			// The object was merged with the others: if it was moved, it goes back in
+			// at the new place.
+			at := [3]float32{entity.movement.Position.X, entity.movement.Position.Y, entity.movement.Position.Z}
+			if dx, dy, dz := at[0]-entity.batched[0], at[1]-entity.batched[1], at[2]-entity.batched[2]; dx*dx+dy*dy+dz*dz > 0.0025 && worldObjects != nil {
+				entity.batched = at
+				scale := entity.node.Scale().X
+				worldObjects.add(entity.guid, worldObjectEntry{path: entity.modelPath, origin: at, rotation: math32.NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(math32.NewVector3(0, 0, 1), entity.movement.Position.Orientation), scale: scale})
+			}
+		}
 	}
 	return nil
+}
+
+// gameObjectBytes1Field holds a game object's state, type, art kit and
+// animation progress; the type is the second byte.
+const gameObjectBytes1Field uint16 = 0x11
+
+// gameObjectMoves reports whether the object is of a kind that travels (a
+// transport, a mover) and so cannot be merged with what stands still.
+func gameObjectMoves(entity *worldEntity) bool {
+	switch kind := (entity.fields[gameObjectBytes1Field] >> 8) & 0xFF; kind {
+	case 11, 15, 25: // transport, map object transport, a moving platform
+		return true
+	}
+	return entity.path != nil
 }
 
 type worldEntity struct {
@@ -117,6 +161,10 @@ type worldEntity struct {
 	geoHeight     float32
 	light         worldLightState
 	shadow        worldShadowState
+	// batchedOn is set for a game object drawn as part of a merged mesh; batched
+	// is where it stands in it.
+	batchedOn bool
+	batched   [3]float32
 }
 
 func (tables *worldCreatureTables) definition(loader *ui.Loader, displayID, nativeDisplayID uint32) (worldCreatureDefinition, error) {
@@ -467,6 +515,7 @@ func applyWorldUpdateBlocks(scene *core.Node, loader *ui.Loader, tables *worldCr
 				entity.node.Dispose()
 			}
 			entity.mount.dispose(scene)
+			worldObjects.remove(guid)
 			delete(entities, guid)
 		}
 	}
@@ -598,3 +647,10 @@ func syncPendingWorldEntities(scene *core.Node, loader *ui.Loader, tables *world
 		_ = syncWorldEntity(scene, loader, tables, entity, ownGUID, floor)
 	}
 }
+
+// worldPacketBudget is how long a frame spends on the server's packets, and
+// worldPacketsPerFrame the most it takes.
+const (
+	worldPacketBudget    = 4 * time.Millisecond
+	worldPacketsPerFrame = 512
+)

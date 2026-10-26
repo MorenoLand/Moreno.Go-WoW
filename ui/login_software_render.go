@@ -57,7 +57,12 @@ type UIEngine struct {
 	screenHeight       int
 	rects              map[*widget]Rect
 	layoutActive       map[*widget]bool
-	textFaces          map[string]font.Face
+	textFaces          map[textFaceKey]font.Face
+	lowerNames         map[string]string
+	scrollFrames       []*widget
+	tints              map[tintKey]image.Image
+	scrollFramesFor    int
+	scrollRound        int
 	layerPool          []*image.RGBA
 	layerDepth         int
 	paintCanvas        *image.RGBA
@@ -234,7 +239,7 @@ func newUIEngine(rt *Runtime, loader *Loader, bgImagePath string) (*UIEngine, er
 		FontObjArial: fontObjArial,
 		AssetLoader:  loader,
 		Cache:        cache,
-		textFaces:    make(map[string]font.Face),
+		textFaces:    make(map[textFaceKey]font.Face),
 		BgImagePath:  bgImagePath,
 		uiScale:      1,
 	}
@@ -283,6 +288,7 @@ func (eng *UIEngine) Update(elapsed float64) bool {
 		eng.ClearHover()
 	}
 	statusChanged := false
+	eng.Rt.dropHiddenFocus()
 	eng.Rt.scriptDirty = false
 	if eng.statusTTL > 0 {
 		eng.statusTTL -= elapsed
@@ -549,6 +555,9 @@ func (eng *UIEngine) RenderWorldChat(screenWidth, screenHeight int) *image.RGBA 
 }
 
 func (eng *UIEngine) WorldChatFocused() bool {
+	if eng != nil && eng.Rt != nil {
+		eng.Rt.dropHiddenFocus()
+	}
 	return eng != nil && eng.Rt != nil && eng.Rt.focused == eng.worldChatEditBox()
 }
 
@@ -629,13 +638,14 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 	var paintWidget func(*image.RGBA, *widget, Rect)
 	paintChildren := func(target *image.RGBA, w *widget, rect Rect) {
 		if w.kind == kindScrollFrame {
-			children := eng.acquireLayer(target.Bounds())
+			// Only the frame's own area of the layer is cleared and composited.
+			clip := ScreenRect(screenScaledRect(rect, eng.uiScale), float64(target.Bounds().Dy())).Intersect(target.Bounds())
+			children := eng.acquireLayerRegion(target.Bounds(), clip)
 			for _, child := range orderedChildren(w.children) {
 				if child.shown && child == w.scrollChild {
 					paint(children, child, rect)
 				}
 			}
-			clip := ScreenRect(screenScaledRect(rect, eng.uiScale), float64(target.Bounds().Dy())).Intersect(target.Bounds())
 			if !clip.Empty() {
 				draw.Draw(target, clip, children, clip.Min, draw.Over)
 			}
@@ -992,11 +1002,15 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 			}
 		}
 	}
-	if eng.worldActive {
+	// The picture without the debug panel is kept only while the panel is up, to
+	// move it without a repaint.
+	if eng.worldActive && eng.debugPanel.visible {
 		if eng.worldBaseCanvas == nil || !eng.worldBaseCanvas.Bounds().Eq(canvas.Bounds()) {
 			eng.worldBaseCanvas = image.NewRGBA(canvas.Bounds())
 		}
 		copy(eng.worldBaseCanvas.Pix, canvas.Pix)
+	} else {
+		eng.worldBaseCanvas = nil
 	}
 	if eng.debugPanel.visible {
 		eng.drawDebugPanel(output, face, faceLg)
@@ -1009,13 +1023,23 @@ func (eng *UIEngine) updateScrollFrames() {
 	if eng == nil || eng.Rt == nil {
 		return
 	}
-	frames := make([]*widget, 0)
-	for _, w := range eng.Rt.widgets {
-		if w.kind == kindScrollFrame && w.scrollChild != nil {
-			frames = append(frames, w)
+	// The scroll frames are found again only when widgets were made.
+	if eng.scrollFramesFor != len(eng.Rt.widgets) {
+		eng.scrollFrames = eng.scrollFrames[:0]
+		for _, w := range eng.Rt.widgets {
+			if w.kind == kindScrollFrame && w.scrollChild != nil {
+				eng.scrollFrames = append(eng.scrollFrames, w)
+			}
 		}
+		eng.scrollFramesFor = len(eng.Rt.widgets)
 	}
-	for _, frame := range frames {
+	eng.scrollRound++
+	for _, frame := range eng.scrollFrames {
+		// A hidden frame's extent changes only when something is shown in it, so
+		// it is looked at now and then, not every frame.
+		if !frame.visibleThroughParents() && eng.scrollRound%30 != 0 {
+			continue
+		}
 		contentW, contentH := eng.scrollContentExtent(frame)
 		if frame.scrollChild.width != contentW || frame.scrollChild.height != contentH {
 			frame.scrollChild.width = contentW
@@ -1242,6 +1266,10 @@ func (eng *UIEngine) HandleScroll(delta float64) bool {
 
 func (eng *UIEngine) prepareText(w *widget, face, faceLg font.Face) {
 	if w == nil {
+		return
+	}
+	// What is hidden is measured when it is shown (and when its text is set).
+	if !w.shown {
 		return
 	}
 	if w.kind == kindFontString {
@@ -2001,6 +2029,7 @@ func (eng *UIEngine) setSliderValueAt(w *widget, x, y float64) {
 }
 
 func (eng *UIEngine) HandleChar(char rune) bool {
+	eng.Rt.dropHiddenFocus()
 	w := eng.Rt.focused
 	if w == nil || w.kind != kindEditBox || char < 32 || char == 127 {
 		return false
@@ -2125,6 +2154,7 @@ func (eng *UIEngine) activateWorldChat() bool {
 func (eng *UIEngine) HandleKey(key window.Key) bool { return eng.handleKey(key, false) }
 
 func (eng *UIEngine) handleKey(key window.Key, extendSelection bool) bool {
+	eng.Rt.dropHiddenFocus()
 	if eng.worldLoading && key == window.KeyEnter {
 		return true
 	}
@@ -2261,6 +2291,7 @@ if wasShown then target:Hide() else target:Show() end
 }
 
 func (eng *UIEngine) HandleKeyWithMods(key window.Key, mods window.ModifierKey) bool {
+	eng.Rt.dropHiddenFocus()
 	eng.keyMods = mods
 	if key == window.KeyF2 {
 		eng.ToggleDebugPanel()
@@ -2311,6 +2342,7 @@ func (eng *UIEngine) isLoginTarget(target *widget) bool {
 }
 
 func (eng *UIEngine) HandleKeyUp(key window.Key) bool {
+	eng.Rt.dropHiddenFocus()
 	if eng.worldUIReady && eng.worldActive && eng.handleBindingKeyUp(key) {
 		return true
 	}
@@ -2638,24 +2670,38 @@ func (eng *UIEngine) drawBackdrop(canvas *image.RGBA, bd *backdrop, r Rect) {
 	}
 }
 
+// tintKey names a texture tinted with a colour (to a ten-thousandth, as the
+// string keys it replaces were).
+type tintKey struct {
+	backdrop   bool
+	path       string
+	r, g, b, a int32
+}
+
+func makeTintKey(backdrop bool, path string, tint rgba) tintKey {
+	round := func(v float64) int32 { return int32(math.Round(v * 10000)) }
+	return tintKey{backdrop, path, round(tint.r), round(tint.g), round(tint.b), round(tint.a)}
+}
+
 func (eng *UIEngine) tintBackdropImage(path string, source image.Image, tint rgba) image.Image {
-	key := fmt.Sprintf("backdrop:%s:%.4f:%.4f:%.4f:%.4f", path, tint.r, tint.g, tint.b, tint.a)
-	if imageData, ok := eng.Cache[key]; ok {
-		return imageData
-	}
-	imageData := tintImage(source, tint)
-	eng.Cache[key] = imageData
-	registerStaticTexture(imageData)
-	return imageData
+	return eng.tinted(makeTintKey(true, path, tint), source, tint)
 }
 
 func (eng *UIEngine) tintTextureImage(path string, source image.Image, tint rgba) image.Image {
-	key := fmt.Sprintf("texture:%s:%.4f:%.4f:%.4f:%.4f", path, tint.r, tint.g, tint.b, tint.a)
-	if imageData, ok := eng.Cache[key]; ok {
+	return eng.tinted(makeTintKey(false, path, tint), source, tint)
+}
+
+func (eng *UIEngine) tinted(key tintKey, source image.Image, tint rgba) image.Image {
+	if imageData, ok := eng.tints[key]; ok {
 		return imageData
 	}
+	if eng.tints == nil {
+		eng.tints = make(map[tintKey]image.Image)
+	}
 	imageData := tintImage(source, tint)
-	eng.Cache[key] = imageData
+	eng.tints[key] = imageData
+	// Never changed once made, so its scaled copies can be kept.
+	registerStaticTexture(imageData)
 	return imageData
 }
 
@@ -2901,7 +2947,7 @@ func (eng *UIEngine) faceFor(w *widget, fallback, fallbackLarge font.Face) font.
 		if style.FontFile != "" {
 			fontKey = style.FontFile
 		}
-		lowerFile := strings.ToLower(style.FontFile)
+		lowerFile := eng.lowerName(style.FontFile)
 		switch {
 		case strings.Contains(lowerFile, "morpheus"):
 			fontObj = eng.FontObjSm
@@ -2910,7 +2956,7 @@ func (eng *UIEngine) faceFor(w *widget, fallback, fallbackLarge font.Face) font.
 				fontObj = eng.FontObjArial
 			}
 		}
-	} else if strings.Contains(strings.ToLower(w.fontObject), "large") || strings.Contains(strings.ToLower(w.fontObject), "huge") {
+	} else if lowerObject := eng.lowerName(w.fontObject); strings.Contains(lowerObject, "large") || strings.Contains(lowerObject, "huge") {
 		if unit := eng.pxUnit(); unit != eng.uiScale {
 			return eng.cachedFace("__base16", eng.FontObj, 16*unit)
 		}
@@ -2925,11 +2971,30 @@ func (eng *UIEngine) faceFor(w *widget, fallback, fallbackLarge font.Face) font.
 	return eng.cachedFace(fontKey, fontObj, size*eng.pxUnit(), fallback)
 }
 
+// textFaceKey names a font at a size (in thousandths), without building a string.
+type textFaceKey struct {
+	name string
+	size int64
+}
+
+// lowerName is strings.ToLower for the few names fonts and font objects go by.
+func (eng *UIEngine) lowerName(name string) string {
+	if lower, ok := eng.lowerNames[name]; ok {
+		return lower
+	}
+	if eng.lowerNames == nil {
+		eng.lowerNames = make(map[string]string)
+	}
+	lower := strings.ToLower(name)
+	eng.lowerNames[name] = lower
+	return lower
+}
+
 func (eng *UIEngine) cachedFace(key string, fontObj *opentype.Font, size float64, fallback ...font.Face) font.Face {
 	if eng.textFaces == nil {
-		eng.textFaces = make(map[string]font.Face)
+		eng.textFaces = make(map[textFaceKey]font.Face)
 	}
-	cacheKey := fmt.Sprintf("%s|%.3f", key, size)
+	cacheKey := textFaceKey{name: key, size: int64(math.Round(size * 1000))}
 	if textFace, ok := eng.textFaces[cacheKey]; ok {
 		return textFace
 	}

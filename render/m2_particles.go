@@ -96,6 +96,9 @@ type m2ParticleGroup struct {
 	particleTex *texture.Texture2D
 	rootScale   float32
 	activeCount int
+	// written is how many particles hold values in the buffers; the ones past
+	// the active count are cleared once, not every frame.
+	written int
 }
 
 type m2ParticleSystem struct {
@@ -103,6 +106,9 @@ type m2ParticleSystem struct {
 	time         float32
 	emitterCount int
 	pointCount   int
+	// emissionScale thins the emission of what is far from the viewer (0 means
+	// untouched).
+	emissionScale float32
 }
 
 type particleTextureKey struct {
@@ -223,7 +229,7 @@ func readM2ParticleTrack(data []byte, base, components, componentSize int, fixed
 	return track
 }
 
-func (track m2ParticleTrack) value(age float32, component int, fallback float32) float32 {
+func (track *m2ParticleTrack) value(age float32, component int, fallback float32) float32 {
 	if component < 0 || component >= track.components || len(track.times) == 0 || len(track.values) < track.components {
 		return fallback
 	}
@@ -344,7 +350,7 @@ func buildM2ParticleSystem(loader *ui.Loader, model *parsedM2, root *core.Node, 
 		base := modelVector(transformM2Point(int(emitter.bone), emitter.position, model.bones, 0))
 		activeCount := m2ParticleCount(m2ParticleEmissionRate(model, emitter), emitter.life, count)
 		vertexCount := count * 4
-		group := &m2ParticleGroup{emitter: emitter, model: model, bone: int(emitter.bone), base: base, right: right, up: up, particleTex: tex, rootScale: rootScale, activeCount: activeCount, particles: make([]m2Particle, count), positions: math32.NewArrayF32(0, vertexCount*3), colors: math32.NewArrayF32(0, vertexCount*3), params: math32.NewArrayF32(0, vertexCount*4), alphas: math32.NewArrayF32(0, vertexCount), rotations: math32.NewArrayF32(0, vertexCount), corners: math32.NewArrayF32(0, vertexCount*2)}
+		group := &m2ParticleGroup{emitter: emitter, model: model, bone: int(emitter.bone), base: base, right: right, up: up, particleTex: tex, rootScale: rootScale, activeCount: activeCount, written: activeCount, particles: make([]m2Particle, count), positions: math32.NewArrayF32(0, vertexCount*3), colors: math32.NewArrayF32(0, vertexCount*3), params: math32.NewArrayF32(0, vertexCount*4), alphas: math32.NewArrayF32(0, vertexCount), rotations: math32.NewArrayF32(0, vertexCount), corners: math32.NewArrayF32(0, vertexCount*2)}
 		for particleIndex := range group.particles {
 			seed := uint32(index+1)*0x9e3779b9 + uint32(particleIndex+1)*0x85ebca6b
 			age := float32(0)
@@ -519,7 +525,11 @@ func (system *m2ParticleSystem) Update(elapsed float64) {
 		if group.model != nil {
 			group.base = modelVector(transformM2Point(group.bone, group.emitter.position, group.model.bones, 0))
 		}
-		activeCount := m2ParticleCount(m2ParticleEmissionRate(group.model, group.emitter), group.emitter.life, len(group.particles))
+		rate := m2ParticleEmissionRate(group.model, group.emitter)
+		if system.emissionScale > 0 {
+			rate *= system.emissionScale
+		}
+		activeCount := m2ParticleCount(rate, group.emitter.life, len(group.particles))
 		if activeCount > group.activeCount {
 			for index := group.activeCount; index < activeCount; index++ {
 				seed := uint32(index+1)*0x85ebca6b + uint32(len(group.particles))*0x9e3779b9
@@ -527,13 +537,18 @@ func (system *m2ParticleSystem) Update(elapsed float64) {
 			}
 		}
 		group.activeCount = activeCount
-		for index := range group.particles {
-			if index >= activeCount {
-				for vertex := 0; vertex < 4; vertex++ {
-					group.alphas.Set(index*4+vertex, 0)
-				}
-				continue
+		for index := activeCount; index < group.written; index++ {
+			for vertex := 0; vertex < 4; vertex++ {
+				group.alphas.Set(index*4+vertex, 0)
 			}
+		}
+		changed := activeCount > 0 || group.written > 0
+		group.written = activeCount
+		if !changed {
+			continue
+		}
+		modelColor, modelAlpha := m2ParticleColor(group.model, group.emitter.colorIndex)
+		for index := 0; index < activeCount; index++ {
 			particle := &group.particles[index]
 			particle.age += delta
 			particle.rotation += particle.spin * delta
@@ -544,21 +559,22 @@ func (system *m2ParticleSystem) Update(elapsed float64) {
 				particle.seed += 0x9e3779b9
 				*particle = spawnM2Particle(group, particle.seed, 0)
 			}
-			position := particlePosition(*particle)
-			color, size, alpha, cell := particleAppearance(group.emitter, *particle)
-			modelColor, modelAlpha := m2ParticleColor(group.model, group.emitter.colorIndex)
+			position := particlePositionOf(particle)
+			color, size, alpha, cell := particleAppearanceOf(&group.emitter, particle)
 			color[0] *= modelColor[0]
 			color[1] *= modelColor[1]
 			color[2] *= modelColor[2]
 			alpha *= modelAlpha
+			first := index * 4
+			positions, colors := group.positions[first*3:first*3+12], group.colors[first*3:first*3+12]
+			params := group.params[first*4 : first*4+16]
+			alphas, rotations := group.alphas[first:first+4], group.rotations[first:first+4]
 			for vertex := 0; vertex < 4; vertex++ {
-				positionIndex := (index*4 + vertex) * 3
-				group.positions.Set(positionIndex, position[0], position[1], position[2])
-				group.colors.Set(positionIndex, color[0], color[1], color[2])
-				paramsIndex := (index*4 + vertex) * 4
-				group.params.Set(paramsIndex, size[0]*0.5, size[1]*0.5, cell[0], cell[1])
-				group.alphas.Set(index*4+vertex, alpha)
-				group.rotations.Set(index*4+vertex, particle.rotation)
+				positions[vertex*3], positions[vertex*3+1], positions[vertex*3+2] = position[0], position[1], position[2]
+				colors[vertex*3], colors[vertex*3+1], colors[vertex*3+2] = color[0], color[1], color[2]
+				params[vertex*4], params[vertex*4+1], params[vertex*4+2], params[vertex*4+3] = size[0]*0.5, size[1]*0.5, cell[0], cell[1]
+				alphas[vertex] = alpha
+				rotations[vertex] = particle.rotation
 			}
 		}
 		if group.positionVBO != nil {
@@ -638,6 +654,12 @@ func m2ParticleColor(model *parsedM2, index uint16) ([3]float32, float32) {
 var particleCorners = [][2]float32{{-1, -1}, {1, -1}, {1, 1}, {-1, 1}}
 
 func particleAppearance(emitter m2ParticleEmitter, particle m2Particle) ([3]float32, [2]float32, float32, [2]float32) {
+	return particleAppearanceOf(&emitter, &particle)
+}
+
+// particleAppearanceOf is particleAppearance without copying the emitter and the
+// particle, which it is called with for every particle of every frame.
+func particleAppearanceOf(emitter *m2ParticleEmitter, particle *m2Particle) ([3]float32, [2]float32, float32, [2]float32) {
 	age := float32(0)
 	if particle.life > 0 {
 		age = particle.age / particle.life
@@ -678,8 +700,15 @@ func particleAppearance(emitter m2ParticleEmitter, particle m2Particle) ([3]floa
 	return color, [2]float32{sizeX, sizeY}, alpha, [2]float32{float32(cell % columns), float32(cell / columns)}
 }
 
-func particlePosition(p m2Particle) [3]float32 {
-	return addParticleVector(p.origin, addParticleVector(scaleParticleVector(p.velocity, p.age), scaleParticleVector(p.gravity, 0.5*p.age*p.age)))
+func particlePosition(p m2Particle) [3]float32 { return particlePositionOf(&p) }
+
+func particlePositionOf(p *m2Particle) [3]float32 {
+	half := 0.5 * p.age * p.age
+	return [3]float32{
+		p.origin[0] + p.velocity[0]*p.age + p.gravity[0]*half,
+		p.origin[1] + p.velocity[1]*p.age + p.gravity[1]*half,
+		p.origin[2] + p.velocity[2]*p.age + p.gravity[2]*half,
+	}
 }
 
 func transformM2Direction(index int, value [3]float32, bones []m2Bone, depth int) [3]float32 {

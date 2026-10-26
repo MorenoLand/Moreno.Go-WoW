@@ -47,16 +47,17 @@ void main() {
 
 // worldSelectRing is the one ring of the target.
 type worldSelectRing struct {
-	mesh     *graphic.Mesh
-	vbo      *gls.VBO
-	material *material.Standard
-	texture  *texture.Texture2D
-	shown    *core.Node
-	lastX    float32
-	lastY    float32
-	lastZ    float32
-	lastSize float32
-	built    bool
+	mesh      *graphic.Mesh
+	vbo       *gls.VBO
+	material  *material.Standard
+	texture   *texture.Texture2D
+	shown     *core.Node
+	lastX     float32
+	lastY     float32
+	lastZ     float32
+	lastSize  float32
+	lastAngle float64
+	built     bool
 }
 
 func (ring *worldSelectRing) load(loader *ui.Loader) bool {
@@ -126,7 +127,7 @@ func worldSelectRingSize(info glueModelInfo, scale float32) float32 {
 }
 
 // update puts the ring under the target's entity, or removes it when there is none.
-func (ring *worldSelectRing) update(scene *core.Node, target *core.Node, colour [3]float32, collision *worldCollisionHolder, loader *ui.Loader) {
+func (ring *worldSelectRing) update(scene *core.Node, target *core.Node, colour [3]float32, collision *worldCollisionHolder, loader *ui.Loader, camera [3]float32) {
 	if target == nil || collision == nil {
 		ring.hide()
 		return
@@ -149,17 +150,23 @@ func (ring *worldSelectRing) update(scene *core.Node, target *core.Node, colour 
 		scale = 1
 	}
 	size := worldSelectRingSize(info, scale)
-	if ring.built && math.Abs(float64(position.X-ring.lastX)) < 0.02 && math.Abs(float64(position.Y-ring.lastY)) < 0.02 && math.Abs(float64(position.Z-ring.lastZ)) < 0.02 && size == ring.lastSize {
+	// The texture turns about the ring with the camera (FUN_00744150 with
+	// FUN_007e2d60): its bright rim is on the side of the unit facing the camera,
+	// the angle being that of the way from the camera to the unit.
+	angle := math.Atan2(float64(position.Y-camera[1]), float64(position.X-camera[0]))
+	if ring.built && math.Abs(float64(position.X-ring.lastX)) < 0.02 && math.Abs(float64(position.Y-ring.lastY)) < 0.02 && math.Abs(float64(position.Z-ring.lastZ)) < 0.02 && size == ring.lastSize && math.Abs(angle-ring.lastAngle) < 0.002 {
 		return
 	}
-	ring.lastX, ring.lastY, ring.lastZ, ring.lastSize, ring.built = position.X, position.Y, position.Z, size, true
+	ring.lastX, ring.lastY, ring.lastZ, ring.lastSize, ring.lastAngle, ring.built = position.X, position.Y, position.Z, size, angle, true
+	sine, cosine := float32(math.Sin(angle)), float32(math.Cos(angle))
 	buffer := ring.vbo.Buffer()
 	for row := 0; row < worldRingGrid; row++ {
 		for column := 0; column < worldRingGrid; column++ {
-			u := float32(column) / (worldRingGrid - 1)
-			v := float32(row) / (worldRingGrid - 1)
-			x := position.X + (u*2-1)*size
-			y := position.Y + (v*2-1)*size
+			offsetX := (float32(column)/(worldRingGrid-1)*2 - 1) * size
+			offsetY := (float32(row)/(worldRingGrid-1)*2 - 1) * size
+			x := position.X + offsetX
+			y := position.Y + offsetY
+			u, v := worldRingTexcoord(offsetX, offsetY, size, sine, cosine)
 			z := position.Z
 			if ground, found := collision.floor(x, y, position.Z+size); found {
 				z = ground
@@ -169,7 +176,7 @@ func (ring *worldSelectRing) update(scene *core.Node, target *core.Node, colour 
 			buffer.Set(index+1, y)
 			buffer.Set(index+2, z+worldRingLift)
 			buffer.Set(index+3, u)
-			buffer.Set(index+4, 1-v)
+			buffer.Set(index+4, v)
 		}
 	}
 	ring.vbo.Update()
@@ -200,4 +207,12 @@ func (ring *worldSelectRing) hide() {
 		ring.mesh.Parent().GetNode().Remove(ring.mesh)
 	}
 	ring.shown = nil
+}
+
+// worldRingTexcoord is where a point of the ring square, offset from the unit,
+// falls on the texture once the texture has been turned about the unit by the
+// angle (sine, cosine) of the way from the camera to the unit. The texture's
+// bright rim (v = 1) lands on the side facing the camera (FUN_007e2d60).
+func worldRingTexcoord(offsetX, offsetY, size, sine, cosine float32) (float32, float32) {
+	return 0.5 + (offsetY*cosine-offsetX*sine)/(2*size), 0.5 - (offsetX*cosine+offsetY*sine)/(2*size)
 }
