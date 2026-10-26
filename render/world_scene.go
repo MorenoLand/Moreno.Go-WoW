@@ -176,7 +176,14 @@ type worldWMOMeshKey struct {
 	batchFlags uint8
 	// outdoor groups are lit by the sun and sky; indoor ones keep their baked colours.
 	outdoor bool
+	// cell is the square of the map object's own space the middle of the group lies
+	// in: the surfaces of a map object are drawn per cell, so those out of view cost
+	// nothing.
+	cell [3]int32
 }
+
+// worldWMOCell is the side of those squares.
+const worldWMOCell = 48
 
 // worldWMOInstanceID names a WMO placement: the same placement read again from
 // a neighbouring tile has the same one.
@@ -238,6 +245,8 @@ type worldSceneCollision struct {
 	wmoInstances []int
 	// particles are the doodads of the tile that run particle emitters.
 	particles []*worldParticleSource
+	// instances are the doodads of the tile drawn instanced.
+	instances []worldTileInstance
 }
 
 type worldCollisionRef struct {
@@ -328,6 +337,7 @@ func newWorldSceneCollision(chunks []worldADTChunk, solids []worldCollisionMesh)
 }
 
 type worldSceneAssetCache struct {
+	instances worldInstanceSets
 	// focus is where the player stands (x, y as float32 bits), for building the
 	// nearest doodads of a large map object first.
 	focus              atomic.Uint64
@@ -373,6 +383,8 @@ type worldBuiltWMO struct {
 	emitters []worldEmitterPlacement
 	indoor   map[uint16]worldLocalLight
 	users    int
+	// instances are the doodads drawn instanced.
+	instances []worldTileInstance
 }
 
 // cloneWorldNode makes a tree of nodes and meshes again, the copies drawing the
@@ -745,8 +757,18 @@ func loadWorldTerrainProgress(loader *ui.Loader, position world.WorldPosition, p
 	bigAlpha := worldMapBigAlpha(loader, mapName)
 	root := core.NewNode()
 	info := worldSceneInfo{mapName: mapName, tileX: tileX, tileY: tileY}
-	cache := newWorldSceneAssetCache()
+	// What was built while the character list was on screen is used first.
+	preloaded := takeWorldPreload(position.Map, tileX, tileY)
+	var cache *worldSceneAssetCache
+	if preloaded != nil {
+		cache = preloaded.cache
+	} else {
+		cache = newWorldSceneAssetCache()
+	}
 	streamer := newWorldTerrainStreamer(loader, mapName, position, bigAlpha, cache, root)
+	if preloaded != nil {
+		streamer.preloaded = preloaded.tiles
+	}
 	// Only the tile the player stands on is loaded before the world opens; the
 	// streamer brings in its neighbours, nearest first, while the player looks
 	// around.
@@ -760,7 +782,10 @@ func loadWorldTerrainProgress(loader *ui.Loader, position world.WorldPosition, p
 			if progress != nil {
 				progress(0.1 + 0.8*float64(info.tiles)/float64(requestedTiles))
 			}
-			tile, loadErr := streamer.loadTile(neighborX, neighborY)
+			tile, loadErr := streamer.takePreloaded([2]int{neighborX, neighborY}), error(nil)
+			if tile == nil {
+				tile, loadErr = streamer.loadTile(neighborX, neighborY)
+			}
 			if loadErr != nil {
 				if neighborX == tileX && neighborY == tileY {
 					return nil, worldSceneInfo{}, loadErr
@@ -1271,7 +1296,8 @@ func worldFloat32s(data []byte, components int) []float32 {
 	return result
 }
 
-func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int, []*worldParticleSource, []worldCollisionMesh) {
+func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int, []*worldParticleSource, []worldCollisionMesh, []worldTileInstance) {
+	var tileInstances []worldTileInstance
 	root := core.NewNode()
 	var particles []*worldParticleSource
 	var doodadSolid worldCollisionMesh
@@ -1314,6 +1340,10 @@ func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.World
 			if len(part.positions) == 0 || len(part.indices) == 0 {
 				continue
 			}
+			if set := cache.instanceSet(loader, placement.path, key, part, nil); set != nil {
+				tileInstances = append(tileInstances, newWorldTileInstance(set, origin, rotation, placement.scale))
+				continue
+			}
 			builder := builders[key]
 			if builder == nil {
 				builder = &worldM2MeshBuilder{part: part, positions: math32.NewArrayF32(0, len(part.positions)), normals: math32.NewArrayF32(0, len(part.normals)), uvs: math32.NewArrayF32(0, len(part.uvs)), uvs2: math32.NewArrayF32(0, len(part.uvs2)), colors: math32.NewArrayF32(0, len(part.colors)), alphas: math32.NewArrayF32(0, len(part.alphas)), combiners: math32.NewArrayF32(0, len(part.combiners)), indices: math32.NewArrayU32(0, len(part.indices))}
@@ -1351,9 +1381,9 @@ func buildWorldM2Instances(loader *ui.Loader, adt worldADT, position world.World
 		solids = append(solids, doodadSolid)
 	}
 	if meshCount == 0 && len(particles) == 0 {
-		return nil, 0, nil, solids
+		return nil, 0, nil, solids, tileInstances
 	}
-	return root, meshCount, particles, solids
+	return root, meshCount, particles, solids, tileInstances
 }
 
 func rotateWorldM2Vector(rotation *math32.Quaternion, value [3]float32) [3]float32 {
@@ -1624,8 +1654,9 @@ func buildWorldPlayer(loader *ui.Loader, character world.Character, position wor
 	return wrapWorldModel(model, position, 1), nil
 }
 
-func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int, []worldCollisionMesh, []int, []*worldParticleSource) {
+func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.WorldPosition, cache *worldSceneAssetCache) (*core.Node, int, []worldCollisionMesh, []int, []*worldParticleSource, []worldTileInstance) {
 	root := core.NewNode()
+	var tileInstances []worldTileInstance
 	meshCount := 0
 	doodadCount := 0
 	solids := make([]worldCollisionMesh, 0)
@@ -1654,6 +1685,7 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 				meshCount++
 			}
 			solids = append(solids, built.solids...)
+			tileInstances = append(tileInstances, built.instances...)
 			for _, doodad := range built.doodads {
 				clone := cloneWorldNode(doodad)
 				root.Add(clone)
@@ -1691,6 +1723,24 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 		meshes, placementSolids, indoorDoodads := buildWorldWMOPlacement(loader, placement, model, cache.textures, cache.placeholder, cache.liquid)
 		built = &worldBuiltWMO{users: 1, indoor: indoorDoodads}
 		ids = append(ids, id)
+		// The surfaces that do not blend are drawn instanced with those of the other
+		// placements of the same map object.
+		matrix := worldWMOPlacementMatrix(placement)
+		tag := float32(id & 0xFFFFFF)
+		plain := meshes[:0:0]
+		for _, mesh := range meshes {
+			if label, ok := mesh.UserData().(string); ok {
+				setKey := fmt.Sprintf("%s|%x|%s", placement.path, math.Float32bits(placement.scale), label)
+				if set := cache.wmoInstanceSet(setKey, mesh, matrix); set != nil {
+					instance := newWorldWMOTileInstance(set, matrix, tag)
+					tileInstances = append(tileInstances, instance)
+					built.instances = append(built.instances, instance)
+					continue
+				}
+			}
+			plain = append(plain, mesh)
+		}
+		meshes = plain
 		builtSolids := append([]worldCollisionMesh(nil), placementSolids...)
 		if len(model.lights) > 0 {
 			placed := make([]worldPointLight, 0, len(model.lights))
@@ -1775,6 +1825,18 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 					if len(part.texturePaths) == 0 || len(part.indices) == 0 || len(part.positions) == 0 {
 						continue
 					}
+					var lit *worldLocalLight
+					if indoor {
+						copied := group
+						lit = &copied
+					}
+					if set := cache.instanceSet(loader, doodad.path, key, part, lit); set != nil {
+						instance := newWorldTileInstance(set, worldPosition, rotation, scale)
+						tileInstances = append(tileInstances, instance)
+						built.instances = append(built.instances, instance)
+						merged++
+						continue
+					}
 					batchKey := worldDoodadBatchKey{part: key, indoor: indoor}
 					if indoor {
 						batchKey.light = group
@@ -1822,9 +1884,9 @@ func buildWorldWMOInstances(loader *ui.Loader, adt worldADT, position world.Worl
 		cache.wmoMu.Unlock()
 	}
 	if meshCount == 0 && len(solids) == 0 {
-		return nil, 0, nil, ids, nil
+		return nil, 0, nil, ids, nil, tileInstances
 	}
-	return root, meshCount, solids, ids, particles
+	return root, meshCount, solids, ids, particles, tileInstances
 }
 
 func worldWMOPlacementInRange(placement worldWMOPlacement, position world.WorldPosition) bool {
@@ -1949,6 +2011,19 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 		if len(batches) == 0 {
 			batches = []worldWMOBatch{{start: 0, count: len(group.indices)}}
 		}
+		var groupCell [3]int32
+		if len(group.vertices) >= 3 {
+			var sum [3]float32
+			for at := 0; at+2 < len(group.vertices); at += 3 {
+				sum[0] += group.vertices[at]
+				sum[1] += group.vertices[at+1]
+				sum[2] += group.vertices[at+2]
+			}
+			count := float32(len(group.vertices) / 3)
+			for axis := range sum {
+				groupCell[axis] = int32(math.Floor(float64(sum[axis] / count / worldWMOCell)))
+			}
+		}
 		// An interior group is lit by its map object's ambient and the group's
 		// omni lights, which the original works out per vertex and multiplies into
 		// the baked colour; the lights do not move, so it is done once here.
@@ -1966,7 +2041,7 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 			}
 			// Wow.exe (FUN_007a9380) lights a group by the sun and sky when it is
 			// exterior (flags 0x8 or 0x40), from inside otherwise.
-			key := worldWMOMeshKey{material: materialInfo, batchFlags: batch.flags, outdoor: group.flags&0x48 != 0}
+			key := worldWMOMeshKey{material: materialInfo, batchFlags: batch.flags, outdoor: group.flags&0x48 != 0, cell: groupCell}
 			builder := builders[key]
 			if builder == nil {
 				builder = &worldWMOMeshBuilder{positions: math32.NewArrayF32(0, 0), normals: math32.NewArrayF32(0, 0), uvs: math32.NewArrayF32(0, 0), colors: math32.NewArrayF32(0, 0), indices: math32.NewArrayU32(0, batch.count)}
@@ -2086,6 +2161,7 @@ func buildWorldWMOPlacement(loader *ui.Loader, placement worldWMOPlacement, mode
 		}
 		mesh := graphic.NewMesh(geom, mat)
 		mesh.SetRenderOrder(-40 + int(key.material.blend))
+		mesh.SetUserData(fmt.Sprintf("%v", key))
 		meshes = append(meshes, mesh)
 	}
 	meshes = append(meshes, buildWorldWMOLiquids(loader, liquids, transform, animator)...)
@@ -2490,11 +2566,11 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 	for _, mesh := range buildWorldLiquids(loader, adt.chunks, cache.liquid) {
 		root.Add(mesh)
 	}
-	wmoRoot, wmoCount, wmoSolids, wmoIDs, wmoParticles := buildWorldWMOInstances(loader, adt, position, cache)
+	wmoRoot, wmoCount, wmoSolids, wmoIDs, wmoParticles, wmoInstanceList := buildWorldWMOInstances(loader, adt, position, cache)
 	if wmoRoot != nil {
 		root.Add(wmoRoot)
 	}
-	m2Root, m2Count, m2Particles, m2Solids := buildWorldM2Instances(loader, adt, position, cache)
+	m2Root, m2Count, m2Particles, m2Solids, m2Instances := buildWorldM2Instances(loader, adt, position, cache)
 	if m2Root != nil {
 		root.Add(m2Root)
 	}
@@ -2510,6 +2586,7 @@ func buildWorldTerrainProgressWithCache(loader *ui.Loader, adt worldADT, positio
 	tileCollision.owned = owned
 	tileCollision.wmoInstances = wmoIDs
 	tileCollision.particles = append(m2Particles, wmoParticles...)
+	tileCollision.instances = append(m2Instances, wmoInstanceList...)
 	root.SetUserData(tileCollision)
 	return root, info, nil
 }

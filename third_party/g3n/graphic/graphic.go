@@ -55,7 +55,15 @@ type Graphic struct {
 	cullValid   bool
 
 	stateSort bool // may be drawn out of depth order, grouped with what shares its state
+
+	instances int32 // when above zero the graphic is drawn this many times, one per instance
 }
+
+// SetInstances sets how many instances are drawn; zero draws the graphic once.
+func (gr *Graphic) SetInstances(count int) { gr.instances = int32(count) }
+
+// Instances is how many instances are drawn.
+func (gr *Graphic) Instances() int { return int(gr.instances) }
 
 // SetStateSort allows the renderer to draw this graphic's opaque materials in
 // any order that groups shared state, instead of by depth.
@@ -344,7 +352,11 @@ func (grmat *GraphicMaterial) Render(gs *gls.GLS, rinfo *core.RenderInfo) {
 		if count == 0 {
 			count = indices.Size()
 		}
-		gs.DrawElements(gr.mode, int32(count), gls.UNSIGNED_INT, 4*uint32(grmat.start))
+		if gr.instances > 0 {
+			gs.DrawElementsInstanced(gr.mode, int32(count), gls.UNSIGNED_INT, 4*uint32(grmat.start), gr.instances)
+		} else {
+			gs.DrawElements(gr.mode, int32(count), gls.UNSIGNED_INT, 4*uint32(grmat.start))
+		}
 		// Non indexed geometry
 	} else {
 		if count == 0 {

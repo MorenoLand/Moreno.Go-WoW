@@ -402,3 +402,12 @@ func (mat *Material) TextureCount() int {
 
 	return len(mat.textures)
 }
+
+// Blending returns the blending mode.
+func (mat *Material) Blending() Blending { return mat.blending }
+
+// DepthMask returns whether the material writes the depth buffer.
+func (mat *Material) DepthMask() bool { return mat.depthMask }
+
+// DepthTest returns whether the material tests against the depth buffer.
+func (mat *Material) DepthTest() bool { return mat.depthTest }

@@ -321,10 +321,12 @@ uniform mat4 MVP;
 ` + worldFogVertexDeclarations + `out vec2 FragTexcoord;
 out vec3 FragVertexColor;
 out vec3 FragNormal;
+flat out float FragInstanceTag;
 void main() {
     FragTexcoord = VertexTexcoord;
     FragVertexColor = VertexColor;
     FragNormal = VertexNormal;
+    FragInstanceTag = 0.0;
 ` + worldFogVertexBody + `    gl_Position = MVP * vec4(VertexPosition, 1.0);
 }`
 
@@ -334,6 +336,16 @@ const worldWMOLight = `uniform vec4 LightAmbient;
 uniform vec3 LightDiffuse;
 uniform vec3 LightDirection;
 in vec3 FragNormal;
+flat in float FragInstanceTag;
+uniform float WmoInside;
+// The ambient of the map object the player stands in; for a surface drawn for
+// many placements it is only added to the one that is that map object.
+vec3 wmoInsideAdd(vec3 add) {
+    if (FragInstanceTag < 0.5 || abs(FragInstanceTag - WmoInside) < 0.5) {
+        return add;
+    }
+    return vec3(0.0);
+}
 vec3 wmoLight() {
     if (LightAmbient.w < 0.5) {
         return vec3(1.0);
@@ -358,12 +370,12 @@ vec3 wmoSurface(vec3 texel, vec3 vertexColor) {
     if (WmoParams.x > 1.5 && WmoParams.x < 2.5) {
         // The unified programs (MapObjU*_T1): half the light (constant 28 is mid
         // grey) plus the baked colour plus the map object's ambient.
-        return texel * clamp(0.498 * wmoLight() + vertexColor + WmoAdd, 0.0, 1.0) * 2.0;
+        return texel * clamp(0.498 * wmoLight() + vertexColor + wmoInsideAdd(WmoAdd), 0.0, 1.0) * 2.0;
     }
     // Exterior groups take the sun and sky light; interior ones keep their baked
     // colour. The ambient of the map object the player stands in is added.
     vec3 light = WmoParams.x < 1.5 ? wmoLight() : vec3(1.0);
-    return texel * clamp(vertexColor * light + WmoAdd, 0.0, 1.0) * 2.0;
+    return texel * clamp(vertexColor * light + wmoInsideAdd(WmoAdd), 0.0, 1.0) * 2.0;
 }
 `
 
@@ -446,10 +458,16 @@ func installM2Shaders(r *renderer.Renderer) {
 	// sun-lit, fogged variants must not share state with the menu scenes.
 	r.Shaman.AddProgram("morenowow_world_m2", "morenowow_m2_vertex", "morenowow_m2_fragment")
 	r.Shaman.AddProgram("morenowow_world_m2_alpha_key", "morenowow_m2_vertex", "morenowow_m2_alpha_key_fragment")
+	r.Shaman.AddShader("morenowow_m2_instance_vertex", worldInstanceVertexShader())
+	r.Shaman.AddProgram("morenowow_world_m2_inst", "morenowow_m2_instance_vertex", "morenowow_m2_fragment")
+	r.Shaman.AddProgram("morenowow_world_m2_inst_alpha_key", "morenowow_m2_instance_vertex", "morenowow_m2_alpha_key_fragment")
 	r.Shaman.AddProgram("morenowow_world_terrain", "morenowow_world_terrain_vertex", "morenowow_world_terrain_fragment")
 	r.Shaman.AddProgram("morenowow_world_terrain_alpha_key", "morenowow_world_terrain_vertex", "morenowow_world_terrain_alpha_key_fragment")
 	r.Shaman.AddProgram("morenowow_world_wmo", "morenowow_world_wmo_vertex", "morenowow_world_wmo_fragment")
 	r.Shaman.AddProgram("morenowow_world_wmo_alpha_key", "morenowow_world_wmo_vertex", "morenowow_world_wmo_alpha_key_fragment")
+	r.Shaman.AddShader("morenowow_wmo_instance_vertex", worldWMOInstanceVertexShader())
+	r.Shaman.AddProgram("morenowow_world_wmo_inst", "morenowow_wmo_instance_vertex", "morenowow_world_wmo_fragment")
+	r.Shaman.AddProgram("morenowow_world_wmo_inst_alpha_key", "morenowow_wmo_instance_vertex", "morenowow_world_wmo_alpha_key_fragment")
 	r.Shaman.AddProgram("morenowow_world_sky", "morenowow_world_sky_vertex", "morenowow_world_sky_fragment")
 	r.Shaman.AddShader("morenowow_blob_shadow_vertex", blobShadowVertexShader)
 	r.Shaman.AddShader("morenowow_blob_shadow_fragment", blobShadowFragmentShader)

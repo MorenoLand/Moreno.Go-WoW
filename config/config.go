@@ -32,6 +32,21 @@ type Options struct {
 	// resolution, so the client opens at the size it was last used at.
 	WindowWidth  int `json:"window_width,omitempty"`
 	WindowHeight int `json:"window_height,omitempty"`
+	// Multisample is the samples per pixel of the window (1, 2, 4 or 8; the
+	// original's gxMultisample, whose default is 1). Zero uses 4.
+	Multisample int `json:"multisample,omitempty"`
+}
+
+// MultisampleSamples is the sample count to open the window with: none for 1, the
+// saved count when it is one the card can be asked for, otherwise 4.
+func (options Options) MultisampleSamples() int {
+	switch options.Multisample {
+	case 1:
+		return 0
+	case 2, 4, 8:
+		return options.Multisample
+	}
+	return 4
 }
 
 // WindowSize is the size to open the window at: the saved one when it is

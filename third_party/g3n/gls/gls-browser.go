@@ -414,6 +414,12 @@ func (gs *GLS) DepthFunc(mode uint32) {
 	gs.depthFunc = mode
 }
 
+// ColorMask enables or disables writing of each colour channel.
+func (gs *GLS) ColorMask(red, green, blue, alpha bool) {
+
+	gs.gl.Call("colorMask", red, green, blue, alpha)
+}
+
 // DepthMask enables or disables writing into the depth buffer.
 func (gs *GLS) DepthMask(flag bool) {
 
@@ -664,6 +670,15 @@ func (gs *GLS) TexImage2D(target uint32, level int32, iformat int32, width int32
 	free()
 }
 
+// TexSubImage2D replaces part of a two-dimensional texture image.
+func (gs *GLS) TexSubImage2D(target uint32, level int32, xoffset, yoffset int32, width int32, height int32, format uint32, itype uint32, data interface{}) {
+
+	dataTA, free := wasm.SliceToTypedArray(data)
+	gs.gl.Call("texSubImage2D", int(target), level, xoffset, yoffset, width, height, int(format), int(itype), dataTA)
+	gs.checkError("TexSubImage2D")
+	free()
+}
+
 // CompressedTexImage2D specifies a two-dimensional compressed texture image.
 func (gs *GLS) CompressedTexImage2D(target uint32, level uint32, iformat uint32, width int32, height int32, size int32, data interface{}) {
 
@@ -801,6 +816,21 @@ func (gs *GLS) Uniform4fv(location int32, count int32, v *float32) {
 	gs.stats.Unisets++
 }
 
+// DrawElementsInstanced draws the indexed primitives once for each of instances.
+func (gs *GLS) DrawElementsInstanced(mode uint32, count int32, itype uint32, start uint32, instances int32) {
+
+	gs.gl.Call("drawElementsInstanced", int(mode), count, int(itype), start, instances)
+	gs.checkError("DrawElementsInstanced")
+	gs.stats.Drawcalls++
+}
+
+// VertexAttribDivisor makes a generic vertex attribute advance once per divisor instances.
+func (gs *GLS) VertexAttribDivisor(index uint32, divisor uint32) {
+
+	gs.gl.Call("vertexAttribDivisor", index, divisor)
+	gs.checkError("VertexAttribDivisor")
+}
+
 // VertexAttribPointer defines an array of generic vertex attribute data.
 func (gs *GLS) VertexAttribPointer(index uint32, size int32, xtype uint32, normalized bool, stride int32, offset uint32) {
 
@@ -848,3 +878,15 @@ func (gs *GLS) checkError(name string) {
 		panic(fmt.Sprintf("%s error: %v", name, err))
 	}
 }
+
+// GenQuery is not available in the browser.
+func (gs *GLS) GenQuery() uint32 { return 0 }
+
+// BeginQuery is not available in the browser.
+func (gs *GLS) BeginQuery(target uint32, query uint32) {}
+
+// EndQuery is not available in the browser.
+func (gs *GLS) EndQuery(target uint32) {}
+
+// QueryResult is not available in the browser.
+func (gs *GLS) QueryResult(query uint32) (uint64, bool) { return 0, false }

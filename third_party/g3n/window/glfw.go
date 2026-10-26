@@ -240,7 +240,7 @@ func Init(width, height int, title string) error {
 	glfw.WindowHint(glfw.ContextVersionMajor, 3)
 	glfw.WindowHint(glfw.ContextVersionMinor, 3)
 	glfw.WindowHint(glfw.OpenGLProfile, glfw.OpenGLCoreProfile)
-	glfw.WindowHint(glfw.Samples, 8)
+	glfw.WindowHint(glfw.Samples, MultisampleSamples)
 	// Set OpenGL forward compatible context only for OSX because it is required for OSX.
 	// When this is set, glLineWidth(width) only accepts width=1.0 and generates an error
 	// for any other values although the spec says it should ignore unsupported widths
@@ -500,3 +500,6 @@ func (w *GlfwWindow) DisposeAllCustomCursors() {
 //
 //	// TODO
 //}
+
+// MultisampleSamples is how many samples per pixel the window asks for before it is made.
+var MultisampleSamples = 8

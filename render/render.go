@@ -231,6 +231,7 @@ func (h *clientHost) CancelCast(id uint32) error {
 
 func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, lastCharacter, configPath string, savedOptions config.Options, debug, rememberMe bool) {
 	startWidth, startHeight := savedOptions.WindowSize()
+	window.MultisampleSamples = savedOptions.MultisampleSamples()
 	if err := window.Init(startWidth, startHeight, "MorenoWoW"); err != nil {
 		log.Printf("window: %v", err)
 		return
@@ -601,6 +602,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			} else if uiEngine.CharacterSelectVisible() && selectedIndex >= 0 && selectedIndex < len(glueCharacters) {
 				selectedCharacter = glueCharacters[selectedIndex]
 				characterKey = fmt.Sprintf("%d:%s:%d", selectedCharacter.GUID, worldCharacterModelPath(selectedCharacter), selectedCharacter.PetDisplayID)
+				startWorldPreload(uiEngine.AssetLoader, selectedCharacter)
 			}
 			requestKey := fmt.Sprintf("%s\x00%s\x00%s", path, sceneKey, characterKey)
 			if requestKey == sceneRequestKey && (sceneModel != nil || sceneLoadPending || path == "" && len(sceneModels) == 0) {
@@ -1234,6 +1236,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				frustum := math32.NewFrustumFromMatrix(&viewProjection)
 				cameraAt := cam.Position()
 				worldStreamer.viewFrustum = frustum
+				worldStreamer.updateInstances([3]float32{cameraAt.X, cameraAt.Y, cameraAt.Z}, cam.Far())
 				// Units are moved in two passes: what has to happen in order (who
 				// is visible, which pose each takes, the mounts) first, then the
 				// poses themselves, which touch nothing but each unit's own model

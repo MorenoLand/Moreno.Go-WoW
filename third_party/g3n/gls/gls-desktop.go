@@ -403,6 +403,12 @@ func (gs *GLS) DepthFunc(mode uint32) {
 	gs.depthFunc = mode
 }
 
+// ColorMask enables or disables writing of each colour channel.
+func (gs *GLS) ColorMask(red, green, blue, alpha bool) {
+
+	C.glColorMask(bool2c(red), bool2c(green), bool2c(blue), bool2c(alpha))
+}
+
 // DepthMask enables or disables writing into the depth buffer.
 func (gs *GLS) DepthMask(flag bool) {
 
@@ -832,6 +838,19 @@ func (gs *GLS) Uniform4fv(location int32, count int32, v *float32) {
 	gs.stats.Unisets++
 }
 
+// DrawElementsInstanced draws the indexed primitives once for each of instances.
+func (gs *GLS) DrawElementsInstanced(mode uint32, count int32, itype uint32, start uint32, instances int32) {
+
+	C.glDrawElementsInstanced(C.GLenum(mode), C.GLsizei(count), C.GLenum(itype), unsafe.Pointer(uintptr(start)), C.GLsizei(instances))
+	gs.stats.Drawcalls++
+}
+
+// VertexAttribDivisor makes a generic vertex attribute advance once per divisor instances.
+func (gs *GLS) VertexAttribDivisor(index uint32, divisor uint32) {
+
+	C.glVertexAttribDivisor(C.GLuint(index), C.GLuint(divisor))
+}
+
 // VertexAttribPointer defines an array of generic vertex attribute data.
 func (gs *GLS) VertexAttribPointer(index uint32, size int32, xtype uint32, normalized bool, stride int32, offset uint32) {
 
@@ -953,4 +972,37 @@ func (gs *GLS) cbufStr(s string) *C.GLchar {
 	copy(gs.cbuf, s)
 	gs.cbuf[len(s)] = 0
 	return p
+}
+
+// GenQuery creates a query object.
+func (gs *GLS) GenQuery() uint32 {
+
+	var query uint32
+	C.glGenQueries(1, (*C.GLuint)(&query))
+	return query
+}
+
+// BeginQuery starts a query of the given target (for example TIME_ELAPSED).
+func (gs *GLS) BeginQuery(target uint32, query uint32) {
+
+	C.glBeginQuery(C.GLenum(target), C.GLuint(query))
+}
+
+// EndQuery ends the query of the given target.
+func (gs *GLS) EndQuery(target uint32) {
+
+	C.glEndQuery(C.GLenum(target))
+}
+
+// QueryResult reads a finished query: whether it is ready and its value.
+func (gs *GLS) QueryResult(query uint32) (uint64, bool) {
+
+	var available C.GLuint
+	C.glGetQueryObjectuiv(C.GLuint(query), C.GLenum(QUERY_RESULT_AVAILABLE), &available)
+	if available == 0 {
+		return 0, false
+	}
+	var result C.GLuint64
+	C.glGetQueryObjectui64v(C.GLuint(query), C.GLenum(QUERY_RESULT), &result)
+	return uint64(result), true
 }

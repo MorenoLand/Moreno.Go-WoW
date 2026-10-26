@@ -1,6 +1,7 @@
 package render
 
 import (
+	"math"
 	"os"
 	"runtime"
 	"strconv"
@@ -107,15 +108,24 @@ func (l *worldViewLimiter) next(sceneMS, targetMS float64) float64 {
 	if l.average == 0 {
 		l.average = sceneMS
 	}
-	l.average += (sceneMS - l.average) * 0.1
+	l.average += (sceneMS - l.average) * 0.2
 	l.frames++
-	if l.frames%4 != 0 {
+	if l.frames%2 != 0 {
 		return l.factor
 	}
 	switch {
 	case l.average > targetMS*1.1:
-		l.factor *= 0.97
-	case l.average < targetMS*0.75:
+		// What is drawn grows with the area seen, so the distance shrinks by the
+		// root of how far over the time is, at most a tenth at a time.
+		step := math.Sqrt(targetMS / l.average)
+		if step < 0.9 {
+			step = 0.9
+		}
+		if step > 0.99 {
+			step = 0.99
+		}
+		l.factor *= step
+	case l.average < targetMS*0.75 && l.frames%4 == 0:
 		l.factor *= 1.02
 	}
 	if l.factor < worldViewMinFactor {

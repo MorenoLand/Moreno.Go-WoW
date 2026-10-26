@@ -113,6 +113,11 @@ type worldTerrainStreamer struct {
 	// are shown each frame so their first draw (buffer and texture uploads) is
 	// spread over many frames instead of stalling one.
 	reveal []worldRevealItem
+	// preloaded are tiles built before the world was entered that are not yet
+	// attached.
+	preloaded map[[2]int]*worldStreamedTile
+	// instances are the instanced doodads of the attached tiles.
+	instances *worldInstances
 	// viewFrustum is what the camera sees this frame, for leaving out what is not.
 	viewFrustum *math32.Frustum
 	lastUpdate  time.Time
@@ -155,12 +160,47 @@ func (s *worldTerrainStreamer) loadTile(tileX, tileY int) (*worldStreamedTile, e
 	return tile, nil
 }
 
+// takePreloaded gives a tile built before the world was entered, once.
+func (s *worldTerrainStreamer) takePreloaded(key [2]int) *worldStreamedTile {
+	tile := s.preloaded[key]
+	delete(s.preloaded, key)
+	return tile
+}
+
 // adopt attaches an already built tile to the scene.
 // adoptNow attaches a tile that is shown at once (the ones around the player
 // when the world loads, behind the loading screen).
 func (s *worldTerrainStreamer) adoptNow(key [2]int, tile *worldStreamedTile) {
 	s.root.Add(tile.node)
 	s.tiles[key] = tile
+	s.attachInstances(key, tile, false)
+}
+
+// attachInstances hands the instanced doodads of a tile to the streamer; their
+// parts first appear at the pace of the reveal queue unless the tile is shown at once.
+func (s *worldTerrainStreamer) attachInstances(key [2]int, tile *worldStreamedTile, gradual bool) {
+	if len(tile.collision.instances) == 0 {
+		return
+	}
+	if s.instances == nil {
+		s.instances = newWorldInstances(s.root)
+	}
+	var reveal func(*worldInstanceSet)
+	if gradual {
+		first := tile.collision.instances[0].placement
+		reveal = func(set *worldInstanceSet) {
+			s.reveal = append(s.reveal, worldRevealItem{node: set.mesh, cx: first.centre[0], cy: first.centre[1], ready: &set.ready})
+		}
+	}
+	s.instances.add(key, tile.collision.instances, reveal)
+}
+
+// updateInstances fills the instance buffers for the frame.
+func (s *worldTerrainStreamer) updateInstances(camera [3]float32, reach float32) int {
+	if s == nil || s.instances == nil {
+		return 0
+	}
+	return s.instances.update(camera, s.viewFrustum, reach)
 }
 
 func (s *worldTerrainStreamer) adopt(key [2]int, tile *worldStreamedTile) {
@@ -177,6 +217,7 @@ func (s *worldTerrainStreamer) adopt(key [2]int, tile *worldStreamedTile) {
 	hide(tile.node)
 	s.root.Add(tile.node)
 	s.tiles[key] = tile
+	s.attachInstances(key, tile, true)
 	// What is nearest the player appears first.
 	focusX, focusY := s.cache.getFocus()
 	sort.SliceStable(s.reveal, func(i, j int) bool {
@@ -288,11 +329,25 @@ func (s *worldTerrainStreamer) update(x, y float32) {
 	for shown < budget && len(s.reveal) > 0 && (shown == 0 || spent < byteBudget) {
 		item := s.reveal[0]
 		item.node.GetNode().SetVisible(true)
+		if item.ready != nil {
+			*item.ready = true
+		}
 		spent += item.upload()
 		s.reveal = s.reveal[1:]
 		shown++
 	}
 	tileX, tileY := worldTileAt(x, y)
+	// Tiles built before the world was entered that the player now needs are
+	// attached at once.
+	for key, tile := range s.preloaded {
+		if int(math.Abs(float64(key[0]-tileX))) <= worldStreamRadius && int(math.Abs(float64(key[1]-tileY))) <= worldStreamRadius {
+			if _, exists := s.tiles[key]; !exists {
+				s.adopt(key, tile)
+				changed = true
+			}
+			delete(s.preloaded, key)
+		}
+	}
 	if [2]int{tileX, tileY} != s.lastTile {
 		s.lastTile = [2]int{tileX, tileY}
 		s.requestNeighbours(x, y, tileX, tileY)
@@ -318,6 +373,9 @@ func (s *worldTerrainStreamer) update(x, y float32) {
 func (s *worldTerrainStreamer) release(key [2]int, tile *worldStreamedTile) {
 	delete(s.tiles, key)
 	s.root.Remove(tile.node)
+	if s.instances != nil {
+		s.instances.remove(key)
+	}
 	meshes := make(map[*graphic.Mesh]bool)
 	var walk func(node core.INode)
 	walk = func(node core.INode) {
@@ -354,7 +412,7 @@ func (s *worldTerrainStreamer) requestNeighbours(x, y float32, tileX, tileY int)
 			if key[0] < 0 || key[0] >= 64 || key[1] < 0 || key[1] >= 64 {
 				continue
 			}
-			if _, loaded := s.tiles[key]; loaded || s.inflight[key] {
+			if _, loaded := s.tiles[key]; loaded || s.inflight[key] || s.preloaded[key] != nil {
 				continue
 			}
 			centreX := (32 - float64(key[1]) - 0.5) * worldTileSize
@@ -375,12 +433,14 @@ func (s *worldTerrainStreamer) requestNeighbours(x, y float32, tileX, tileY int)
 
 // worldRevealBytes is how much a frame may send to the card for newly arrived
 // parts of the map.
-const worldRevealBytes = 3 << 20
+const worldRevealBytes = 3 << 19
 
 // worldRevealItem is a hidden part of a tile waiting to appear.
 type worldRevealItem struct {
 	node   core.INode
 	cx, cy float32
+	// ready, when set, is raised once the part is shown.
+	ready *bool
 }
 
 func newWorldRevealItem(node core.INode) worldRevealItem {

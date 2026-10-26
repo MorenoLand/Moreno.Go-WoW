@@ -35,6 +35,10 @@ type worldMaterial struct {
 	highlightUniform  gls.Uniform
 	instance          int
 	wmoParams, wmoAdd gls.Uniform
+	// wmoInstanced marks a surface drawn instanced for many placements of a map
+	// object: which of them the player stands in is told per placement.
+	wmoInstanced     bool
+	wmoInsideUniform gls.Uniform
 
 	indoorAmbient, pointPositions, pointColours      gls.Uniform
 	ambient, diffuse, direction, fogColor, fogParams gls.Uniform
@@ -47,6 +51,7 @@ func newWorldMaterial() *worldMaterial {
 	m.highlightUniform.Init("M2Highlight")
 	m.wmoParams.Init("WmoParams")
 	m.wmoAdd.Init("WmoAdd")
+	m.wmoInsideUniform.Init("WmoInside")
 	m.indoorAmbient.Init("IndoorAmbient")
 	m.pointPositions.Init("PointLightPos")
 	m.pointColours.Init("PointLightColor")
@@ -79,6 +84,7 @@ type worldProgramUniforms struct {
 	wmoMode                          float32
 	envMask                          float32
 	wmoAdd                           [3]float32
+	inside                           int
 	highlight                        [3]float32
 }
 
@@ -100,7 +106,14 @@ var worldInsideInstance int
 // object the player stands in (the engine sets the vertex program's constant
 // 29 from it, halved, and the pixel stage doubles the result).
 func (m *worldMaterial) wmoAmbientAdd() [3]float32 {
-	if m.wmoMode == wmoUnlit || m.instance == 0 || m.instance != worldInsideInstance || !worldAtmo.valid {
+	if m.wmoMode == wmoUnlit || !worldAtmo.valid {
+		return [3]float32{}
+	}
+	if m.wmoInstanced {
+		if worldInsideInstance == 0 {
+			return [3]float32{}
+		}
+	} else if m.instance == 0 || m.instance != worldInsideInstance {
 		return [3]float32{}
 	}
 	// Interior surfaces take half of it: their baked colour carries more of the
@@ -133,7 +146,7 @@ func (m *worldMaterial) RenderSetup(gs *gls.GLS) {
 		worldUniformCache[key] = cached
 	}
 	if m.local == nil && m.water < 0 && !m.sky {
-		current := worldProgramUniforms{set: true, ambient: a.ambient, diffuse: a.diffuse, direction: a.direction, fog: a.fog, fogStart: a.fogStart, fogEnd: a.fogEnd, valid: a.valid, lit: m.lit, noFog: m.noFog, wmoMode: m.wmoMode, envMask: m.envMask, wmoAdd: m.wmoAmbientAdd(), highlight: m.highlight}
+		current := worldProgramUniforms{set: true, ambient: a.ambient, diffuse: a.diffuse, direction: a.direction, fog: a.fog, fogStart: a.fogStart, fogEnd: a.fogEnd, valid: a.valid, lit: m.lit, noFog: m.noFog, wmoMode: m.wmoMode, envMask: m.envMask, wmoAdd: m.wmoAmbientAdd(), inside: worldInsideInstance, highlight: m.highlight}
 		if *cached == current {
 			return
 		}
@@ -168,6 +181,7 @@ func (m *worldMaterial) RenderSetup(gs *gls.GLS) {
 	gs.Uniform3f(m.highlightUniform.Location(gs), m.highlight[0], m.highlight[1], m.highlight[2])
 	gs.Uniform4f(m.wmoParams.Location(gs), m.wmoMode, 0, 0, 0)
 	gs.Uniform3f(m.wmoAdd.Location(gs), add[0], add[1], add[2])
+	gs.Uniform1f(m.wmoInsideUniform.Location(gs), float32(worldInsideInstance&0xFFFFFF))
 	gs.Uniform4f(m.indoorAmbient.Location(gs), indoorAmbient[0], indoorAmbient[1], indoorAmbient[2], indoor)
 	gs.Uniform4fv(m.pointPositions.Location(gs), worldLocalLightCount, &positions[0])
 	gs.Uniform4fv(m.pointColours.Location(gs), worldLocalLightCount, &colours[0])

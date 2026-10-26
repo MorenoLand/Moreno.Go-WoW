@@ -25,6 +25,7 @@ type VBOattrib struct {
 	ByteOffset  uint32     // Byte offset from the start of the VBO
 	NumElements int32      // Number of elements
 	ElementType uint32     // Type of the element (e.g. FLOAT, INT, UNSIGNED_SHORT, etc...)
+	Divisor     uint32     // Instances per step of the attribute: 0 steps per vertex
 }
 
 // AttribType is the functional type of a vbo attribute.
@@ -145,6 +146,20 @@ func (vbo *VBO) AddCustomAttribOffset(name string, itemSize int32, byteOffset ui
 		ByteOffset:  byteOffset,
 		NumElements: itemSize,
 		ElementType: FLOAT,
+	})
+	return vbo
+}
+
+// AddInstanceAttrib adds a float attribute that steps once per instance.
+func (vbo *VBO) AddInstanceAttrib(name string, itemSize int32) *VBO {
+
+	vbo.attribs = append(vbo.attribs, VBOattrib{
+		Type:        Undefined,
+		Name:        name,
+		ByteOffset:  uint32(vbo.StrideSize()),
+		NumElements: itemSize,
+		ElementType: FLOAT,
+		Divisor:     1,
 	})
 	return vbo
 }
@@ -309,6 +324,9 @@ func (vbo *VBO) Transfer(gs *GLS) {
 			// Enables attribute and sets its stride and offset in the buffer
 			gs.EnableVertexAttribArray(uint32(loc))
 			gs.VertexAttribPointer(uint32(loc), attrib.NumElements, attrib.ElementType, false, int32(strideSize), attrib.ByteOffset)
+			if attrib.Divisor != 0 {
+				gs.VertexAttribDivisor(uint32(loc), attrib.Divisor)
+			}
 		}
 		vbo.gs = gs // this indicates that the vbo was initialized
 	}
