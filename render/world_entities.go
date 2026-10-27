@@ -110,6 +110,16 @@ func syncWorldGameObject(scene *core.Node, loader *ui.Loader, tables *worldCreat
 	if entity.node != nil {
 		entity.node.SetPosition(entity.movement.Position.X, entity.movement.Position.Y, entity.movement.Position.Z)
 		entity.node.SetRotation(0, 0, entity.movement.Position.Orientation)
+		// What can be bumped into follows the object's state: a door that opens
+		// is walked through.
+		if want := gameObjectSolid(entity); want != entity.collides && entity.modelPath != "" {
+			entity.collides = want
+			if want {
+				registerGameObjectCollision(loader, entity, entity.modelPath)
+			} else {
+				worldCollisionStreamer.setObjectSolid(entity.guid, worldCollisionMesh{})
+			}
+		}
 		if entity.batchedOn {
 			// The object was merged with the others: if it was moved, it goes back in
 			// at the new place.
@@ -139,7 +149,9 @@ func gameObjectMoves(entity *worldEntity) bool {
 }
 
 type worldEntity struct {
-	guid          uint64
+	guid uint64
+	// collides is whether the game object has been given collision.
+	collides      bool
 	objectType    world.ObjectType
 	fields        map[uint16]uint32
 	movement      world.UpdateMovement
@@ -516,6 +528,7 @@ func applyWorldUpdateBlocks(scene *core.Node, loader *ui.Loader, tables *worldCr
 			}
 			entity.mount.dispose(scene)
 			worldObjects.remove(guid)
+			worldCollisionStreamer.setObjectSolid(guid, worldCollisionMesh{})
 			delete(entities, guid)
 		}
 	}
@@ -654,3 +667,41 @@ const (
 	worldPacketBudget    = 4 * time.Millisecond
 	worldPacketsPerFrame = 512
 )
+
+// worldCollisionStreamer is the streamer of the world being shown, which the game
+// objects give their collision to; nil outside the world.
+var worldCollisionStreamer *worldTerrainStreamer
+
+// gameObjectSolid says whether a game object of this type is something to bump
+// into: not a trap, a camera, a fishing float or a moving platform.
+func gameObjectSolid(entity *worldEntity) bool {
+	if _, known := entity.fields[gameObjectBytes1Field]; !known {
+		return true
+	}
+	state := entity.fields[gameObjectBytes1Field] & 0xFF
+	switch kind := (entity.fields[gameObjectBytes1Field] >> 8) & 0xFF; kind {
+	case 0: // a door: open ones can be walked through
+		return state == 1
+	case 6, 11, 13, 15, 17, 18, 25, 26, 27: // trap, transport, camera, fishing node, ritual, flag, mover
+		return false
+	}
+	return true
+}
+
+// registerGameObjectCollision gives a game object the collision of its model.
+func registerGameObjectCollision(loader *ui.Loader, entity *worldEntity, path string) {
+	streamer := worldCollisionStreamer
+	if streamer == nil || entity.node == nil || !strings.HasSuffix(strings.ToLower(path), ".m2") || !gameObjectSolid(entity) {
+		return
+	}
+	scale := entity.node.Scale().X
+	if scale <= 0 {
+		scale = 1
+	}
+	position := entity.movement.Position
+	rotation := math32.NewQuaternion(0, 0, 0, 1).SetFromAxisAngle(math32.NewVector3(0, 0, 1), position.Orientation)
+	triangles := streamer.cache.m2CollisionTriangles(loader, path, [3]float32{position.X, position.Y, position.Z}, rotation, scale)
+	if len(triangles) > 0 {
+		streamer.setObjectSolid(entity.guid, worldCollisionMesh{triangles: triangles})
+	}
+}

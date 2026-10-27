@@ -398,7 +398,22 @@ type QuestInfo struct {
 	TargetText [4]string
 	Choices    [6]QuestItem
 	Rewards    [4]QuestItem
-}
+	// XPRow is the column of the experience table the reward is read from.
+	XPRow uint32
+	// RewardSpell is the spell the quest teaches or casts for the player.
+	RewardSpell    uint32
+	RewardHonor    int32
+	RewardTitle    uint32
+	RewardTalents  uint32
+	RewardArena    uint32
+	RewardFactions [5]QuestFactionReward
+	}
+
+	// QuestFactionReward is the reputation a quest gives with a faction.
+	type QuestFactionReward struct {
+	ID    uint32
+	Value int32
+	}
 
 // QuestTarget is one kill or use objective.
 type QuestTarget struct {
@@ -436,23 +451,53 @@ func ParseQuestQueryResponse(body []byte) (QuestInfo, error) {
 	if info.SuggestedSize, err = r.U32(); err != nil {
 		return info, err
 	}
-	// Two required reputation pairs, the next quest of the chain and the XP row.
-	if err = r.Skip(4*4 + 4 + 4); err != nil {
-		return info, err
+	// Two required reputation pairs and the next quest of the chain.
+	if err = r.Skip(4*4 + 4); err != nil {
+	return info, err
+	}
+	if info.XPRow, err = r.U32(); err != nil {
+	return info, err
 	}
 	if info.RewardMoney, err = r.U32(); err != nil {
 		return info, err
 	}
-	// Bonus money, display spell, spell, honor, honor multiplier, start item.
-	if err = r.Skip(6 * 4); err != nil {
-		return info, err
+	// Bonus money, then the display spell, the spell, the honor, the honor
+	// multiplier and the start item.
+	if err = r.Skip(4); err != nil {
+	return info, err
+	}
+	if info.RewardSpell, err = r.U32(); err != nil {
+	return info, err
+	}
+	if err = r.Skip(4); err != nil {
+	return info, err
+	}
+	honor, err := r.U32()
+	if err != nil {
+	return info, err
+	}
+	info.RewardHonor = int32(honor)
+	if err = r.Skip(2 * 4); err != nil {
+	return info, err
 	}
 	if info.Flags, err = r.U32(); err != nil {
 		return info, err
 	}
 	// Title, players slain, talents, arena points, faction flags.
-	if err = r.Skip(5 * 4); err != nil {
-		return info, err
+	if info.RewardTitle, err = r.U32(); err != nil {
+	return info, err
+	}
+	if err = r.Skip(4); err != nil {
+	return info, err
+	}
+	if info.RewardTalents, err = r.U32(); err != nil {
+	return info, err
+	}
+	if info.RewardArena, err = r.U32(); err != nil {
+	return info, err
+	}
+	if err = r.Skip(4); err != nil {
+	return info, err
 	}
 	for index := range info.Rewards {
 		if info.Rewards[index].Entry, err = r.U32(); err != nil {
@@ -470,9 +515,22 @@ func ParseQuestQueryResponse(body []byte) (QuestInfo, error) {
 			return info, err
 		}
 	}
-	// Reward factions, their values and overrides, then the point of interest.
-	if err = r.Skip(15*4 + 4*4); err != nil {
-		return info, err
+	// Reward factions and their values, then the overrides and the point of
+	// interest.
+	for index := range info.RewardFactions {
+	if info.RewardFactions[index].ID, err = r.U32(); err != nil {
+	return info, err
+	}
+	}
+	for index := range info.RewardFactions {
+	value, err := r.U32()
+	if err != nil {
+	return info, err
+	}
+	info.RewardFactions[index].Value = int32(value)
+	}
+	if err = r.Skip(5*4 + 4*4); err != nil {
+	return info, err
 	}
 	if info.Title, err = r.CString(); err != nil {
 		return info, err

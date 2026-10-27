@@ -199,6 +199,10 @@ func (rt *Runtime) ShowError(text string) {
 
 // ShowGlobalError shows the text of a global string such as ERR_BADATTACKPOS.
 func (rt *Runtime) ShowGlobalError(name string) {
+	if index, ok := gameErrorIndex(name); ok {
+		rt.ShowGameError(index)
+		return
+	}
 	if text, ok := rt.L.GetGlobal(name).(lua.LString); ok {
 		rt.ShowError(string(text))
 	}

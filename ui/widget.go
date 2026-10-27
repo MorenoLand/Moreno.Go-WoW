@@ -105,6 +105,9 @@ type widget struct {
 	tip             *tooltipState
 	animation       *animationState
 	metaProxy       *lua.LTable
+	// classIndex is what a script made the frame's metatable (setmetatable(frame,
+	// Class)): members the frame lacks are looked for there.
+	classIndex lua.LValue
 	animationGroups []*widget
 
 	pushedTextOffsetX, pushedTextOffsetY float64
@@ -548,6 +551,9 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 				rt.measureText(w)
 			}
 			width := w.width
+			if width <= 0 {
+				width, _ = rt.anchoredSize(w)
+			}
 			if width <= 0 && (w.name == "GlueParent" || w.name == "UIParent") && rt.Host != nil {
 				width, _ = rt.Host.ScreenSize()
 				if w.name == "GlueParent" {
@@ -562,6 +568,9 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 				rt.measureText(w)
 			}
 			height := w.height
+			if height <= 0 {
+				_, height = rt.anchoredSize(w)
+			}
 			if height <= 0 && (w.name == "GlueParent" || w.name == "UIParent") && rt.Host != nil {
 				_, height = rt.Host.ScreenSize()
 				if w.name == "GlueParent" {
@@ -573,6 +582,15 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		},
 		"GetSize": func(L *lua.LState, w *widget) int {
 			width, height := w.width, w.height
+			if width <= 0 || height <= 0 {
+				anchoredWidth, anchoredHeight := rt.anchoredSize(w)
+				if width <= 0 {
+					width = anchoredWidth
+				}
+				if height <= 0 {
+					height = anchoredHeight
+				}
+			}
 			if (width <= 0 || height <= 0) && (w.name == "GlueParent" || w.name == "UIParent") && rt.Host != nil {
 				hostWidth, hostHeight := rt.Host.ScreenSize()
 				if w.name == "GlueParent" {
@@ -1541,7 +1559,12 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			return 1
 		},
 		"SetBackdrop": func(L *lua.LState, w *widget) int {
-			t := L.CheckTable(2)
+		// SetBackdrop(nil) takes the backdrop away.
+		if L.Get(2) == lua.LNil || L.GetTop() < 2 {
+			w.backdrop = nil
+			return 0
+		}
+		t := L.CheckTable(2)
 			bd := &backdrop{}
 			bd.bgFile = tableString(t, "bgFile")
 			bd.edgeFile = tableString(t, "edgeFile")
@@ -1786,10 +1809,16 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		name := L.CheckString(2)
 		// Script-assigned members take precedence over built-in methods.
 		if w.fields != nil {
-			if v := w.fields.RawGetString(name); v != lua.LNil {
-				L.Push(v)
-				return 1
-			}
+		if v := w.fields.RawGetString(name); v != lua.LNil {
+		L.Push(v)
+		return 1
+		}
+		}
+		if w.classIndex != nil {
+		if v := classMember(L, w.classIndex, name); v != lua.LNil {
+		L.Push(v)
+		return 1
+		}
 		}
 		// Methods an add-on wrote into the type's method table come next.
 		if table := rt.addonMethods[w.objectType()]; table != nil {
@@ -1850,6 +1879,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		return 0
 	}))
 	installWidgetSetmetatable(L)
+	installWidgetType(L)
 	baseGetMetatable := L.GetGlobal("getmetatable")
 	L.SetGlobal("getmetatable", L.NewFunction(func(L *lua.LState) int {
 		if ud, ok := L.Get(1).(*lua.LUserData); ok {
@@ -1985,4 +2015,45 @@ type textMeasureKey struct {
 	autoWidth, explicit, autoHeight bool
 	justify                         string
 	width, height                   float64
+}
+
+// classMember looks a member up through what a script made a frame's
+// metatable: the metatable's __index, a table or a frame whose own
+// script-assigned members and metatable count in turn.
+func classMember(L *lua.LState, class lua.LValue, name string) lua.LValue {
+	var index lua.LValue = lua.LNil
+	switch value := class.(type) {
+	case *lua.LTable:
+		index = value.RawGetString("__index")
+	case *lua.LUserData:
+		if w, ok := value.Value.(*widget); ok && w.fields != nil {
+			index = w.fields.RawGetString("__index")
+		}
+	}
+	switch value := index.(type) {
+	case *lua.LFunction:
+		L.Push(value)
+		L.Push(class)
+		L.Push(lua.LString(name))
+		if err := L.PCall(2, 1, nil); err != nil {
+			return lua.LNil
+		}
+		result := L.Get(-1)
+		L.Pop(1)
+		return result
+	case *lua.LTable:
+		return L.GetTable(value, lua.LString(name))
+	case *lua.LUserData:
+		if w, ok := value.Value.(*widget); ok {
+			if w.fields != nil {
+				if v := w.fields.RawGetString(name); v != lua.LNil {
+					return v
+				}
+			}
+			if w.classIndex != nil {
+				return classMember(L, w.classIndex, name)
+			}
+		}
+	}
+	return lua.LNil
 }

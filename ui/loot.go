@@ -105,12 +105,18 @@ func (rt *Runtime) moneyText(copper uint32) string {
 // moneyIcon is the coin picture the loot window draws for an amount.
 func moneyIcon(copper uint32) string {
 	switch {
-	case copper >= 10000:
-		return `Interface\Icons\INV_Misc_Coin_01`
-	case copper >= 100:
+	case copper < 10:
+		return `Interface\Icons\INV_Misc_Coin_05`
+	case copper < 100:
+		return `Interface\Icons\INV_Misc_Coin_06`
+	case copper < 1000:
 		return `Interface\Icons\INV_Misc_Coin_03`
+	case copper < 10000:
+		return `Interface\Icons\INV_Misc_Coin_04`
+	case copper < 100000:
+		return `Interface\Icons\INV_Misc_Coin_01`
 	}
-	return `Interface\Icons\INV_Misc_Coin_05`
+	return `Interface\Icons\INV_Misc_Coin_02`
 }
 
 // registerLootAPI defines the calls the loot window makes.

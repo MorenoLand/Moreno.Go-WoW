@@ -98,6 +98,11 @@ type worldCameraController struct {
 	tookOff      bool
 	touchedDown  bool
 	pitchChanged bool
+
+	// followGUID is the unit being followed, followAt where it is.
+	followGUID uint64
+	followAt   func(uint64) (x, y float32, ok bool)
+	followDone func()
 }
 
 func newWorldCameraController(position world.WorldPosition) *worldCameraController {
@@ -115,6 +120,9 @@ func newWorldCameraController(position world.WorldPosition) *worldCameraControll
 func (c *worldCameraController) handleCommand(command string, down bool) bool {
 	if !worldMovementCommands[command] {
 		return false
+	}
+	if down && c.followGUID != 0 && command != cmdToggleRun && command != cmdAutoRun {
+		c.stopFollowing()
 	}
 	switch command {
 	case cmdJump:
@@ -420,6 +428,7 @@ func (c *worldCameraController) update(elapsed float64, cam *camera.Camera, play
 	if elapsed <= 0 {
 		return false
 	}
+	c.followStep()
 	delta := float32(math.Min(elapsed, 0.1))
 	c.clock += float64(delta)
 	c.airTime += float64(delta)
@@ -788,3 +797,39 @@ func (c *worldCameraController) syncFromUpdate(movement world.UpdateMovement) {
 		c.rooted = movement.MovementFlags&world.MovementFlagRoot != 0
 	}
 }
+
+// stopFollowing ends the following of a unit.
+func (c *worldCameraController) stopFollowing() {
+	c.followGUID = 0
+	c.commands[cmdForward] = false
+	if c.followDone != nil {
+		c.followDone()
+	}
+}
+
+// followStep turns the mover toward the unit it follows and runs it there, until
+// it stands next to it.
+func (c *worldCameraController) followStep() {
+	if c.followGUID == 0 || c.followAt == nil {
+		return
+	}
+	x, y, ok := c.followAt(c.followGUID)
+	if !ok {
+		c.stopFollowing()
+		return
+	}
+	dx, dy := x-c.position[0], y-c.position[1]
+	distance := float32(math.Hypot(float64(dx), float64(dy)))
+	if distance > worldFollowRange*3 || distance > 60 {
+		c.stopFollowing()
+		return
+	}
+	if distance > 1 {
+		c.yaw = float32(math.Atan2(float64(dy), float64(dx)))
+		c.bodyYaw = c.yaw
+	}
+	c.commands[cmdForward] = distance > worldFollowRange
+}
+
+// worldFollowRange is how near a mover stays to the unit it follows.
+const worldFollowRange = 3

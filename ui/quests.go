@@ -89,7 +89,9 @@ type questState struct {
 	sortName func(sort int32) string
 	// creatureName names a creature or object a quest asks to kill or use.
 	creatureName func(entry int32) string
-}
+	// tables are what the rewards of a quest are worked out from.
+	tables QuestTables
+	}
 
 // SetQuestNames gives the quest log the lookups that name a quest's zone and
 // its targets.

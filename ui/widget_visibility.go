@@ -48,6 +48,18 @@ func (rt *Runtime) fireHideCascade(w *widget) {
 func installWidgetSetmetatable(L *lua.LState) {
 	base := L.GetGlobal("setmetatable")
 	L.SetGlobal("setmetatable", L.NewFunction(func(L *lua.LState) int {
+	// A frame given a metatable keeps its own methods and finds the rest in it.
+	if target, ok := L.Get(1).(*lua.LUserData); ok {
+		if w, ok := target.Value.(*widget); ok {
+			if L.Get(2) == lua.LNil {
+				w.classIndex = nil
+			} else {
+				w.classIndex = L.Get(2)
+			}
+			L.Push(target)
+			return 1
+		}
+	}
 		if ud, ok := L.Get(2).(*lua.LUserData); ok {
 			if w, ok := ud.Value.(*widget); ok {
 				if w.metaProxy == nil {
@@ -112,4 +124,26 @@ func (w *widget) unanchoredTopLevelFrame() bool {
 		return w.parent.parent == nil || w.parent.parent.name == ""
 	}
 	return false
+}
+
+// installWidgetType makes type() call a frame a table, as the original client's
+// frames are: scripts tell a frame from a frame's name by it (MoneyFrame_Update
+// takes either).
+func installWidgetType(L *lua.LState) {
+	base := L.GetGlobal("type")
+	L.SetGlobal("type", L.NewFunction(func(L *lua.LState) int {
+		if ud, ok := L.Get(1).(*lua.LUserData); ok {
+			if _, ok := ud.Value.(*widget); ok {
+				L.Push(lua.LString("table"))
+				return 1
+			}
+		}
+		count := L.GetTop()
+		L.Push(base)
+		for i := 1; i <= count; i++ {
+			L.Push(L.Get(i))
+		}
+		L.Call(count, 1)
+		return 1
+	}))
 }

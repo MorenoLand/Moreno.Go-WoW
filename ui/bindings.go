@@ -25,10 +25,12 @@ type bindingTable struct {
 	pressed map[window.Key]string
 	// movementKeys remembers which movement command each held key started.
 	movementKeys map[window.Key]string
+	// modified is the binding of each modified click (CHATLINK, SPLITSTACK...).
+	modified map[string]string
 }
 
 func newBindingTable() *bindingTable {
-	return &bindingTable{byName: make(map[string]*bindingDef), keys: make(map[string]string), pressed: make(map[window.Key]string)}
+	return &bindingTable{byName: make(map[string]*bindingDef), keys: make(map[string]string), pressed: make(map[window.Key]string), modified: make(map[string]string)}
 }
 
 // loadBindingsXML adds the commands of a Bindings.xml.
@@ -38,6 +40,12 @@ func (table *bindingTable) loadBindingsXML(data []byte) error {
 		return err
 	}
 	for _, node := range root.children {
+		if strings.EqualFold(node.name, "ModifiedClick") {
+			if action := node.attrDefault("action", ""); action != "" {
+				table.modified[action] = strings.ToUpper(node.attrDefault("default", "NONE"))
+			}
+			continue
+		}
 		if !strings.EqualFold(node.name, "Binding") {
 			continue
 		}

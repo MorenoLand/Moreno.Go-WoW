@@ -3,7 +3,6 @@ package render
 import (
 	"fmt"
 	"math"
-	"time"
 
 	"github.com/MorenoLand/Moreno.WoW/ui"
 	"github.com/MorenoLand/Moreno.WoW/world"
@@ -37,14 +36,7 @@ type worldNameplate struct {
 	pixels [2]float32
 	// bucket is the pixel size the picture was drawn at.
 	bucket int
-	// hidden is whether ground or a wall stands between the player and the unit,
-	// looked at again every so often.
-	hidden    bool
-	checkedAt time.Time
 }
-
-// nameplateSightPeriod is how often a unit is checked for being behind a wall.
-const nameplateSightPeriod = 150 * time.Millisecond
 
 const (
 	nameplateVertexShader = `#include <attributes>
@@ -112,9 +104,10 @@ func newNameplateMesh(tex *texture.Texture2D) (*graphic.Mesh, *nameplateMaterial
 	mat.SetShaderUnique(true)
 	mat.SetUseLights(material.UseLightNone)
 	mat.SetSide(material.SideDouble)
-	// Names are drawn over everything, far ones first, as the original's
-	// nameplates are: nothing nearer hides one (nor a unit's own parts).
-	mat.SetDepthTest(false)
+	// A name sits in the world at the unit's head: whatever stands nearer, a
+	// wall, a hill or an object, covers the part of it behind, and the rest
+	// stays visible.
+	mat.SetDepthTest(true)
 	mat.SetDepthMask(false)
 	mat.SetTransparent(true)
 	mat.SetBlending(material.BlendNormal)
@@ -134,10 +127,12 @@ type worldNameplates struct {
 	modelReads int
 	// pictures is how many name pictures may still be drawn this frame.
 	pictures int
+	// tops is the height the text of each unit reaches, for what hangs above it.
+	tops map[uint64]float32
 }
 
 func newWorldNameplates() *worldNameplates {
-	return &worldNameplates{plates: make(map[uint64]*worldNameplate)}
+	return &worldNameplates{plates: make(map[uint64]*worldNameplate), tops: make(map[uint64]float32)}
 }
 
 // nameplateInputs is what a frame of nameplates needs from the world.
@@ -249,22 +244,6 @@ func (n *worldNameplates) update(in nameplateInputs) {
 		if len(lines) == 0 {
 			continue
 		}
-		// A name is not shown through a wall or a hill.
-		if in.collision != nil && guid != in.ownGUID {
-			plate := n.plates[guid]
-			if plate == nil {
-				plate = &worldNameplate{}
-				n.plates[guid] = plate
-			}
-			if now := time.Now(); now.Sub(plate.checkedAt) > nameplateSightPeriod {
-				plate.checkedAt = now.Add(time.Duration(guid%7) * 12 * time.Millisecond)
-				at := node.Position()
-				plate.hidden = in.collision.segmentBlocked([3]float32{in.cameraAt[0], in.cameraAt[1], in.cameraAt[2] + 1.2}, [3]float32{at.X, at.Y, at.Z + 1.4})
-			}
-			if plate.hidden {
-				continue
-			}
-		}
 		modelPath := entity.modelPath
 		if guid == in.ownGUID {
 			modelPath = in.ownModelPath
@@ -279,6 +258,7 @@ func (n *worldNameplates) update(in nameplateInputs) {
 			lineHeight *= height * 0.25 * 1.5
 		}
 		anchor := math32.NewVector3(head.X, head.Y, head.Z+float32(len(lines))*lineHeight)
+		n.tops[guid] = anchor.Z + float32(len(lines))*lineHeight*0.5
 		_, visible := worldToScreen(in.cam, *anchor, in.width, in.height)
 		if !visible {
 			continue
@@ -352,6 +332,7 @@ func (n *worldNameplates) update(in nameplateInputs) {
 				plate.mesh.Dispose()
 			}
 			delete(n.plates, guid)
+			delete(n.tops, guid)
 		}
 	}
 }

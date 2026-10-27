@@ -258,8 +258,74 @@ func (rt *Runtime) itemTooltipMethods() map[string]func(L *lua.LState, w *widget
 			}
 			return 0
 		},
-		"SetLootItem":     func(L *lua.LState, w *widget) int { return 0 },
-		"SetQuestItem":    func(L *lua.LState, w *widget) int { return 0 },
-		"SetMerchantItem": func(L *lua.LState, w *widget) int { return 0 },
+		"SetLootItem": func(L *lua.LState, w *widget) int {
+		if index := L.CheckInt(2); index >= 1 && index <= len(rt.loot.slots) && !rt.loot.slots[index-1].coin {
+			rt.fillItemTooltip(w, rt.loot.slots[index-1].item.Entry, nil)
+		}
+		return 0
+		},
+		"SetQuestItem": func(L *lua.LState, w *widget) int {
+		if entry := rt.dialogQuestItemEntry(L.CheckString(2), L.CheckInt(3)); entry != 0 {
+			rt.fillItemTooltip(w, entry, nil)
+		}
+		return 0
+		},
+		"SetQuestLogItem": func(L *lua.LState, w *widget) int {
+		if entry := rt.logQuestItemEntry(L.CheckString(2), L.CheckInt(3)); entry != 0 {
+			rt.fillItemTooltip(w, entry, nil)
+		}
+		return 0
+		},
+		"SetMerchantItem": func(L *lua.LState, w *widget) int {
+			if index := L.CheckInt(2); index >= 1 && index <= len(rt.merchant.vendor.Items) {
+				rt.fillItemTooltip(w, rt.merchant.vendor.Items[index-1].Entry, nil)
+			}
+			return 0
+		},
+		"SetTradeSkillItem": func(L *lua.LState, w *widget) int {
+		row, ok := rt.tradeRowAt(L.CheckInt(2))
+		if !ok || row.header {
+			return 0
+		}
+		info := rt.gameplay.Catalog[row.spell]
+		if reagent := L.OptInt(3, 0); reagent > 0 {
+			count := 0
+			for _, candidate := range info.Reagents {
+				if candidate.Item == 0 {
+					continue
+				}
+				if count++; count == reagent {
+					rt.fillItemTooltip(w, candidate.Item, nil)
+				}
+			}
+			return 0
+		}
+		if entry := recipeCreates(info); entry != 0 {
+			rt.fillItemTooltip(w, entry, nil)
+		} else {
+			rt.fillSpellTooltip(w, info.ID)
+		}
+		return 0
+		},
+		"SetInboxItem": func(L *lua.LState, w *widget) int {
+			if mail := rt.mailAt(L.CheckInt(2)); mail != nil {
+				if item := mailAttachmentAt(mail, L.OptInt(3, 1)); item != nil {
+					rt.fillItemTooltip(w, item.Entry, nil)
+				}
+			}
+			return 0
+		},
+		"SetSendMailItem": func(L *lua.LState, w *widget) int {
+			if index := L.CheckInt(2) - 1; index >= 0 && index < mailAttachmentSlots && rt.mail.attached[index].guid != 0 {
+				rt.fillItemTooltip(w, rt.mail.attached[index].entry, nil)
+			}
+			return 0
+		},
+		"SetGuildBankItem": func(L *lua.LState, w *widget) int {
+			if item := rt.guildBankItem(L.CheckInt(2), L.CheckInt(3)); item != nil {
+				rt.fillItemTooltip(w, item.Entry, nil)
+			}
+			return 0
+		},
 	}
 }

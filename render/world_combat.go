@@ -102,6 +102,10 @@ func (c *worldCombat) apply(packet world.Packet) (bool, error) {
 		if id, name, err := world.ParseGuildQueryName(packet.Body); err == nil && name != "" {
 			c.names.guilds[id] = name
 		}
+		if query, err := world.ParseGuildQuery(packet.Body); err == nil {
+			c.names.guildInfo[query.ID] = query
+			c.rt.SetGuildQuery(query)
+		}
 		return true, nil
 	case world.CreatureQueryResponse:
 		info, err := world.ParseCreatureQuery(packet.Body)

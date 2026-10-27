@@ -232,10 +232,10 @@ func registerItemAPI(rt *Runtime) {
 
 	// Equipped items.
 	itemAt := func(L *lua.LState) *ItemInstance {
-		if L.CheckString(1) != "player" {
-			return nil
-		}
-		return rt.equippedItem(L.CheckInt(2))
+	if unit := L.CheckString(1); !strings.EqualFold(unit, "player") {
+		return rt.otherUnitItem(unit, L.CheckInt(2))
+	}
+	return rt.equippedItem(L.CheckInt(2))
 	}
 	reg("GetInventoryItemID", func(L *lua.LState) int {
 		if item := itemAt(L); item != nil {
@@ -417,7 +417,12 @@ func registerItemAPI(rt *Runtime) {
 		bag, slot := state.cursor.bag, state.cursor.slot
 		state.cursor = cursorItem{}
 		rt.gameplay.Cursor.ID, rt.gameplay.Cursor.Type = 0, 0
-		rt.FireEvent("ITEM_LOCK_CHANGED", numberValue(bag), numberValue(slot))
+		if bag == cursorGuildBank {
+			rt.guildBank.cursorCount = 0
+			rt.FireEvent("GUILDBANK_ITEM_LOCK_CHANGED")
+		} else {
+			rt.FireEvent("ITEM_LOCK_CHANGED", numberValue(bag), numberValue(slot))
+		}
 		rt.FireEvent("CURSOR_UPDATE")
 	}
 	rt.clearItemCursor = drop
@@ -637,6 +642,10 @@ func (rt *Runtime) serverBagAndSlotOfCursor() (uint8, uint8, bool) {
 // moveCursorItem drops the item on the cursor into a bag square (bag >= -2) or
 // an equipment slot (bag == -3).
 func (rt *Runtime) moveCursorItem(L *lua.LState, bag, slot int) {
+	if rt.inventory.cursor.bag == cursorGuildBank {
+		rt.guildBankWithdraw(bag, slot)
+		return
+	}
 	srcBag, srcSlot, ok := rt.serverBagAndSlotOfCursor()
 	if !ok {
 		return
@@ -657,6 +666,10 @@ func (rt *Runtime) moveCursorItem(L *lua.LState, bag, slot int) {
 
 // autoStoreCursor stores the cursor item in a bag the server picks the slot of.
 func (rt *Runtime) autoStoreCursor(L *lua.LState, dstBagID int) {
+	if rt.inventory.cursor.bag == cursorGuildBank {
+		rt.guildBankAutoStoreCursor()
+		return
+	}
 	srcBag, srcSlot, ok := rt.serverBagAndSlotOfCursor()
 	if !ok {
 		return
@@ -681,6 +694,9 @@ func (rt *Runtime) useItem(L *lua.LState, item *ItemInstance, bag, slot uint8) {
 	}
 	for _, spell := range template.Spells {
 		if spell.ID != 0 && spell.Trigger == 0 {
+			if rt.useGlyphItem(bag, slot, item.GUID, spell.ID) {
+				return
+			}
 			rt.withItemHost(L, func(host WorldItemHost) error {
 				return host.UseItem(bag, slot, 1, spell.ID, item.GUID, 0, 0)
 			})

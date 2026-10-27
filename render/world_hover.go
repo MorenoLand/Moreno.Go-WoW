@@ -118,6 +118,28 @@ func worldUnitCursor(entity *worldEntity, player [3]float32, hostile bool) (name
 	return "", false
 }
 
+// worldObjectCursor is the cursor a game object under the mouse shows: the
+// mailbox its envelope and the guild bank its coin purse, the greyed one of
+// each when the player is too far to use it (Wow.exe's mailbox and guild bank
+// handlers return the Mail and Buy cursors, or the Unable ones). Other kinds
+// keep the pointer.
+func worldObjectCursor(entity *worldEntity, player [3]float32) string {
+	name := ""
+	switch kind := (entity.fields[gameObjectBytes1Field] >> 8) & 0xFF; kind {
+	case gameObjectMailbox:
+		name = worldCursorNames[15]
+	case gameObjectGuildBank:
+		name = worldCursorNames[3]
+	default:
+		return ""
+	}
+	dx, dy, dz := entity.movement.Position.X-player[0], entity.movement.Position.Y-player[1], entity.movement.Position.Z-player[2]
+	if dx*dx+dy*dy+dz*dz > gameObjectUseRange*gameObjectUseRange {
+		name = "Unable" + name
+	}
+	return name
+}
+
 // setCursor shows a named cursor, the pointer when the name is empty.
 func (h *worldHover) setCursor(win *window.GlfwWindow, loader *ui.Loader, name string) {
 	if name == "" {
@@ -156,6 +178,9 @@ func (h *worldHover) update(win *window.GlfwWindow, loader *ui.Loader, cam *came
 	if !overUI {
 		width, height := win.GetSize()
 		guid = worldPickEntity(cam, entities, ownGUID, x, y, float64(width), float64(height))
+		if guid == 0 {
+			guid = worldPickGameObject(cam, entities, x, y, float64(width), float64(height))
+		}
 	}
 	if guid != h.guid {
 		if previous := entities[h.guid]; previous != nil && previous.node != nil {
@@ -167,7 +192,9 @@ func (h *worldHover) update(win *window.GlfwWindow, loader *ui.Loader, cam *came
 		h.guid = guid
 	}
 	cursor := ""
-	if entity, player := entities[guid], entities[ownGUID]; entity != nil && player != nil {
+	if entity := entities[guid]; entity != nil && entity.objectType == world.ObjectTypeGameObject {
+		cursor = worldObjectCursor(entity, playerAt)
+	} else if entity, player := entities[guid], entities[ownGUID]; entity != nil && player != nil {
 		hostile := false
 		if factions != nil {
 			hostile, _ = factions.reaction(player.fields[unitFactionField], entity.fields[unitFactionField])

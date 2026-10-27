@@ -6,27 +6,63 @@ import (
 	"github.com/MorenoLand/Moreno.WoW/ui"
 	"github.com/MorenoLand/Moreno.WoW/world"
 	"github.com/g3n/engine/core"
-	"github.com/g3n/engine/gls"
-	"github.com/g3n/engine/graphic"
-	"github.com/g3n/engine/texture"
 )
 
 const (
+	// questIconSize and questIconLift belong to the flat marks this replaced; the
+	// capture harness still names them.
 	questIconSize   = 0.6
 	questIconLift   = 0.45
 	questIconPeriod = 5 * time.Second
 	questIconRange  = 60.0
+	// questMarkerLargeHeight is the head height above which a marker grows, and
+	// questMarkerGrowth what it grows by for each yard of it.
+	questMarkerLargeHeight = 4.0
+	questMarkerGrowth      = 0.25 * 1.5
 )
 
-// worldQuestIcons draws the mark over a quest giver's head: a yellow "!" for a
-// quest to take, a yellow "?" for one to hand in, a grey one while it is
-// unfinished or too low.
+// questMarkerModels are the models over a quest giver's head by the giver's
+// status: a yellow "!" for a quest to take, a yellow "?" for one to hand in, a
+// grey one while it is unfinished or cannot be taken, blue for what repeats.
+// The statuses 2 to 4 (a quest the character has outleveled) show only while
+// low-level quests are tracked.
+var questMarkerModels = map[uint8]string{
+	1:  `Interface\Buttons\TalkToMeGrey.m2`,
+	2:  `Interface\Buttons\TalkToMe.m2`,
+	3:  `Interface\Buttons\TalkToMeQuestion_LTBlue.m2`,
+	4:  `Interface\Buttons\TalkToMeBlue.m2`,
+	5:  `Interface\Buttons\TalkToMeQuestion_Grey.m2`,
+	6:  `Interface\Buttons\TalkToMeQuestion_LTBlue.m2`,
+	7:  `Interface\Buttons\TalkToMeBlue.m2`,
+	8:  `Interface\Buttons\TalkToMe.m2`,
+	9:  `Interface\Buttons\TalkToMeQuestionMark.m2`,
+	10: `Interface\Buttons\TalkToMeQuestionMark.m2`,
+}
+
+// questMarkerFor names the model of a status, "" for none.
+func questMarkerFor(status uint8, trackLowLevel bool) string {
+	if status >= 2 && status <= 4 && !trackLowLevel {
+		return ""
+	}
+	return questMarkerModels[status]
+}
+
+// questMarker is the model over one quest giver.
+type questMarker struct {
+	node *core.Node
+	path string
+}
+
+// worldQuestIcons draws the marks over the heads of the creatures that give or
+// take quests.
 type worldQuestIcons struct {
 	status    map[uint64]uint8
-	meshes    map[uint64]*graphic.Mesh
-	textures  map[string]*texture.Texture2D
+	markers   map[uint64]*questMarker
 	lastQuery time.Time
 	reads     int
+	// trackLowLevel is the minimap's choice to follow quests below the
+	// character's level.
+	trackLowLevel bool
 }
 
 func (icons *worldQuestIcons) handle(packet world.Packet) bool {
@@ -54,51 +90,29 @@ func (icons *worldQuestIcons) set(guid uint64, status uint8) {
 	icons.status[guid] = status
 }
 
-// iconFor names the picture of a status, "" for none.
-func questIconFor(status uint8) (string, bool) {
-	switch status {
-	case world.QuestStatusLowLevelAvailable, 3, 4:
-		return `Interface\GossipFrame\AvailableQuestIcon.blp`, true
-	case world.QuestStatusIncomplete:
-		return `Interface\GossipFrame\IncompleteQuestIcon.blp`, false
-	case world.QuestStatusRewardRep, world.QuestStatusReward2, world.QuestStatusReward:
-		return `Interface\GossipFrame\ActiveQuestIcon.blp`, false
-	case 7, world.QuestStatusAvailable:
-		return `Interface\GossipFrame\AvailableQuestIcon.blp`, false
+// questMarkerScale is the size a marker takes: the model's own over a creature
+// whose head is not above four yards, a share of the head height above that.
+func questMarkerScale(headHeight float32) float32 {
+	if headHeight > questMarkerLargeHeight {
+		return headHeight * questMarkerGrowth
 	}
-	return "", false
+	return 1
 }
 
-func (icons *worldQuestIcons) texture(loader *ui.Loader, path string) *texture.Texture2D {
-	if tex, ok := icons.textures[path]; ok {
-		return tex
-	}
-	if icons.textures == nil {
-		icons.textures = make(map[string]*texture.Texture2D)
-	}
-	tex := loadModelTexture(loader, path)
-	if tex != nil {
-		tex.SetWrapS(gls.CLAMP_TO_EDGE)
-		tex.SetWrapT(gls.CLAMP_TO_EDGE)
-	}
-	icons.textures[path] = tex
-	return tex
-}
-
-// update asks for the statuses now and then and shows the marks over the
+// update asks for the statuses now and then and puts the marks over the
 // creatures near the player.
-func (icons *worldQuestIcons) update(scene *core.Node, loader *ui.Loader, entities map[uint64]*worldEntity, near [3]float32, send func(world.ClientOpcode, []byte) error, now time.Time) {
+func (icons *worldQuestIcons) update(scene *core.Node, loader *ui.Loader, entities map[uint64]*worldEntity, tops map[uint64]float32, near [3]float32, send func(world.ClientOpcode, []byte) error, now time.Time, elapsed float64) {
 	if now.Sub(icons.lastQuery) >= questIconPeriod && send != nil {
 		icons.lastQuery = now
 		_ = send(world.ClientQuestGiverStatusMultiple, nil)
 	}
-	if icons.meshes == nil {
-		icons.meshes = make(map[uint64]*graphic.Mesh)
+	if icons.markers == nil {
+		icons.markers = make(map[uint64]*questMarker)
 	}
 	icons.reads = 8
 	shown := make(map[uint64]bool)
 	for guid, status := range icons.status {
-		path, grey := questIconFor(status)
+		path := questMarkerFor(status, icons.trackLowLevel)
 		entity := entities[guid]
 		if path == "" || entity == nil || entity.node == nil || !entity.node.Visible() {
 			continue
@@ -108,42 +122,49 @@ func (icons *worldQuestIcons) update(scene *core.Node, loader *ui.Loader, entiti
 		if dx*dx+dy*dy > questIconRange*questIconRange {
 			continue
 		}
-		tex := icons.texture(loader, path)
-		if tex == nil {
-			continue
+		marker := icons.markers[guid]
+		if marker != nil && marker.path != path {
+			scene.Remove(marker.node)
+			marker.node.Dispose()
+			marker, icons.markers[guid] = nil, nil
 		}
-		mesh := icons.meshes[guid]
-		if mesh == nil {
-			var mat *nameplateMaterial
-			mesh, mat = newNameplateMesh(tex)
-			// The material holds a reference of its own: the mark's texture is shared,
-			// and the first mark taken down would otherwise delete it from under the rest
-			// (they then drew black).
-			tex.Incref()
-			// A mark is part of the world: things in front of it hide it.
-			mat.SetDepthTest(true)
-			mesh.SetRenderOrder(0)
-			mat.size = [2]float32{questIconSize, questIconSize}
-			icons.meshes[guid] = mesh
-			scene.Add(mesh)
-		} else if material, ok := mesh.GetMaterial(0).(*nameplateMaterial); ok && grey {
-			material.size = [2]float32{questIconSize * 0.9, questIconSize * 0.9}
+		if marker == nil {
+			// The mark is lit by itself, not by the light of the place it hangs in.
+			model, err := loadGlueModelWithNormalization(loader, path, false, 1, 0, m2SceneLight{})
+			if err != nil || model == nil {
+				continue
+			}
+			node := wrapWorldModel(model, world.WorldPosition{}, 1)
+			marker = &questMarker{node: node, path: path}
+			icons.markers[guid] = marker
+			scene.Add(node)
 		}
+		// The mark hangs from the point of the creature's model that names it,
+		// at the size its head height gives.
 		anchor := nameplateAnchor(loader, entity.node, entity.modelPath, &icons.reads)
-		anchor.Z += questIconLift
-		mesh.SetPositionVec(&anchor)
-		mesh.SetVisible(true)
+		scale := questMarkerScale(anchor.Z - position.Z)
+		// Above the name when there is one.
+		if top, ok := tops[guid]; ok && top > anchor.Z {
+			anchor.Z = top
+		}
+		marker.node.SetPositionVec(&anchor)
+		marker.node.SetScale(scale, scale, scale)
+		marker.node.SetVisible(true)
+		if info, ok := marker.node.UserData().(glueModelInfo); ok && info.animation != nil {
+			info.animation.SetMotion(0)
+			info.animation.Update(elapsed)
+		}
 		shown[guid] = true
 	}
-	for guid, mesh := range icons.meshes {
-		if shown[guid] {
+	for guid, marker := range icons.markers {
+		if marker == nil || shown[guid] {
 			continue
 		}
-		mesh.SetVisible(false)
+		marker.node.SetVisible(false)
 		if entities[guid] == nil {
-			scene.Remove(mesh)
-			mesh.Dispose()
-			delete(icons.meshes, guid)
+			scene.Remove(marker.node)
+			marker.node.Dispose()
+			delete(icons.markers, guid)
 		}
 	}
 }

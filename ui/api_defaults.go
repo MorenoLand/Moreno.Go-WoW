@@ -17,6 +17,7 @@ func registerWorldAPIDefaults(rt *Runtime) {
 	define := func(name string, fn lua.LGFunction) {
 		if L.GetGlobal(name) == lua.LNil {
 			L.SetGlobal(name, L.NewFunction(fn))
+			rt.stubAPI[name] = true
 		}
 	}
 	returns := func(name string, values ...lua.LValue) {
@@ -182,6 +183,7 @@ func registerSurveyedAPIDefaults(rt *Runtime) {
 	define := func(name string, fn lua.LGFunction) {
 		if L.GetGlobal(name) == lua.LNil {
 			L.SetGlobal(name, L.NewFunction(fn))
+			rt.stubAPI[name] = true
 		}
 	}
 	for _, name := range emptyCountAPI {
@@ -298,6 +300,7 @@ func registerWorldMapDefaults(rt *Runtime) {
 	define := func(name string, fn lua.LGFunction) {
 		if L.GetGlobal(name) == lua.LNil {
 			L.SetGlobal(name, L.NewFunction(fn))
+			rt.stubAPI[name] = true
 		}
 	}
 	for _, name := range []string{"CreateWorldMapArrowFrame", "ShowWorldMapArrowFrame", "PositionWorldMapArrowFrame", "UpdateWorldMapArrowFrames",
@@ -337,6 +340,7 @@ func registerAddOnAPIDefaults(rt *Runtime) {
 	define := func(name string, fn lua.LGFunction) {
 		if L.GetGlobal(name) == lua.LNil {
 			L.SetGlobal(name, L.NewFunction(fn))
+			rt.stubAPI[name] = true
 		}
 	}
 	for _, name := range emptyAddonCountAPI {
@@ -353,8 +357,37 @@ func registerAddOnAPIDefaults(rt *Runtime) {
 		define(name, func(L *lua.LState) int { return 0 })
 	}
 	define("GetBackpackCurrencyInfo", func(L *lua.LState) int { return 0 })
-	for _, name := range []string{"CreateMiniWorldMapArrowFrame", "PositionMiniWorldMapArrowFrame", "ShowMiniWorldMapArrowFrame"} {
+	// The small map's player arrow is made in code too: frames the battlefield
+	// minimap sizes and fades, with nothing to draw.
+	define("CreateMiniWorldMapArrowFrame", func(L *lua.LState) int {
+		parent := rt.widgetArg(L, 1)
+		for _, name := range []string{"PlayerMiniArrowFrame", "PlayerMiniArrowEffectFrame"} {
+			if rt.widgets[name] != nil {
+				continue
+			}
+			frame := newWidget(kindFrame, name)
+			frame.typeName = "Model"
+			frame.parent = parent
+			frame.shown = false
+			frame.width, frame.height = 32, 32
+			if parent != nil {
+				frame.frameStrata = parent.frameStrata
+				frame.frameLevel = parent.frameLevel + 1
+				addWidgetChild(parent, frame)
+			}
+			rt.register(frame)
+		}
+		return 0
+	})
+	for _, name := range []string{"PositionMiniWorldMapArrowFrame", "ShowMiniWorldMapArrowFrame"} {
 		define(name, func(L *lua.LState) int { return 0 })
 	}
+	// What the calendar filters guild members by until the player chooses.
+	L.SetGlobal("CalendarDefaultGuildFilter", L.NewFunction(func(L *lua.LState) int {
+		L.Push(lua.LNumber(1))
+		L.Push(lua.LNumber(80))
+		L.Push(lua.LNumber(1))
+		return 3
+	}))
 	define("UnitInRange", func(L *lua.LState) int { L.Push(lua.LFalse); L.Push(lua.LFalse); return 2 })
 }

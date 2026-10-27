@@ -117,7 +117,7 @@ func (talents *worldTalents) push(rt *ui.Runtime, loader *ui.Loader, class uint8
 	}
 	specs := make([]ui.TalentSpecState, len(talents.state.Specs))
 	for index, spec := range talents.state.Specs {
-		specs[index] = ui.TalentSpecState{Ranks: spec.Ranks}
+		specs[index] = ui.TalentSpecState{Ranks: spec.Ranks, Glyphs: spec.Glyphs}
 	}
 	rt.SetTalents(defs, specs, talents.state.Active, int(talents.state.Unspent))
 }

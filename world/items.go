@@ -307,11 +307,25 @@ func (c *Connection) DestroyItem(bag, slot, count uint8) error {
 // BuildUseItem is the body of CMSG_USE_ITEM for an item used on nothing in
 // particular (or on the caster).
 func BuildUseItem(bag, slot, castCount uint8, spellID uint32, itemGUID uint64, targetMask uint32, targetGUID uint64) []byte {
+	return BuildUseItemGlyph(bag, slot, castCount, spellID, itemGUID, 0, targetMask, targetGUID)
+}
+
+// RemoveGlyphOpcode is CMSG_REMOVE_GLYPH, its body the socket counted from 0.
+const RemoveGlyphOpcode ClientOpcode = 0x048A
+
+// BuildRemoveGlyph is the body of CMSG_REMOVE_GLYPH.
+func BuildRemoveGlyph(socket uint32) []byte {
+	return binary.LittleEndian.AppendUint32(nil, socket)
+}
+
+// BuildUseItemGlyph is the body of CMSG_USE_ITEM for a glyph item, with the
+// socket (counted from 0) it is placed in.
+func BuildUseItemGlyph(bag, slot, castCount uint8, spellID uint32, itemGUID uint64, glyphSocket uint32, targetMask uint32, targetGUID uint64) []byte {
 	body := make([]byte, 0, 32)
 	body = append(body, bag, slot, castCount)
 	body = binary.LittleEndian.AppendUint32(body, spellID)
 	body = binary.LittleEndian.AppendUint64(body, itemGUID)
-	body = binary.LittleEndian.AppendUint32(body, 0) // glyph slot
+	body = binary.LittleEndian.AppendUint32(body, glyphSocket)
 	body = append(body, 0)                           // cast flags
 	body = binary.LittleEndian.AppendUint32(body, targetMask)
 	if targetMask&0x2 != 0 || targetMask&0x800 != 0 { // unit or item target: packed guid

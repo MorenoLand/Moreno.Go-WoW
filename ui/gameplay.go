@@ -22,7 +22,18 @@ type SpellInfo struct {
 	StackAmount, BaseLevel, MaxLevel    int
 	SpellLevel, CooldownMS              int
 	CategoryCooldownMS                  int
-}
+	// What a profession recipe needs and makes: the reagents and how many of
+	// each, the item each effect creates, the tool categories it asks for, and
+	// from which skill rank it is learned, turns yellow and goes gray.
+	Reagents                         [8]SpellReagent
+	Created                          [3]uint32
+	Tools                            [2]uint32
+	SkillMin, SkillLow, SkillHigh    uint32
+	Superseded                       uint32
+	}
+
+	// SpellReagent is an item a spell uses up and how many.
+	type SpellReagent struct{ Item, Count uint32 }
 type SpellSkillLine struct {
 	ID, Category uint32
 	Name, Icon   string
@@ -117,7 +128,9 @@ func (rt *Runtime) UpdateSpellChannel(duration uint32) {
 	rt.FireEvent(event, lua.LString("player"), lua.LString(info.Name), lua.LString(info.Rank))
 }
 func (rt *Runtime) StopSpellCast(id uint32, count uint8, failed bool) {
-	if !failed {
+rt.tradeSkillCastDone(id, failed)
+if !failed {
+rt.openTradeSkillFor(id)
 		info := rt.gameplay.Catalog[id]
 		rt.FireEvent("UNIT_SPELLCAST_SUCCEEDED", lua.LString("player"), lua.LString(info.Name), lua.LString(info.Rank), lua.LNumber(count))
 	}
@@ -545,7 +558,11 @@ func registerGameplayAPI(rt *Runtime) {
 		case 0:
 			icon = rt.gameplay.Catalog[action.ID].Icon
 		case actionTypeItem:
-			icon = rt.itemIcon(action.ID)
+		icon = rt.itemIcon(action.ID)
+		case actionTypeMacro:
+		if macro, _ := rt.macroAt(int(action.ID)); macro != nil {
+			icon = macro.Icon
+		}
 		}
 		if icon == "" {
 			L.Push(lua.LNil)
@@ -600,8 +617,14 @@ func registerGameplayAPI(rt *Runtime) {
 			return 0
 		}
 		if action.Type == actionTypeItem {
-			rt.useActionItem(L, action.ID)
-			return 0
+		rt.useActionItem(L, action.ID)
+		return 0
+		}
+		if action.Type == actionTypeMacro {
+		if text := rt.macroText(int(action.ID)); text != "" {
+			rt.runMacroText(text)
+		}
+		return 0
 		}
 		if action.Type != 0 {
 			L.RaiseError("UseAction: action type %d is not implemented", action.Type)
@@ -810,4 +833,14 @@ type SpellEffectInfo struct {
 	PointsPerLevel, Radius float64
 	PeriodMS, Chain        int
 	Amplitude              float64
+}
+
+// spellCooldownLeft is the seconds a spell has yet to wait.
+func (rt *Runtime) spellCooldownLeft(id uint32) float64 {
+	cooldown, ok := rt.gameplay.Cooldowns[id]
+	if !ok || cooldown.Disabled {
+		return 0
+	}
+	left := cooldown.Start + cooldown.Duration - time.Since(rt.started).Seconds()
+	return max(left, 0)
 }

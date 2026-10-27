@@ -206,8 +206,9 @@ func (eng *UIEngine) HandleMouse(x, y float64, button window.MouseButton, down b
 	left := name == "LeftButton"
 	x, y = eng.worldInputPoint(x, y)
 	if eng.Rt != nil {
-		eng.Rt.cursorX = x
-		eng.Rt.cursorY = y
+	eng.Rt.cursorX = x
+	eng.Rt.cursorY = y
+	eng.Rt.lastButton = name
 	}
 	if left && eng.debugPanel.handleMouse(x, y, down, eng) {
 		return true

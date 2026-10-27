@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/binary"
 	"strings"
 
 	"github.com/MorenoLand/Moreno.WoW/world"
@@ -113,18 +114,55 @@ func registerCompanionAPI(rt *Runtime) {
 		return 1
 	})
 	reg("GetCompanionInfo", func(L *lua.LState) int {
-		list := rt.companionList(L.CheckString(1))
+		kind := strings.ToUpper(L.CheckString(1))
+		list := rt.companionList(kind)
 		index := L.CheckInt(2)
 		if index < 1 || index > len(list) {
 			return 0
 		}
 		spell := rt.gameplay.Catalog[list[index-1]]
-		L.Push(lua.LNumber(0))
+		L.Push(lua.LNumber(rt.companionCreature(spell)))
 		L.Push(lua.LString(spell.Name))
 		L.Push(lua.LNumber(spell.ID))
 		L.Push(lua.LString(spell.Icon))
-		L.Push(lua.LFalse)
+		L.Push(lua.LBool(rt.companionSummoned(kind, spell)))
 		return 5
+	})
+	reg("PickupCompanion", func(L *lua.LState) int {
+		list := rt.companionList(L.CheckString(1))
+		if index := L.CheckInt(2); index >= 1 && index <= len(list) {
+			rt.pickupSpell(list[index-1])
+		}
+		return 0
+	})
+	reg("DismissCompanion", func(L *lua.LState) int {
+		switch strings.ToUpper(L.CheckString(1)) {
+		case "MOUNT":
+			rt.send(world.ClientCancelMountAura, nil)
+		case "CRITTER":
+			if guid := rt.critterGUID(); guid != 0 {
+				rt.send(world.ClientDismissCritter, binary.LittleEndian.AppendUint64(nil, guid))
+			}
+		}
+		return 0
+	})
+	reg("GetCompanionCooldown", func(L *lua.LState) int {
+		list := rt.companionList(L.CheckString(1))
+		index := L.CheckInt(2)
+		if index < 1 || index > len(list) {
+			return 0
+		}
+		cooldown, ok := rt.gameplay.Cooldowns[list[index-1]]
+		if !ok {
+			L.Push(lua.LNumber(0))
+			L.Push(lua.LNumber(0))
+			L.Push(lua.LNumber(1))
+			return 3
+		}
+		L.Push(lua.LNumber(cooldown.Start))
+		L.Push(lua.LNumber(cooldown.Duration))
+		L.Push(lua.LNumber(boolNumber(!cooldown.Disabled)))
+		return 3
 	})
 	reg("CallCompanion", func(L *lua.LState) int {
 		list := rt.companionList(L.CheckString(1))
@@ -137,4 +175,44 @@ func registerCompanionAPI(rt *Runtime) {
 		}
 		return 0
 	})
+}
+
+// Spell effects that bring a companion: summoning a pet and the mounted aura.
+const (
+	effectSummonPet  = 28
+	effectSummonCrit = 56
+	auraMounted      = 78
+	fieldUnitCritter = 6 + 10
+)
+
+// companionCreature is the creature a companion spell brings.
+func (rt *Runtime) companionCreature(spell SpellInfo) int {
+	for _, effect := range spell.Effects {
+		if effect.Aura == auraMounted || effect.Effect == effectSummonPet || effect.Effect == effectSummonCrit {
+			return effect.Misc
+		}
+	}
+	return 0
+}
+
+// critterGUID is the companion the character has out, or 0.
+func (rt *Runtime) critterGUID() uint64 {
+	return uint64(rt.field(fieldUnitCritter)) | uint64(rt.field(fieldUnitCritter+1))<<32
+}
+
+// companionSummoned reports whether the companion of a spell is out: a mount
+// by its aura, a critter by the creature the character has summoned.
+func (rt *Runtime) companionSummoned(kind string, spell SpellInfo) bool {
+	if kind == "MOUNT" {
+		if player := rt.unitInfo("player"); player != nil {
+			for _, aura := range player.Auras {
+				if aura.SpellID == spell.ID {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	guid := rt.critterGUID()
+	return guid != 0 && int(guid>>24&0xFFFFFF) == rt.companionCreature(spell)
 }

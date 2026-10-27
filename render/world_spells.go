@@ -81,8 +81,11 @@ func readWorldSpellCatalog(loader *ui.Loader) (map[uint32]ui.SpellInfo, map[uint
 		skillLines[id] = ui.SpellSkillLine{ID: id, Category: lines.value(row, 1), Name: lines.string(row, 3), Icon: iconPaths[lines.value(row, 37)]}
 	}
 	spellSkills := make(map[uint32]uint32)
+	type spellAbility struct{ min, low, high, superseded uint32 }
+	spellAbilities := make(map[uint32]spellAbility)
 	for row := 0; row < abilities.records; row++ {
-		spellSkills[abilities.value(row, 2)] = abilities.value(row, 1)
+	spellSkills[abilities.value(row, 2)] = abilities.value(row, 1)
+	spellAbilities[abilities.value(row, 2)] = spellAbility{min: abilities.value(row, 7), superseded: abilities.value(row, 8), high: abilities.value(row, 10), low: abilities.value(row, 11)}
 	}
 	catalog := make(map[uint32]ui.SpellInfo, spells.records)
 	for row := 0; row < spells.records; row++ {
@@ -124,6 +127,15 @@ func readWorldSpellCatalog(loader *ui.Loader) (map[uint32]ui.SpellInfo, map[uint
 				Misc:           int(int32(spells.value(row, 110+effect))),
 			}
 		}
+		for reagent := 0; reagent < 8; reagent++ {
+		info.Reagents[reagent] = ui.SpellReagent{Item: spells.value(row, 52+reagent), Count: spells.value(row, 60+reagent)}
+		}
+		for effect := 0; effect < 3; effect++ {
+		info.Created[effect] = spells.value(row, 107+effect)
+		}
+		info.Tools = [2]uint32{spells.value(row, 50), spells.value(row, 51)}
+		ability := spellAbilities[id]
+		info.SkillMin, info.SkillLow, info.SkillHigh, info.Superseded = ability.min, ability.low, ability.high, ability.superseded
 		info.Funnel = spells.value(row, 6)&0x800 != 0
 		info.Interruptible = spells.value(row, 31)&0x8 != 0
 		catalog[id] = info

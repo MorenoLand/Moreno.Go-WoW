@@ -62,6 +62,11 @@ func readWorldMapCatalog(loader *ui.Loader) (*ui.MapCatalog, error) {
 	}
 	if maps, err := loadCharacterDBC(loader, `DBFilesClient\Map.dbc`); err == nil && maps.fields >= 6 {
 		names := make(map[uint32]string)
+		catalog.MapNames = names
+		catalog.MapTypes = make(map[uint32]uint32)
+		for row := 0; row < maps.records; row++ {
+			catalog.MapTypes[maps.value(row, 0)] = maps.value(row, 2)
+		}
 		for row := 0; row < maps.records; row++ {
 			names[maps.value(row, 0)] = maps.string(row, 5)
 		}

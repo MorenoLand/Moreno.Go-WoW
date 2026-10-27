@@ -69,18 +69,20 @@ func syncWorldSkills(rt *ui.Runtime, loader *ui.Loader, tables *worldSkillTables
 	}
 	*last = current
 	tables.load(loader)
+	values := make(map[uint32][4]int)
 	var entries []ui.SkillEntry
 	for slot := 0; slot < skillSlotCount; slot++ {
 		id := current[slot*skillFieldCount] & 0xFFFF
 		if id == 0 {
 			continue
 		}
+		value, bonus := current[slot*skillFieldCount+1], current[slot*skillFieldCount+2]
+		values[id] = [4]int{int(value & 0xFFFF), int(value >> 16), int(int16(bonus & 0xFFFF)), int(int16(bonus >> 16))}
 		line, ok := tables.lines[id]
 		if !ok || line.category == skillCategoryHidden {
 			continue
 		}
 		category := tables.categories[line.category]
-		value, bonus := current[slot*skillFieldCount+1], current[slot*skillFieldCount+2]
 		entries = append(entries, ui.SkillEntry{
 			ID: id, Name: line.name, Description: line.description, Category: line.category,
 			CategoryName: category.name, CategoryOrder: category.order,
@@ -89,5 +91,6 @@ func syncWorldSkills(rt *ui.Runtime, loader *ui.Loader, tables *worldSkillTables
 			Abandonable: line.canLink,
 		})
 	}
+	rt.SetSkillValues(values)
 	rt.SetSkills(entries)
 }

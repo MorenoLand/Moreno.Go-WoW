@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.WoW/world"
 	lua "github.com/yuin/gopher-lua"
 )
 
@@ -33,6 +34,51 @@ type Runtime struct {
 	death            deathState
 	gossip           gossipState
 	merchant         merchantState
+	mail             mailState
+	guildBank        guildBankState
+	macroIcons       []string
+	// stubAPI names the C-API functions that only answer as the client does with
+	// none of the feature behind them.
+	stubAPI map[string]bool
+	unitDistance     func(guid uint64) (float64, bool)
+	tradeSkill       tradeSkillState
+	auction          auctionState
+	calendar         calendarState
+	macros           macroState
+	achievements     achievementState
+	glyphs           glyphState
+	currency         currencyState
+	playerFields     map[uint16]uint32
+	gameTables       GameTables
+	skillValues      map[uint32][4]int
+	group            groupState
+	guild            guildState
+	taxi             taxiState
+	pet              petState
+	trade            tradeState
+	misc             miscState
+	chatCfg          chatSettings
+	channels         channelState
+	chat             chatState
+	emotes           emoteState
+	serverText       serverMessageState
+	who              whoState
+	runes            runeState
+	equipment        equipmentState
+	worldQuery       worldQueryState
+	petitions        petitionState
+	totems           [4]totemSlot
+	packetHandlers   []func(world.Packet) bool
+	playerNames      func(uint64) string
+	views            [5]float64
+	viewIndex        int
+	focusGUID        uint64
+	realmName        string
+	controlLost      bool
+	mods             uint8
+	modClicks        map[string]string
+	lastButton       string
+	motion           PlayerMotion
 	trainer          trainerState
 	repairPrice      func(entry uint32, lost int) int
 	quests           questState
@@ -224,6 +270,7 @@ func NewRuntime(host Host) *Runtime {
 		addonVersionCheck: true,
 		Host:              host,
 	}
+	rt.stubAPI = map[string]bool{}
 	registerWidgetMethods(rt.L, rt)
 	registerGlueAPI(rt)
 	registerUnitAPI(rt)
@@ -251,8 +298,48 @@ func NewRuntime(host Host) *Runtime {
 	registerDeathAPI(rt)
 	registerGossipAPI(rt)
 	registerMerchantAPI(rt)
+	registerMailAPI(rt)
+	registerGuildBankAPI(rt)
+	registerAchievementAPI(rt)
+	registerTradeSkillAPI(rt)
+	registerGlyphAPI(rt)
+	registerCurrencyAPI(rt)
+	registerStatsAPI(rt)
+	registerGroupAPI(rt)
+	rt.initGuild()
+	registerGuildAPI(rt)
+	registerTaxiAPI(rt)
+	registerPetAPI(rt)
+	registerTradeAPI(rt)
+	registerMiscAPI(rt)
+	registerChatSettingsAPI(rt)
+	registerChannelAPI(rt)
+	registerChatAPI(rt)
+	registerEmoteAPI(rt)
+	registerServerTextAPI(rt)
+	registerWhoAPI(rt)
+	registerRuneAPI(rt)
+	registerEquipmentAPI(rt)
+	registerWorldQueryAPI(rt)
+	registerPetitionAPI(rt)
+	registerShapeshiftAPI(rt)
+	rt.views = defaultCameraViews
+	registerWorldActionAPI(rt)
+	rt.registerPacketHandlers()
+	rt.registerGuildPackets()
+	rt.addPacketHandler(rt.handleTaxiPacket)
+	rt.addPacketHandler(rt.handlePetPacket)
+	registerAuctionAPI(rt)
+	registerInspectAPI(rt)
+	registerCalendarAPI(rt)
+	registerMacroAPI(rt)
+	registerInteractDistanceAPI(rt)
+	registerMacroIconAPI(rt)
 	registerTrainerAPI(rt)
 	registerQuestAPI(rt)
+	registerQuestExtraAPI(rt)
+	registerGapAPI(rt)
+	registerPlayerStateAPI(rt)
 	registerWorldAPIDefaults(rt)
 	registerWorldMapDefaults(rt)
 	registerSurveyedAPIDefaults(rt)
@@ -268,7 +355,7 @@ func (rt *Runtime) Close() { rt.L.Close() }
 // (a chat box that was closed, the login form once the world is up): typing and
 // Enter would otherwise go to something nobody can see.
 func (rt *Runtime) dropHiddenFocus() {
-	if rt.focused != nil && (!rt.focused.shown || !rt.focused.visibleThroughParents()) {
+	if rt != nil && rt.focused != nil && (!rt.focused.shown || !rt.focused.visibleThroughParents()) {
 		rt.setFocus(nil)
 	}
 }
@@ -319,8 +406,33 @@ func (rt *Runtime) setText(w *widget, text string) {
 	w.selectionStart = w.cursor
 	w.selectionEnd = w.cursor
 	w.selectionAnchor = w.cursor
+	rt.fireCursorChanged(w)
 	rt.fire(w, "OnTextChanged", []lua.LValue{w.luaValue(rt.L), lua.LBool(true)})
-}
+	}
+
+	// editLineHeight is the height of a line of an edit box, in its units.
+	const editLineHeight = 14
+
+	// fireCursorChanged tells an edit box's script where its cursor is: the
+	// offset from the top left (up is positive, so lines below are negative) and
+	// the size of the cursor.
+	func (rt *Runtime) fireCursorChanged(w *widget) {
+		if w.kind != kindEditBox {
+			return
+		}
+		text := []rune(w.text)
+		cursor := min(max(w.cursor, 0), len(text))
+		line, lineStart := 0, 0
+		for index := 0; index < cursor; index++ {
+			if text[index] == '\n' {
+				line++
+				lineStart = index + 1
+			}
+		}
+		x := float64(cursor-lineStart) * editLineHeight / 2
+		y := -float64(line) * editLineHeight
+		rt.fire(w, "OnCursorChanged", []lua.LValue{w.luaValue(rt.L), lua.LNumber(x), lua.LNumber(y), lua.LNumber(0), lua.LNumber(editLineHeight)})
+	}
 
 // ScriptErrors returns the script failures recorded so far.
 func (rt *Runtime) ScriptErrors() []ScriptError { return rt.scriptErrors }
@@ -368,7 +480,7 @@ func (rt *Runtime) Execute(source, chunkName string) bool {
 func (rt *Runtime) doChunk(source, chunkName string) error {
 	top := rt.L.GetTop()
 	defer rt.L.SetTop(top)
-	fn, err := rt.L.Load(strings.NewReader(source), chunkName)
+	fn, err := rt.L.Load(strings.NewReader(fixGenericFor(source)), chunkName)
 	if err != nil {
 		return err
 	}
@@ -570,3 +682,6 @@ func (rt *Runtime) luaFormat(L *lua.LState, first int) string {
 	L.Pop(1)
 	return result
 }
+
+// SetGlobalString sets a Lua global to a string.
+func (rt *Runtime) SetGlobalString(name, value string) { rt.L.SetGlobal(name, lua.LString(value)) }

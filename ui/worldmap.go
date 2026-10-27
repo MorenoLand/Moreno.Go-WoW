@@ -56,6 +56,10 @@ type MapCatalog struct {
 	Continents []MapContinent // Kalimdor, Eastern Kingdoms, Outland, Northrend
 	AreaNames  map[uint32]string
 	AreaBits   map[uint32]uint32 // AreaTable id -> explored-area bit
+	// MapNames are the names of the maps (instances and continents), by id.
+	MapNames map[uint32]string
+	// MapTypes are the instance types of the maps: 1 dungeon, 2 raid.
+	MapTypes map[uint32]uint32
 }
 
 // Page sizes in the pixel space overlays are stated in.

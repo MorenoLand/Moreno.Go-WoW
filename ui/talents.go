@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"fmt"
 
 	lua "github.com/yuin/gopher-lua"
@@ -28,7 +29,8 @@ type TalentTabDef struct {
 
 // TalentSpecState is what the character has learned in one talent group.
 type TalentSpecState struct {
-	Ranks map[uint32]int
+	Ranks  map[uint32]int
+	Glyphs []uint16
 }
 
 type talentState struct {
@@ -38,7 +40,15 @@ type talentState struct {
 	unspent int
 	// preview holds the ranks added in the window and not yet learned.
 	preview map[uint32]int
-}
+	// inspected is the talents of the player being looked at.
+	inspected          []TalentSpecState
+	inspectedActive    int
+	inspectedUnspent   int
+	inspectedGUID      uint64
+	}
+
+	// inspectSpecBase marks a talent group number as one of the inspected player's.
+	const inspectSpecBase = 1000
 
 // rowPointsPerTier is how many points a tree must hold for each row above the
 // first before that row opens.
@@ -55,14 +65,24 @@ func (rt *Runtime) SetTalents(tabs []TalentTabDef, specs []TalentSpecState, acti
 }
 
 func (rt *Runtime) talentRank(spec int, id uint32) int {
-	if spec < 0 || spec >= len(rt.talents.specs) {
+if spec >= inspectSpecBase {
+	spec -= inspectSpecBase
+	if spec < 0 || spec >= len(rt.talents.inspected) {
 		return 0
 	}
-	return rt.talents.specs[spec].Ranks[id]
+	return rt.talents.inspected[spec].Ranks[id]
+}
+if spec < 0 || spec >= len(rt.talents.specs) {
+return 0
+}
+return rt.talents.specs[spec].Ranks[id]
 }
 
 func (rt *Runtime) talentRankWithPreview(spec int, id uint32) int {
-	return rt.talentRank(spec, id) + rt.talents.preview[id]
+if spec >= inspectSpecBase {
+	return rt.talentRank(spec, id)
+}
+return rt.talentRank(spec, id) + rt.talents.preview[id]
 }
 
 func (rt *Runtime) talentTabPoints(spec int, tab *TalentTabDef, withPreview bool) int {
@@ -79,6 +99,16 @@ func (rt *Runtime) talentTabPoints(spec int, tab *TalentTabDef, withPreview bool
 
 // talentSpec resolves the talent group an API call names (1-based, or the
 // active one when it names none).
+func (rt *Runtime) talentSpecFor(L *lua.LState, inspectIndex, groupIndex int) int {
+if !L.ToBool(inspectIndex) {
+	return rt.talentSpec(L, groupIndex)
+}
+if group, ok := L.Get(groupIndex).(lua.LNumber); ok && int(group) >= 1 {
+	return inspectSpecBase + int(group) - 1
+}
+return inspectSpecBase + rt.talents.inspectedActive
+}
+
 func (rt *Runtime) talentSpec(L *lua.LState, index int) int {
 	if group, ok := L.Get(index).(lua.LNumber); ok && int(group) >= 1 {
 		return int(group) - 1
@@ -150,11 +180,11 @@ func registerTalentAPI(rt *Runtime) {
 		return 1
 	})
 	reg("GetTalentTabInfo", func(L *lua.LState) int {
-		tab, _ := rt.talentAt(L.CheckInt(1), 0)
-		if tab == nil || isPet(L, 3) {
-			return 0
-		}
-		spec := rt.talentSpec(L, 4)
+	tab, _ := rt.talentAt(L.CheckInt(1), 0)
+	if tab == nil || isPet(L, 3) {
+	return 0
+	}
+	spec := rt.talentSpecFor(L, 2, 4)
 		L.Push(lua.LString(tab.Name))
 		L.Push(lua.LString(tab.Icon))
 		L.Push(lua.LNumber(rt.talentTabPoints(spec, tab, false)))
@@ -167,7 +197,7 @@ func registerTalentAPI(rt *Runtime) {
 		if talent == nil || isPet(L, 4) {
 			return 0
 		}
-		spec := rt.talentSpec(L, 5)
+		spec := rt.talentSpecFor(L, 3, 5)
 		name, icon := "", ""
 		if len(talent.RankSpells) > 0 {
 			info := rt.gameplay.Catalog[talent.RankSpells[0]]
@@ -193,7 +223,7 @@ func registerTalentAPI(rt *Runtime) {
 		if talent == nil || talent.PrereqID == 0 || isPet(L, 4) {
 			return 0
 		}
-		spec := rt.talentSpec(L, 5)
+		spec := rt.talentSpecFor(L, 3, 5)
 		for index := range tab.Talents {
 			if prereq := &tab.Talents[index]; prereq.ID == talent.PrereqID {
 				L.Push(lua.LNumber(prereq.Row + 1))
@@ -209,19 +239,26 @@ func registerTalentAPI(rt *Runtime) {
 		return 0
 	})
 	reg("GetUnspentTalentPoints", func(L *lua.LState) int {
-		if isPet(L, 2) {
-			L.Push(lua.LNumber(0))
-			return 1
-		}
-		L.Push(lua.LNumber(rt.talents.unspent))
+	if isPet(L, 2) {
+		L.Push(lua.LNumber(0))
 		return 1
+	}
+	if L.ToBool(1) {
+		L.Push(lua.LNumber(rt.talents.inspectedUnspent))
+		return 1
+	}
+	L.Push(lua.LNumber(rt.talents.unspent))
+	return 1
 	})
 	reg("GetGroupPreviewTalentPointsSpent", func(L *lua.LState) int {
 		L.Push(lua.LNumber(rt.previewPointsSpent()))
 		return 1
 	})
 	reg("GetNumTalentGroups", func(L *lua.LState) int {
-		groups := len(rt.talents.specs)
+	groups := len(rt.talents.specs)
+	if L.ToBool(1) {
+		groups = len(rt.talents.inspected)
+	}
 		if groups < 1 {
 			groups = 1
 		}
@@ -229,12 +266,21 @@ func registerTalentAPI(rt *Runtime) {
 		return 1
 	})
 	reg("GetActiveTalentGroup", func(L *lua.LState) int {
-		L.Push(lua.LNumber(rt.talents.active + 1))
+	if L.ToBool(1) {
+		L.Push(lua.LNumber(rt.talents.inspectedActive + 1))
 		return 1
+	}
+	L.Push(lua.LNumber(rt.talents.active + 1))
+	return 1
 	})
 	reg("SetActiveTalentGroup", func(L *lua.LState) int { return 0 })
 	reg("UnitCharacterPoints", func(L *lua.LState) int {
-		L.Push(lua.LNumber(rt.talents.unspent))
+	if unit := L.OptString(1, "player"); !strings.EqualFold(unit, "player") && rt.UnitGUID(unit) == rt.talents.inspectedGUID && rt.talents.inspectedGUID != 0 {
+		L.Push(lua.LNumber(rt.talents.inspectedUnspent))
+		L.Push(lua.LNumber(0))
+		return 2
+	}
+	L.Push(lua.LNumber(rt.talents.unspent))
 		L.Push(lua.LNumber(0))
 		return 2
 	})

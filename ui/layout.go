@@ -190,6 +190,30 @@ func resolveRect(w *widget, parent Rect, relative func(string) (Rect, bool)) Rec
 	if rect.Y1 < rect.Y0 {
 		rect.Y0, rect.Y1 = rect.Y1, rect.Y0
 	}
+	if w.tip != nil && w.tip.owner != nil {
+		rect = keepOnScreen(rect, parent)
+	}
+	return rect
+}
+
+// keepOnScreen slides a tooltip back inside the screen when its anchor put part
+// of it outside.
+func keepOnScreen(rect, screen Rect) Rect {
+	if rect.W() > screen.W() || rect.H() > screen.H() {
+		return rect
+	}
+	if rect.X1 > screen.X1 {
+		rect.X0, rect.X1 = rect.X0-(rect.X1-screen.X1), screen.X1
+	}
+	if rect.X0 < screen.X0 {
+		rect.X0, rect.X1 = screen.X0, rect.X1+(screen.X0-rect.X0)
+	}
+	if rect.Y1 > screen.Y1 {
+		rect.Y0, rect.Y1 = rect.Y0-(rect.Y1-screen.Y1), screen.Y1
+	}
+	if rect.Y0 < screen.Y0 {
+		rect.Y0, rect.Y1 = screen.Y0, rect.Y1+(screen.Y0-rect.Y0)
+	}
 	return rect
 }
 

@@ -88,6 +88,8 @@ type cursorItem struct {
 	bag    int // Lua bag id; -3 for an equipment slot
 	slot   int // Lua slot, 1-based
 	guid   uint64
+	// bankTab is the 1-based guild bank tab of an item picked up from there.
+	bankTab int
 }
 
 func (state *inventoryState) ensure() {
@@ -113,6 +115,10 @@ func (rt *Runtime) SetItemTemplate(template world.ItemTemplate) {
 	rt.FireEvent("BAG_UPDATE", numberValue(0))
 	rt.FireEvent("UNIT_INVENTORY_CHANGED", stringValue("player"))
 	rt.refreshItemActions()
+	rt.RefreshMail()
+	rt.RefreshGuildBank()
+	rt.refreshTradeSkill()
+	rt.refreshAuction()
 }
 
 // SetInventory replaces the item objects and the player's slot array with what
@@ -149,6 +155,9 @@ func (rt *Runtime) SetInventory(slots [invSlotCount]uint64, items map[uint64]*It
 	}
 	for bag := range changedBags {
 		rt.FireEvent("BAG_UPDATE", numberValue(bag))
+	}
+	if len(changedBags) > 0 {
+		rt.refreshTradeSkill()
 	}
 	if len(changedBags) > 0 {
 		rt.refreshItemActions()

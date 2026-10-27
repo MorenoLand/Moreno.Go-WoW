@@ -297,6 +297,10 @@ func (eng *UIEngine) Update(elapsed float64) bool {
 			statusChanged = true
 		}
 	}
+	if eng.Rt != nil {
+		eng.Rt.TickGroup(elapsed)
+		eng.Rt.tickChat()
+	}
 	if eng.Rt != nil && eng.Rt.tickLogout(elapsed) {
 		statusChanged = true
 	}
@@ -639,6 +643,16 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 	paintChildren := func(target *image.RGBA, w *widget, rect Rect) {
 		if w.kind == kindScrollFrame {
 			// Only the frame's own area of the layer is cleared and composited.
+			// The frame's own background, border and artwork regions lie under
+			// what it scrolls.
+			underContent := func(child *widget) bool {
+				return (child.kind == kindTexture || child.kind == kindFontString) && child.layerLevel < layerOverlay
+			}
+			for _, child := range orderedChildren(w.children) {
+				if child.shown && underContent(child) && !childDrawsBehindParent(child, w) {
+					paint(target, child, rect)
+				}
+			}
 			clip := ScreenRect(screenScaledRect(rect, eng.uiScale), float64(target.Bounds().Dy())).Intersect(target.Bounds())
 			children := eng.acquireLayerRegion(target.Bounds(), clip)
 			for _, child := range orderedChildren(w.children) {
@@ -651,8 +665,8 @@ func (eng *UIEngine) render(screenWidth, screenHeight int, root *widget, drawBac
 			}
 			eng.releaseLayer()
 			for _, child := range orderedChildren(w.children) {
-				if child.shown && child != w.scrollChild && !childDrawsBehindParent(child, w) {
-					paint(target, child, rect)
+				if child.shown && child != w.scrollChild && !childDrawsBehindParent(child, w) && !underContent(child) {
+				paint(target, child, rect)
 				}
 			}
 			return
@@ -2538,7 +2552,30 @@ func childDrawOrderLess(first, second *widget) bool {
 	if first.frameLevel != second.frameLevel {
 		return first.frameLevel < second.frameLevel
 	}
+	// Frame levels are absolute: of two siblings of one level, the one holding a
+	// frame of a higher level (a unit frame's border frame, nested two deep) is
+	// drawn after the one that holds none, whichever was made first.
+	if !isRegionWidget(first) && !isRegionWidget(second) && first.frameStrata == second.frameStrata {
+		if firstTop, secondTop := deepestFrameLevel(first), deepestFrameLevel(second); firstTop != secondTop {
+			return firstTop < secondTop
+		}
+	}
 	return first.layerLevel < second.layerLevel
+}
+
+// deepestFrameLevel is the highest frame level among a frame and the frames below
+// it that share its strata.
+func deepestFrameLevel(w *widget) int {
+	level := w.frameLevel
+	for _, child := range w.children {
+		if isRegionWidget(child) || child.frameStrata != w.frameStrata {
+			continue
+		}
+		if deeper := deepestFrameLevel(child); deeper > level {
+			level = deeper
+		}
+	}
+	return level
 }
 
 func isRegionWidget(w *widget) bool {

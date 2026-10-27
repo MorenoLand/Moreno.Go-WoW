@@ -21,6 +21,7 @@ func (rt *Runtime) SetArea(zone, subZone, pvp, faction string, indoors bool) {
 	}
 	previous := rt.area
 	rt.area = areaState{known: true, zone: zone, subZone: subZone, pvp: pvp, faction: faction, indoors: indoors}
+	rt.StartChannels()
 	switch {
 	case !previous.known || previous.zone != zone:
 		rt.FireEvent("ZONE_CHANGED_NEW_AREA")

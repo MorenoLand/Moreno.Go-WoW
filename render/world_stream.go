@@ -118,6 +118,10 @@ type worldTerrainStreamer struct {
 	preloaded map[[2]int]*worldStreamedTile
 	// instances are the instanced doodads of the attached tiles.
 	instances *worldInstances
+	// objectSolids are the collision of the game objects standing in the world,
+	// by guid, and objectsChanged says it has to be merged in again.
+	objectSolids   map[uint64]worldCollisionMesh
+	objectsChanged time.Time
 	// viewFrustum is what the camera sees this frame, for leaving out what is not.
 	viewFrustum *math32.Frustum
 	lastUpdate  time.Time
@@ -225,6 +229,25 @@ func (s *worldTerrainStreamer) adopt(key [2]int, tile *worldStreamedTile) {
 	})
 }
 
+// setObjectSolid gives a game object collision (or takes it away with none).
+func (s *worldTerrainStreamer) setObjectSolid(guid uint64, mesh worldCollisionMesh) {
+	if s == nil {
+		return
+	}
+	if s.objectSolids == nil {
+		s.objectSolids = make(map[uint64]worldCollisionMesh)
+	}
+	if len(mesh.triangles) == 0 {
+		if _, had := s.objectSolids[guid]; !had {
+			return
+		}
+		delete(s.objectSolids, guid)
+	} else {
+		s.objectSolids[guid] = mesh
+	}
+	s.objectsChanged = time.Now()
+}
+
 // rebuildCollision merges the loaded tiles' collision in the background and
 // swaps it in when ready.
 func (s *worldTerrainStreamer) rebuildCollision(synchronous bool) {
@@ -233,6 +256,9 @@ func (s *worldTerrainStreamer) rebuildCollision(synchronous bool) {
 	// A placement on a tile edge is in both tiles' lists but is one thing.
 	seen := make(map[*worldCollisionTriangle]bool)
 	seenLights := make(map[*worldPointLight]bool)
+	for _, solid := range s.objectSolids {
+		solids = append(solids, solid)
+	}
 	for _, tile := range s.tiles {
 		chunks = append(chunks, tile.collision.chunks...)
 		for _, solid := range tile.collision.solids {
@@ -359,6 +385,11 @@ func (s *worldTerrainStreamer) update(x, y float32) {
 		}
 	}
 	if changed {
+		s.rebuildCollision(false)
+		s.objectsChanged = time.Time{}
+	} else if !s.objectsChanged.IsZero() && now.Sub(s.objectsChanged) > 300*time.Millisecond {
+		// Objects arrive in bursts; they are merged in once the burst is over.
+		s.objectsChanged = time.Time{}
 		s.rebuildCollision(false)
 	}
 	s.updateParticles(x, y, math.Min(frame.Seconds(), 0.1))

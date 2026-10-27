@@ -608,3 +608,16 @@ func (rt *Runtime) coordinateMethods() map[string]func(L *lua.LState, w *widget)
 		},
 	}
 }
+
+// anchoredSize is the size a frame the script gave no size takes from its
+// anchors, as the original client reports it; zero when it has none.
+func (rt *Runtime) anchoredSize(w *widget) (float64, float64) {
+	if w.kind == kindFontString || w.kind == kindTexture || len(w.points) < 2 {
+		return 0, 0
+	}
+	rect, ok := rt.ownRect(w)
+	if !ok {
+		return 0, 0
+	}
+	return rect.W(), rect.H()
+}

@@ -256,7 +256,17 @@ func registerGlueAPI(rt *Runtime) {
 	reg("GetBonusBarOffset", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
 	reg("HasAction", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("GetActionTexture", func(L *lua.LState) int { L.Push(lua.LNil); return 1 })
-	reg("GetActionText", func(L *lua.LState) int { L.Push(lua.LString("")); return 1 })
+	reg("GetActionText", func(L *lua.LState) int {
+	action := rt.action(L.CheckInt(1))
+	if action.Type == actionTypeMacro {
+		if macro, _ := rt.macroAt(int(action.ID)); macro != nil {
+			L.Push(lua.LString(macro.Name))
+			return 1
+		}
+	}
+	L.Push(lua.LString(""))
+	return 1
+	})
 	reg("GetActionCount", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
 	reg("GetActionCooldown", func(L *lua.LState) int {
 		L.Push(lua.LNumber(0))
@@ -1688,32 +1698,85 @@ func registerStringHelpers(L *lua.LState) {
 	L.SetGlobal("tremove", L.GetGlobal("table").(*lua.LTable).RawGetString("remove"))
 	// SecureNext pairs with next for secure iteration; the glue scripts use
 	// it as a plain iterator.
+	// next walks a snapshot of the table's keys taken when the walk starts, so
+	// a script may assign to or clear the fields it has passed (the table
+	// library's own cursor loses its place when it does).
+	type walk struct {
+		keys  []lua.LValue
+		index map[lua.LValue]int
+	}
+	walks := map[*lua.LTable]*walk{}
 	safeNext := L.NewFunction(func(L *lua.LState) int {
 		table := L.CheckTable(1)
 		key := lua.LValue(lua.LNil)
 		if L.GetTop() >= 2 {
 			key = L.Get(2)
-			switch key.Type() {
-			case lua.LTUserData, lua.LTTable, lua.LTFunction:
-				key = lua.LNil
-			case lua.LTNumber:
-				if key != lua.LNumber(0) && table.RawGet(key) == lua.LNil {
-					key = lua.LNil
-				}
-			default:
-				if key != lua.LNil && table.RawGet(key) == lua.LNil {
-					key = lua.LNil
+		}
+		if key == lua.LNil {
+			// The first field of an array part is found without taking a snapshot.
+			for position := 1; position <= table.MaxN(); position++ {
+				if value := table.RawGetInt(position); value != lua.LNil {
+					delete(walks, table)
+					L.Push(lua.LNumber(position))
+					L.Push(value)
+					return 2
 				}
 			}
 		}
-		nextKey, value := table.Next(key)
-		if nextKey == lua.LNil {
-			L.Push(lua.LNil)
-			return 1
+		current := walks[table]
+		if key == lua.LNil || current == nil || current.index[key] == 0 && (len(current.keys) == 0 || current.keys[0] != key) {
+			current = &walk{index: map[lua.LValue]int{}}
+			for position := 1; position <= table.MaxN(); position++ {
+				if table.RawGetInt(position) != lua.LNil {
+					current.keys = append(current.keys, lua.LNumber(position))
+				}
+			}
+			table.ForEach(func(k, v lua.LValue) {
+				if number, ok := k.(lua.LNumber); ok && float64(number) == float64(int(number)) && int(number) >= 1 && int(number) <= table.MaxN() {
+					return
+				}
+				current.keys = append(current.keys, k)
+			})
+			for position, k := range current.keys {
+				current.index[k] = position
+			}
+			if len(walks) > 4096 {
+				walks = map[*lua.LTable]*walk{}
+			}
+			walks[table] = current
 		}
-		L.Push(nextKey)
-		L.Push(value)
-		return 2
+		start := 0
+		if key != lua.LNil {
+			position, ok := current.index[key]
+			switch {
+			case ok:
+				start = position + 1
+			case isNumberKey(key):
+				// A field the script has just cleared is not in a snapshot taken after
+				// it: go on with the array fields that follow it.
+				start = len(current.keys)
+				for at, k := range current.keys {
+					if number, isNumber := k.(lua.LNumber); isNumber && number > key.(lua.LNumber) {
+						start = at
+						break
+					}
+				}
+			default:
+				delete(walks, table)
+				L.Push(lua.LNil)
+				return 1
+			}
+		}
+		for position := start; position < len(current.keys); position++ {
+			if value := table.RawGet(current.keys[position]); value != lua.LNil {
+				L.Push(current.keys[position])
+				L.Push(value)
+				return 2
+			}
+		}
+		delete(walks, table)
+		L.Push(lua.LNil)
+		return 1
 	})
 	L.SetGlobal("next", safeNext)
 	L.SetGlobal("SecureNext", safeNext)
@@ -1749,4 +1812,9 @@ func registerStringHelpers(L *lua.LState) {
 		}
 		return L.GetTop()
 	}))
+}
+
+func isNumberKey(key lua.LValue) bool {
+	_, ok := key.(lua.LNumber)
+	return ok
 }

@@ -397,10 +397,20 @@ func (l *Loader) loadUiChildren(ui *xmlNode, interfacePath string) error {
 				return fmt.Errorf("%s: Element 'Include' without file attribute", interfacePath)
 			}
 			resolved := resolveRelative(interfacePath, file)
+			// An add-on may include a file that lives with the stock interface (the
+			// inspect window's PvP page includes the PvP templates); it is looked for
+			// there when it is not beside the including file.
+			if _, err := l.read(normalizePath(resolved)); err != nil && errors.Is(err, fs.ErrNotExist) {
+				if stock := `Interface\FrameXML\` + file; !strings.EqualFold(normalizePath(resolved), stock) {
+					if _, stockErr := l.read(normalizePath(stock)); stockErr == nil {
+						resolved = stock
+					}
+				}
+			}
 			if err := l.LoadInterfaceFile(resolved); err != nil {
 				return err
 			}
-		case "Font":
+			case "Font":
 			name := child.attrDefault("name", "")
 			if name == "" {
 				return fmt.Errorf("%s: Unnamed font node at top level", interfacePath)
@@ -1081,7 +1091,7 @@ func (l *Loader) compileScript(body, handler, chunkName string) *lua.LFunction {
 	top := L.GetTop()
 	defer L.SetTop(top)
 	source := "return function(" + scriptParams(handler) + ") " + body + "\nend"
-	fn, err := L.LoadString(source)
+	fn, err := L.LoadString(fixGenericFor(source))
 	if err != nil {
 		fmt.Printf("COMPILE DEBUG [%s]: %v\nSOURCE: %q\n", chunkName, err, source)
 		l.rt.recordScriptError(strings.TrimPrefix(chunkName, "@"), err.Error())

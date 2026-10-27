@@ -57,7 +57,6 @@ func (eng *UIEngine) LoadWorldUI() error {
 	if !eng.Rt.Execute(`
 if ChatFrame1 then
     ChatFrame1:Show();
-    ChatFrame_RegisterForMessages(ChatFrame1, "SAY", "YELL", "PARTY", "RAID", "GUILD", "OFFICER", "WHISPER", "EMOTE", "TEXT_EMOTE", "CHANNEL");
     ChatEdit_SetLastActiveWindow(ChatFrame1.editBox);
     ChatFrame1.editBox:SetJustifyH("LEFT");
     FCF_SetButtonSide(ChatFrame1, "left");
@@ -76,6 +75,7 @@ end`, "@world-ui-init.lua") {
 	// ChatFrame1 waits for UPDATE_CHAT_WINDOWS before FloatingChatFrame_Update
 	// runs FCF_SetWindowName / PanelTemplates_TabResize. Fire the same event
 	// the original client emits after chat saved-variables load.
+	eng.Rt.SendChatColors()
 	eng.Rt.FireEvent("UPDATE_CHAT_WINDOWS")
 	eng.Rt.FireEvent("UPDATE_FLOATING_CHAT_WINDOWS")
 	// ChatFrame_ConfigEventHandler re-Shows every saved "shown" window after
@@ -181,7 +181,8 @@ func (eng *UIEngine) loadAddOn(name string) (bool, string) {
 		}
 	}
 	if err := eng.AssetLoader.LoadTOC(toc, nil); err != nil {
-		return false, "ADDON_LOAD_FAILED"
+	log.Printf("add-on %s: %v", name, err)
+	return false, "ADDON_LOAD_FAILED"
 	}
 	eng.Rt.loadedAddOns[key] = true
 	eng.Rt.FireEvent("ADDON_LOADED", lua.LString(name))

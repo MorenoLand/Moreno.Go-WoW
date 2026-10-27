@@ -128,6 +128,8 @@ func scriptParams(handler string) string {
 		return "self"
 	case "OnTextChanged":
 		return "self, changed"
+	case "OnCursorChanged":
+		return "self, x, y, w, h"
 	case "OnValueChanged":
 		return "self, value"
 	case "OnVerticalScroll":

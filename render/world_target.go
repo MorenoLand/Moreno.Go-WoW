@@ -84,10 +84,15 @@ type worldNames struct {
 	// guilds are guild names by id, guildAsked the ids already queried.
 	guilds     map[uint32]string
 	guildAsked map[uint32]bool
+	// objects are game object names by entry, objectAsked the entries queried.
+	objects     map[uint32]string
+	objectAsked map[uint32]bool
+	// guildInfo is what each guild queried answered, with its rank names.
+	guildInfo map[uint32]world.GuildQuery
 }
 
 func newWorldNames() *worldNames {
-	return &worldNames{creatures: make(map[uint32]world.CreatureInfo), players: make(map[uint64]world.PlayerName), asked: make(map[uint64]bool), guilds: make(map[uint32]string), guildAsked: make(map[uint32]bool)}
+	return &worldNames{creatures: make(map[uint32]world.CreatureInfo), players: make(map[uint64]world.PlayerName), asked: make(map[uint64]bool), guilds: make(map[uint32]string), guildAsked: make(map[uint32]bool), objects: make(map[uint32]string), objectAsked: make(map[uint32]bool), guildInfo: make(map[uint32]world.GuildQuery)}
 }
 
 // request queries the name of an entity the first time it is needed.
@@ -127,6 +132,16 @@ func (n *worldNames) unitInfoFor(entity *worldEntity, factions *worldFactions, p
 		if name, ok := n.players[entity.guid]; ok {
 			info.Name = name.Name
 		}
+		if guildID := entity.fields[playerGuildField]; guildID != 0 {
+			info.GuildName = n.guilds[guildID]
+			if query, ok := n.guildInfo[guildID]; ok {
+				rank := int(entity.fields[playerGuildField+1])
+				info.GuildRankIndex = rank
+				if rank >= 0 && rank < len(query.Ranks) {
+					info.GuildRank = query.Ranks[rank]
+				}
+			}
+		}
 	} else if creature, ok := n.creatures[entity.fields[objectEntryField]]; ok {
 		info.Name = creature.Name
 		info.DisplayID = entity.fields[world.UnitDisplayIDField]
@@ -137,6 +152,7 @@ func (n *worldNames) unitInfoFor(entity *worldEntity, factions *worldFactions, p
 		info.CreatureType = worldCreatureTypeNames[creature.Type]
 	}
 	info.Hostile, info.Friendly = factions.reaction(playerFaction, entity.fields[unitFactionField])
+	info.OnTaxi = entity.fields[0x3B]&0x00100000 != 0
 	return info
 }
 
@@ -285,4 +301,68 @@ func (n *worldNames) requestGuild(id uint32, send func(world.ClientOpcode, []byt
 	}
 	n.guildAsked[id] = true
 	_ = send(world.GuildQueryOpcode, world.BuildGuildQuery(id))
+}
+
+// objectName is the name of a game object, asking the server the first time.
+func (n *worldNames) objectName(entity *worldEntity, send func(world.ClientOpcode, []byte) error) string {
+	entry := entity.fields[objectEntryField]
+	if name, ok := n.objects[entry]; ok {
+		return name
+	}
+	if entry != 0 && !n.objectAsked[entry] && send != nil {
+		n.objectAsked[entry] = true
+		_ = send(world.GameObjectQueryOpcode, world.BuildGameObjectQuery(entry, entity.guid))
+	}
+	return ""
+}
+
+// handleObject takes the answer to a game object query.
+func (n *worldNames) handleObject(packet world.Packet) bool {
+	if packet.Opcode != world.GameObjectQueryResponse {
+		return false
+	}
+	if info, err := world.ParseGameObjectQuery(packet.Body); err == nil && info.Found {
+		n.objects[info.Entry] = info.Name
+	}
+	return true
+}
+
+// worldPickGameObject returns the nearest game object under a window position.
+func worldPickGameObject(cam *camera.Camera, entities map[uint64]*worldEntity, x, y, width, height float64) uint64 {
+	if cam == nil || width <= 0 || height <= 0 {
+		return 0
+	}
+	ndcX, ndcY := float32(x/width*2-1), float32(1-y/height*2)
+	far := cam.Unproject(math32.NewVector3(ndcX, ndcY, 0.9))
+	origin := cam.Position()
+	dir := far.Sub(&origin)
+	dir.Normalize()
+	best, bestDistance := uint64(0), float32(math.MaxFloat32)
+	for guid, entity := range entities {
+		if entity.objectType != world.ObjectTypeGameObject || !entity.hasPosition || entity.node == nil || !entity.node.Visible() {
+			continue
+		}
+		height := float32(1)
+		if info, ok := entity.node.UserData().(glueModelInfo); ok && info.modelTop > 0 {
+			height = info.modelTop * entity.node.Scale().X
+		}
+		radius := height / 2
+		if radius < 0.8 {
+			radius = 0.8
+		}
+		p := entity.movement.Position
+		oc := math32.Vector3{X: p.X, Y: p.Y, Z: p.Z + height/2}
+		oc.Sub(&origin)
+		along := oc.Dot(dir)
+		if along <= 0 {
+			continue
+		}
+		if closest2 := oc.LengthSq() - along*along; closest2 > radius*radius {
+			continue
+		}
+		if along < bestDistance {
+			best, bestDistance = guid, along
+		}
+	}
+	return best
 }

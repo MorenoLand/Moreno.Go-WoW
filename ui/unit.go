@@ -50,6 +50,21 @@ type UnitInfo struct {
 	DisplayID uint32
 	CreatureType   string
 	Auras          []AuraInfo
+	// GuildName, GuildRank and GuildRankIndex are the guild of a player.
+	GuildName      string
+	GuildRank      string
+	GuildRankIndex int
+	// OnTaxi is set while the unit rides a flight path.
+	OnTaxi bool
+	// AFK and DND are the away flags of a player, Tapped and TappedByPlayer the
+	// dynamic flags of a creature another player has claimed.
+	AFK, DND, Tapped, TappedByPlayer bool
+	// DynamicFlags are the unit's dynamic flags, PVPFlags the PvP byte of its
+	// third bytes word.
+	DynamicFlags uint32
+	PVPFlags     uint8
+	// GuildID is the guild a player belongs to.
+	GuildID uint32
 }
 
 type AuraInfo struct {
@@ -155,6 +170,19 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 	if value, ok := fields[playerFlagsField]; ok && unit == "player" {
 		info.Ghost = value&playerFlagGhost != 0
 	}
+	if value, ok := fields[playerFlagsField]; ok && info.Player {
+		info.AFK, info.DND = value&0x2 != 0, value&0x4 != 0
+	}
+	if value, ok := fields[playerFlagsField+1]; ok && info.Player {
+		info.GuildID = value
+	}
+	if value, ok := fields[fieldDynamicFlags]; ok {
+		info.DynamicFlags = value
+		info.Tapped, info.TappedByPlayer = value&0x4 != 0, value&0x8 != 0
+	}
+	if value, ok := fields[fieldUnitBytes2]; ok {
+		info.PVPFlags = uint8(value >> 8)
+	}
 	if value, ok := fields[634]; ok {
 		info.XP = int(value)
 	}
@@ -166,6 +194,9 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 	}
 	if value, ok := fields[0x45]; ok {
 		info.Mounted = value != 0
+	}
+	if value, ok := fields[0x3B]; ok {
+		info.OnTaxi = value&unitFlagTaxiFlight != 0
 	}
 	changed := false
 	for _, entry := range []struct {
@@ -242,7 +273,45 @@ func (rt *Runtime) unitInfo(unit string) *UnitInfo {
 	if rt == nil || rt.units == nil {
 		return nil
 	}
-	return rt.units[strings.ToLower(strings.TrimSpace(unit))]
+	token := strings.ToLower(strings.TrimSpace(unit))
+	if token == "raid1" && rt.isRaid() {
+		token = "player"
+	}
+	return rt.units[token]
+}
+
+// powerTypeCurrent asks for the power the unit uses now.
+const powerTypeCurrent = 7
+
+// powerDivisors scale the stored power of each kind to what the interface
+// shows: rage and runic power are kept in tenths, happiness in thousandths.
+var powerDivisors = [...]int{1, 10, 1, 1, 1000, 1, 10}
+
+// unitPowerValue is a unit's power or its maximum as UnitPower reports it.
+func (rt *Runtime) unitPowerValue(info *UnitInfo, kind int, maximum bool) int {
+	if info == nil {
+		return 0
+	}
+	if kind == powerTypeCurrent {
+		kind = info.PowerType
+	}
+	if kind < 0 || kind >= len(powerDivisors) {
+		return 0
+	}
+	switch {
+	case kind == info.PowerType:
+		if maximum {
+			return info.PowerMax / powerDivisors[kind]
+		}
+		return info.Power / powerDivisors[kind]
+	case info.GUID != 0 && info.GUID == rt.playerGUID() && rt.playerFields != nil:
+		index := 0x19 + kind
+		if maximum {
+			index = 0x21 + kind
+		}
+		return int(rt.field(index)) / powerDivisors[kind]
+	}
+	return 0
 }
 
 func raceFileFromID(id int) string {
@@ -545,24 +614,25 @@ func registerUnitAPI(rt *Runtime) {
 		L.Push(lua.LNumber(info.HealthMax))
 		return 1
 	})
-	reg("UnitPower", func(L *lua.LState) int {
-		info := rt.unitInfo(L.OptString(1, ""))
-		if info == nil {
-			L.Push(lua.LNumber(0))
+	unitPower := func(name string, maximum bool) {
+		reg(name, func(L *lua.LState) int {
+			info := rt.unitInfo(L.OptString(1, ""))
+			kind := powerTypeCurrent
+			if L.GetTop() >= 2 && L.Get(2).Type() == lua.LTNumber {
+				kind = int(L.Get(2).(lua.LNumber))
+				if kind < 0 || kind > powerTypeCurrent {
+					L.Push(lua.LNumber(0))
+					return 1
+				}
+			}
+			L.Push(lua.LNumber(rt.unitPowerValue(info, kind, maximum)))
 			return 1
-		}
-		L.Push(lua.LNumber(info.Power))
-		return 1
-	})
-	reg("UnitPowerMax", func(L *lua.LState) int {
-		info := rt.unitInfo(L.OptString(1, ""))
-		if info == nil {
-			L.Push(lua.LNumber(0))
-			return 1
-		}
-		L.Push(lua.LNumber(info.PowerMax))
-		return 1
-	})
+		})
+	}
+	unitPower("UnitPower", false)
+	unitPower("UnitPowerMax", true)
+	unitPower("UnitMana", false)
+	unitPower("UnitManaMax", true)
 	reg("UnitPowerType", func(L *lua.LState) int {
 		info := rt.unitInfo(L.OptString(1, ""))
 		if info == nil || !info.Exists {
