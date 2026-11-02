@@ -86,6 +86,17 @@ type Runtime struct {
 	trackedOther     *trackingOther
 	encounters       []Encounter
 	cursorOverride   int
+	gmTicket         gmTicketState
+	gmSurvey         gmSurveyState
+	complaints       chatComplaints
+	bgPositions      bgPositionState
+	logs             logState
+	spellIcons       map[uint32]string
+	possessSpellID   uint32
+	// pvpTimerAt is when the PvP flag runs out, once the server has said.
+	pvpTimerAt time.Time
+	// UnitRaceOfGUID gives the race of a player the world has loaded.
+	UnitRaceOfGUID func(guid uint64) (race uint8, ok bool)
 	cursorMoney      moneyCursor
 	instanceLock     instanceLock
 	// CreatureFamilyOf looks up the beast family of a creature entry in the
@@ -373,6 +384,14 @@ func NewRuntime(host Host) *Runtime {
 	registerInstanceLockAPI(rt)
 	registerBattleNetAPI(rt)
 	registerCursorMiscAPI(rt)
+	registerGMTicketAPI(rt)
+	registerGMSurveyAPI(rt)
+	registerChatComplainAPI(rt)
+	registerBGPositionsAPI(rt)
+	registerQuestSpecialAPI(rt)
+	registerPossessAPI(rt)
+	registerAutocastAPI(rt)
+	registerExeMiscAPI(rt)
 	registerQuestMapAPI(rt)
 	registerItemTextAPI(rt)
 	registerShapeshiftAPI(rt)

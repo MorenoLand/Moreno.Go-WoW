@@ -393,6 +393,10 @@ type QuestInfo struct {
 	// Targets are the creatures or objects to kill or use; a negative entry is
 	// an object.
 	Targets [4]QuestTarget
+	// StartItem is the item the quest hands out when it is taken, ItemDrop the
+	// items each objective's creature drops.
+	StartItem uint32
+	ItemDrop  [4]uint32
 	Items   [6]QuestItem
 	// Text is the line each target is described by.
 	TargetText [4]string
@@ -477,7 +481,10 @@ func ParseQuestQueryResponse(body []byte) (QuestInfo, error) {
 	return info, err
 	}
 	info.RewardHonor = int32(honor)
-	if err = r.Skip(2 * 4); err != nil {
+	if err = r.Skip(4); err != nil {
+	return info, err
+	}
+	if info.StartItem, err = r.U32(); err != nil {
 	return info, err
 	}
 	if info.Flags, err = r.U32(); err != nil {
@@ -560,7 +567,10 @@ func ParseQuestQueryResponse(body []byte) (QuestInfo, error) {
 		if info.Targets[index].Count, err = r.U32(); err != nil {
 			return info, err
 		}
-		if err = r.Skip(8); err != nil {
+		if info.ItemDrop[index], err = r.U32(); err != nil {
+			return info, err
+		}
+		if err = r.Skip(4); err != nil {
 			return info, err
 		}
 	}

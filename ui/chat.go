@@ -91,10 +91,13 @@ func (rt *Runtime) deliverChat(message world.ChatMessage) {
 			language = ""
 		}
 	}
+	line := rt.nextChatLine()
+	rt.recordChatLine(message, line, author, uint32(channelIndex))
+	rt.logLine(0, message.Text)
 	rt.FireEvent(event,
 		lua.LString(message.Text), lua.LString(author), lua.LString(language), lua.LString(channelText), lua.LString(target),
 		lua.LString(chatFlagText(message.Tag)), lua.LNumber(channelRow), lua.LNumber(channelIndex), lua.LString(channelName),
-		lua.LNumber(message.Flags), lua.LNumber(rt.nextChatLine()), guidText(message.Sender))
+		lua.LNumber(message.Flags), lua.LNumber(line), guidText(message.Sender))
 }
 
 // receiveChat takes a chat line from the server, holding it until the name of

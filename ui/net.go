@@ -14,6 +14,7 @@ func (rt *Runtime) ChatLine(event, text string) {
 	if text == "" || !strings.HasPrefix(event, "CHAT_MSG_") {
 		return
 	}
+	rt.logLine(0, text)
 	rt.FireEvent(event,
 		lua.LString(text), lua.LString(""), lua.LString(""), lua.LString(""), lua.LString(""), lua.LString(""),
 		lua.LNumber(0), lua.LNumber(0), lua.LString(""), lua.LNumber(0), lua.LNumber(rt.nextChatLine()), lua.LString(""))
@@ -63,6 +64,8 @@ func (rt *Runtime) registerPacketHandlers() {
 	rt.addPacketHandler(rt.handleSpiritHealerTime)
 	rt.addPacketHandler(rt.handleStablePacket)
 	rt.addPacketHandler(rt.handleInstanceLockPacket)
+	rt.addPacketHandler(rt.handleGMTicketPacket)
+	rt.addPacketHandler(rt.handleBGPositionsPacket)
 }
 
 // handleGroupPacket takes the packets of groups, raids and loot rolls.

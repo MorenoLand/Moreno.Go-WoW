@@ -1794,7 +1794,17 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					uiEngine.Rt.SetRestStates(loadExhaustionStates(uiEngine.AssetLoader))
 					uiEngine.Rt.SetStableTables(loadStableTables(uiEngine.AssetLoader))
 					uiEngine.Rt.SetLanguages(loadLanguages(uiEngine.AssetLoader))
+					uiEngine.Rt.SetSurveyTables(loadSurveyTables(uiEngine.AssetLoader))
 					uiEngine.Rt.SetEncounters(loadEncounters(uiEngine.AssetLoader))
+					uiEngine.Rt.SetSpellIcons(loadSpellIcons(uiEngine.AssetLoader))
+					uiEngine.Rt.UnitRaceOfGUID = func(guid uint64) (uint8, bool) {
+						if entity := worldEntities[guid]; entity != nil {
+							if bytes, ok := entity.fields[world.UnitBytes0Field]; ok {
+								return uint8(bytes), true
+							}
+						}
+						return 0, false
+					}
 					creatureAsked := map[uint32]bool{}
 					uiEngine.Rt.CreatureFamilyOf = func(entry uint32) (uint32, bool) {
 						if info, ok := worldNameState.creatures[entry]; ok {

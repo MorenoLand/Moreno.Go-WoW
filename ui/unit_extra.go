@@ -41,17 +41,7 @@ func registerUnitExtraAPI(rt *Runtime) {
 		L.Push(lua.LNil)
 		return 1
 	})
-	// Wow.exe answers a unit that resolves to an object: UnitIsControlling
-	// tests the first two words of its descriptor, its GUID, and UnitIsCorpse
-	// asks whether that GUID names a corpse object.
-	reg("UnitIsControlling", func(L *lua.LState) int {
-		if rt.UnitGUID(L.CheckString(1)) != 0 {
-			L.Push(lua.LNumber(1))
-		} else {
-			L.Push(lua.LNil)
-		}
-		return 1
-	})
+	// UnitIsCorpse asks whether the GUID of a unit names a corpse object.
 	reg("UnitIsCorpse", func(L *lua.LState) int {
 		if guid := rt.UnitGUID(L.CheckString(1)); guid>>48 == corpseHighGUID {
 			L.Push(lua.LNumber(1))

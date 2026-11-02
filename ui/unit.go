@@ -66,6 +66,8 @@ type UnitInfo struct {
 	DynamicFlags uint32
 	// UnitFlags are the unit flags field as the server sent it.
 	UnitFlags uint32
+	// Charm and Summon are the units the unit has charmed and summoned.
+	Charm, Summon uint64
 	PVPFlags     uint8
 	// GuildID is the guild a player belongs to.
 	GuildID uint32
@@ -110,6 +112,9 @@ func (rt *Runtime) SetUnit(unit string, info UnitInfo) {
 	rt.units[unit] = &cp
 	if rt.widgets["BuffFrame"] != nil {
 		rt.FireEvent("UNIT_AURA", lua.LString(unit))
+	}
+	if unit == "player" {
+		rt.updatePossessBar()
 	}
 }
 
@@ -213,6 +218,8 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 	if value, ok := fields[635]; ok {
 		info.XPMax = int(value)
 	}
+	info.Charm = uint64(fields[6]) | uint64(fields[7])<<32
+	info.Summon = uint64(fields[8]) | uint64(fields[9])<<32
 	if value, ok := fields[0x3B]; ok {
 		info.InCombat = value&0x80000 != 0
 		info.UnitFlags = value
@@ -282,6 +289,9 @@ func (rt *Runtime) SetUnitAuras(unit string, auras []AuraInfo) {
 	info.Auras = append([]AuraInfo(nil), auras...)
 	if rt.widgets["BuffFrame"] != nil {
 		rt.FireEvent("UNIT_AURA", lua.LString(strings.ToLower(strings.TrimSpace(unit))))
+	}
+	if strings.EqualFold(strings.TrimSpace(unit), "player") {
+		rt.updatePossessBar()
 	}
 }
 

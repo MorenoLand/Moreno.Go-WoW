@@ -117,3 +117,34 @@ func loadEncounters(loader *ui.Loader) []ui.Encounter {
 	}
 	return list
 }
+
+// loadSurveyTables reads the tables of the game master survey.
+func loadSurveyTables(loader *ui.Loader) ui.SurveyTables {
+	tables := ui.SurveyTables{Current: map[uint32]uint32{}, Surveys: map[uint32][10]uint32{}, Questions: map[uint32]string{}, Answers: map[uint32][]ui.SurveyAnswer{}}
+	if table, err := loadCharacterDBC(loader, `DBFilesClient\GMSurveyCurrentSurvey.dbc`); err == nil && table.fields >= 2 {
+		for row := 0; row < table.records; row++ {
+			tables.Current[table.value(row, 0)] = table.value(row, 1)
+		}
+	}
+	if table, err := loadCharacterDBC(loader, `DBFilesClient\GMSurveySurveys.dbc`); err == nil && table.fields >= 11 {
+		for row := 0; row < table.records; row++ {
+			var questions [10]uint32
+			for index := range questions {
+				questions[index] = table.value(row, 1+index)
+			}
+			tables.Surveys[table.value(row, 0)] = questions
+		}
+	}
+	if table, err := loadCharacterDBC(loader, `DBFilesClient\GMSurveyQuestions.dbc`); err == nil && table.fields >= 2 {
+		for row := 0; row < table.records; row++ {
+			tables.Questions[table.value(row, 0)] = table.string(row, 1)
+		}
+	}
+	if table, err := loadCharacterDBC(loader, `DBFilesClient\GMSurveyAnswers.dbc`); err == nil && table.fields >= 4 {
+		for row := 0; row < table.records; row++ {
+			group := table.value(row, 2)
+			tables.Answers[group] = append(tables.Answers[group], ui.SurveyAnswer{Sort: table.value(row, 1), Text: table.string(row, 3)})
+		}
+	}
+	return tables
+}
