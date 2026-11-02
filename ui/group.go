@@ -184,6 +184,7 @@ func (rt *Runtime) SetGroup(info world.GroupInfo) {
 		state.rolls = nil
 		state.targetIcons = [8]uint64{}
 	}
+	rt.setGroupLFG(info.LFGDungeon, info.Type&4 != 0)
 	rt.FireEvent("PARTY_MEMBERS_CHANGED")
 	if state.in && (!wasIn || previousLeader != info.Leader) {
 		rt.FireEvent("PARTY_LEADER_CHANGED")

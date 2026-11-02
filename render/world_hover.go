@@ -19,6 +19,8 @@ type worldHover struct {
 	guid    uint64
 	cursors map[string]*glfw.Cursor
 	shown   string
+	// override is the cursor a script chose, by Wow.exe's index from 1, or zero.
+	override func() int
 }
 
 func newWorldHover() *worldHover {
@@ -173,13 +175,13 @@ func loadWorldCursor(loader *ui.Loader, name string) *glfw.Cursor {
 }
 
 // update picks the unit under the mouse and shows its cursor and highlight.
-func (h *worldHover) update(win *window.GlfwWindow, loader *ui.Loader, cam *camera.Camera, entities map[uint64]*worldEntity, ownGUID uint64, factions *worldFactions, playerAt [3]float32, x, y float64, overUI bool) {
+func (h *worldHover) update(win *window.GlfwWindow, loader *ui.Loader, cam *camera.Camera, entities map[uint64]*worldEntity, ownGUID uint64, factions *worldFactions, names *worldNames, playerAt [3]float32, x, y float64, overUI bool) {
 	guid := uint64(0)
 	if !overUI {
 		width, height := win.GetSize()
-		guid = worldPickEntity(cam, entities, ownGUID, x, y, float64(width), float64(height))
-		if guid == 0 {
-			guid = worldPickGameObject(cam, entities, x, y, float64(width), float64(height))
+		guid, unitAlong := worldPickEntityAt(cam, entities, ownGUID, x, y, float64(width), float64(height))
+		if object, objectAlong := worldPickGameObjectAt(cam, entities, names, x, y, float64(width), float64(height)); object != 0 && (guid == 0 || objectAlong < unitAlong) {
+			guid = object
 		}
 	}
 	if guid != h.guid {
@@ -203,8 +205,19 @@ func (h *worldHover) update(win *window.GlfwWindow, loader *ui.Loader, cam *came
 			cursor = name
 		}
 	}
+	if h.override != nil {
+		switch index := h.override(); {
+		case index > 0 && index <= cursorPlainCount && index < len(worldCursorNames):
+			cursor = worldCursorNames[index]
+		case index > cursorPlainCount && index-cursorPlainCount < len(worldCursorNames):
+			cursor = "Unable" + worldCursorNames[index-cursorPlainCount]
+		}
+	}
 	h.setCursor(win, loader, cursor)
 }
+
+// cursorPlainCount is how many cursors Wow.exe numbers before the error ones.
+const cursorPlainCount = 26
 
 // setNodeHighlight lights a model up, or puts its look back. The highlight is
 // the colour of the light, as Wow.exe gives the model (FUN_00743C70).

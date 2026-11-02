@@ -299,6 +299,14 @@ func registerReputationAPI(rt *Runtime) {
 		}
 		return setFlag(L, factionFlagAtWar, entry.Flags&factionFlagAtWar == 0, sendAtWar)
 	})
+	reg("IsFactionInactive", func(L *lua.LState) int {
+		if entry := rowEntry(L); entry != nil && entry.Flags&factionFlagInactive != 0 {
+			L.Push(lua.LNumber(1))
+			return 1
+		}
+		L.Push(lua.LNil)
+		return 1
+	})
 	reg("SetFactionActive", func(L *lua.LState) int { return setFlag(L, factionFlagInactive, false, sendInactive) })
 	reg("SetFactionInactive", func(L *lua.LState) int { return setFlag(L, factionFlagInactive, true, sendInactive) })
 }

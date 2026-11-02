@@ -246,6 +246,9 @@ func (eng *UIEngine) handleBindingKey(key window.Key, mods window.ModifierKey) b
 	if combo == "" {
 		return false
 	}
+	if eng.handleOverrideKey(key, mods) {
+		return true
+	}
 	command, ok := table.keys[combo]
 	if !ok {
 		return false
@@ -333,6 +336,12 @@ func registerBindingAPI(rt *Runtime) {
 		return len(keys)
 	})
 	reg("GetBindingAction", func(L *lua.LState) int {
+		if L.OptBool(2, false) {
+			if command, found := rt.overrides.lookup(strings.ToUpper(L.CheckString(1))); found {
+				L.Push(lua.LString(command))
+				return 1
+			}
+		}
 		if rt.bindings != nil {
 			L.Push(lua.LString(rt.bindings.keys[strings.ToUpper(L.CheckString(1))]))
 		} else {

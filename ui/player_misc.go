@@ -274,6 +274,14 @@ func registerMiscAPI(rt *Runtime) {
 	unitFlag("UnitIsDND", func(info *UnitInfo) bool { return info.Player && info.DND })
 	unitFlag("UnitIsTapped", func(info *UnitInfo) bool { return info.Tapped })
 	unitFlag("UnitIsTappedByPlayer", func(info *UnitInfo) bool { return info.TappedByPlayer })
+	// A player can use a teleport unless stunned (0x40000), or flagged 0x400000 or 0x800000.
+	reg("PlayerCanTeleport", func(L *lua.LState) int {
+		info := rt.unitInfo("player")
+		L.Push(lua.LBool(info != nil && info.UnitFlags&(0x40000|0x400000|0x800000) == 0))
+		return 1
+	})
+	reg("GetTimeToWellRested", func(L *lua.LState) int { L.Push(lua.LNil); return 1 })
+	unitFlag("UnitIsTappedByAllThreatList", func(info *UnitInfo) bool { return info.DynamicFlags&0x80 != 0 })
 	flag("UnitIsInMyGuild", func(L *lua.LState) bool {
 		info, player := rt.unitByNameOrToken(L.CheckString(1)), rt.unitInfo("player")
 		return info != nil && player != nil && info.GuildID != 0 && info.GuildID == player.GuildID

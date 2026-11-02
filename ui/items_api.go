@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.WoW/world"
 	lua "github.com/yuin/gopher-lua"
 )
 
@@ -18,6 +19,8 @@ var inventorySlotNames = map[string]int{
 	"FEETSLOT": 8, "WRISTSLOT": 9, "HANDSSLOT": 10, "FINGER0SLOT": 11, "FINGER1SLOT": 12, "TRINKET0SLOT": 13,
 	"TRINKET1SLOT": 14, "BACKSLOT": 15, "MAINHANDSLOT": 16, "SECONDARYHANDSLOT": 17, "RANGEDSLOT": 18, "TABARDSLOT": 19,
 	"BAG0SLOT": 20, "BAG1SLOT": 21, "BAG2SLOT": 22, "BAG3SLOT": 23, "AMMOSLOT": 0,
+	// The bank frame asks for its bag buttons as Bag1 to Bag7.
+	"BAG1": 68, "BAG2": 69, "BAG3": 70, "BAG4": 71, "BAG5": 72, "BAG6": 73, "BAG7": 74,
 }
 
 var inventorySlotTextures = map[string]string{
@@ -25,7 +28,7 @@ var inventorySlotTextures = map[string]string{
 	"WAISTSLOT": "Waist", "LEGSSLOT": "Legs", "FEETSLOT": "Feet", "WRISTSLOT": "Wrists", "HANDSSLOT": "Hands",
 	"FINGER0SLOT": "Finger", "FINGER1SLOT": "Finger", "TRINKET0SLOT": "Trinket", "TRINKET1SLOT": "Trinket",
 	"BACKSLOT": "Chest", "MAINHANDSLOT": "MainHand", "SECONDARYHANDSLOT": "SecondaryHand", "RANGEDSLOT": "Ranged",
-	"TABARDSLOT": "Tabard", "AMMOSLOT": "Ammo", "BAG0SLOT": "Bag", "BAG1SLOT": "Bag", "BAG2SLOT": "Bag", "BAG3SLOT": "Bag",
+	"TABARDSLOT": "Tabard", "AMMOSLOT": "Ammo", "BAG0SLOT": "Bag", "BAG1SLOT": "Bag", "BAG2SLOT": "Bag", "BAG3SLOT": "Bag", "BAG1": "Bag", "BAG2": "Bag", "BAG3": "Bag", "BAG4": "Bag", "BAG5": "Bag", "BAG6": "Bag", "BAG7": "Bag",
 }
 
 var inventoryTypeNames = [...]string{"", "INVTYPE_HEAD", "INVTYPE_NECK", "INVTYPE_SHOULDER", "INVTYPE_BODY", "INVTYPE_CHEST",
@@ -59,7 +62,7 @@ func (rt *Runtime) pushItemInfo(L *lua.LState, item *ItemInstance, locked bool) 
 	L.Push(lua.LNumber(quality))
 	L.Push(lua.LBool(template != nil && template.PageText != 0))
 	L.Push(lua.LBool(lootable))
-	if link := rt.itemLinkFor(item.Entry, item.Enchant); link != "" {
+	if link := rt.itemInstanceLink(item); link != "" {
 		L.Push(lua.LString(link))
 	} else {
 		L.Push(lua.LNil)
@@ -127,7 +130,7 @@ func registerItemAPI(rt *Runtime) {
 			L.Push(lua.LNil)
 			return 1
 		}
-		if link := rt.itemLinkFor(item.Entry, item.Enchant); link != "" {
+		if link := rt.itemInstanceLink(item); link != "" {
 			L.Push(lua.LString(link))
 		} else {
 			L.Push(lua.LNil)
@@ -228,7 +231,6 @@ func registerItemAPI(rt *Runtime) {
 		L.Push(lua.LNumber(invKeyStart + L.CheckInt(1)))
 		return 1
 	})
-	reg("GetNumBankSlots", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LFalse); return 2 })
 
 	// Equipped items.
 	itemAt := func(L *lua.LState) *ItemInstance {
@@ -251,7 +253,7 @@ func registerItemAPI(rt *Runtime) {
 			L.Push(lua.LNil)
 			return 1
 		}
-		if link := rt.itemLinkFor(item.Entry, item.Enchant); link != "" {
+		if link := rt.itemInstanceLink(item); link != "" {
 			L.Push(lua.LString(link))
 		} else {
 			L.Push(lua.LNil)
@@ -426,6 +428,7 @@ func registerItemAPI(rt *Runtime) {
 		rt.FireEvent("CURSOR_UPDATE")
 	}
 	rt.clearItemCursor = drop
+	rt.sockets.pickup = pickup
 	reg("PickupContainerItem", func(L *lua.LState) int {
 		bag, slot := L.CheckInt(1), L.CheckInt(2)
 		if state.cursor.active {
@@ -482,7 +485,10 @@ func registerItemAPI(rt *Runtime) {
 	reg("AutoEquipCursorItem", func(L *lua.LState) int {
 		if state.cursor.active {
 			if bag, slot, ok := rt.serverBagAndSlotOfCursor(); ok {
-				rt.withItemHost(L, func(host WorldItemHost) error { return host.AutoEquipItem(bag, slot) })
+				send := func() { rt.withItemHost(L, func(host WorldItemHost) error { return host.AutoEquipItem(bag, slot) }) }
+				if !rt.confirmEquip(rt.cursorItemInstance(), true, send) {
+					send()
+				}
 			}
 			drop()
 		}
@@ -531,7 +537,10 @@ func registerItemAPI(rt *Runtime) {
 			for slot := 1; slot <= rt.bagSize(bag); slot++ {
 				if item := rt.bagItem(bag, slot); item != nil && item.Entry == entry {
 					if srcBag, srcSlot, ok := rt.serverBagAndSlot(bag, slot); ok {
-						rt.withItemHost(L, func(host WorldItemHost) error { return host.AutoEquipItem(srcBag, srcSlot) })
+						send := func() { rt.withItemHost(L, func(host WorldItemHost) error { return host.AutoEquipItem(srcBag, srcSlot) }) }
+						if !rt.confirmEquip(item, true, send) {
+							send()
+						}
 					}
 					return 0
 				}
@@ -661,7 +670,11 @@ func (rt *Runtime) moveCursorItem(L *lua.LState, bag, slot int) {
 		rt.withItemHost(L, func(host WorldItemHost) error { return host.SplitItem(srcBag, srcSlot, dstBag, dstSlot, uint8(count)) })
 		return
 	}
-	rt.withItemHost(L, func(host WorldItemHost) error { return host.SwapItem(dstBag, dstSlot, srcBag, srcSlot) })
+	swap := func() { rt.withItemHost(L, func(host WorldItemHost) error { return host.SwapItem(dstBag, dstSlot, srcBag, srcSlot) }) }
+	if bag == -3 && srcBag != 0xFF && rt.confirmEquip(rt.cursorItemInstance(), false, swap) {
+		return
+	}
+	swap()
 }
 
 // autoStoreCursor stores the cursor item in a bag the server picks the slot of.
@@ -692,18 +705,36 @@ func (rt *Runtime) useItem(L *lua.LState, item *ItemInstance, bag, slot uint8) {
 	if template == nil {
 		return
 	}
+	// An item that starts a quest offers it.
+	if template.StartQuest != 0 {
+		rt.send(world.ClientQuestGiverQuery, world.BuildQuestGiverQuest(item.GUID, template.StartQuest, true))
+		return
+	}
+	// A book, a letter or a scroll is read when the character may use it.
+	if template.PageText != 0 && rt.meetsItemRequirements(template) {
+		rt.readItem(item, bag, slot, template.PageText)
+		return
+	}
 	for _, spell := range template.Spells {
 		if spell.ID != 0 && spell.Trigger == 0 {
 			if rt.useGlyphItem(bag, slot, item.GUID, spell.ID) {
 				return
 			}
-			rt.withItemHost(L, func(host WorldItemHost) error {
-				return host.UseItem(bag, slot, 1, spell.ID, item.GUID, 0, 0)
-			})
+			use := func() {
+				rt.withItemHost(L, func(host WorldItemHost) error {
+					return host.UseItem(bag, slot, 1, spell.ID, item.GUID, 0, 0)
+				})
+			}
+			if !rt.confirmUse(item, use) {
+				use()
+			}
 			return
 		}
 	}
 	if template.InventoryType != 0 && bag != 0xFF || (bag == 0xFF && slot >= invPackStart) {
-		rt.withItemHost(L, func(host WorldItemHost) error { return host.AutoEquipItem(bag, slot) })
+		send := func() { rt.withItemHost(L, func(host WorldItemHost) error { return host.AutoEquipItem(bag, slot) }) }
+		if !rt.confirmEquip(item, true, send) {
+			send()
+		}
 	}
 }

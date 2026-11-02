@@ -224,6 +224,15 @@ func registerTradeAPI(rt *Runtime) {
 		amount := uint32(max(L.CheckNumber(1), 0))
 		if amount > 0 && amount <= state.player.Money {
 			rt.send(world.ClientSetTradeGold, world.BuildSetTradeGold(state.player.Money-amount))
+			rt.pickupMoney(amount)
+		}
+		return 0
+	})
+	reg("AddTradeMoney", func(L *lua.LState) int {
+		if amount := rt.cursorMoney.amount; amount != 0 {
+			rt.send(world.ClientSetTradeGold, world.BuildSetTradeGold(state.player.Money+amount))
+			rt.cursorMoney = moneyCursor{}
+			rt.FireEvent("CURSOR_UPDATE")
 		}
 		return 0
 	})

@@ -49,6 +49,20 @@ func (rt *Runtime) registerPacketHandlers() {
 	rt.addPacketHandler(rt.handleEquipmentPacket)
 	rt.addPacketHandler(rt.handleWorldQueryPacket)
 	rt.addPacketHandler(rt.handlePetitionPacket)
+	rt.addPacketHandler(rt.handleLFGPacket)
+	rt.addPacketHandler(rt.handleBattlefieldPacket)
+	rt.addPacketHandler(rt.handleBindPacket)
+	rt.addPacketHandler(rt.handleItemTextPacket)
+	rt.addPacketHandler(rt.handleTutorialPacket)
+	rt.addPacketHandler(rt.handleQuestConfirmPacket)
+	rt.addPacketHandler(rt.handleRaidInstancePacket)
+	rt.addPacketHandler(rt.handleMirrorTimerPacket)
+	rt.addPacketHandler(rt.handleRaidGroupOnlyPacket)
+	rt.addPacketHandler(rt.handleArenaPacket)
+	rt.addPacketHandler(rt.handleBankPacket)
+	rt.addPacketHandler(rt.handleSpiritHealerTime)
+	rt.addPacketHandler(rt.handleStablePacket)
+	rt.addPacketHandler(rt.handleInstanceLockPacket)
 }
 
 // handleGroupPacket takes the packets of groups, raids and loot rolls.

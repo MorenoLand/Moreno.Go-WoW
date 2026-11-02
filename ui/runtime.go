@@ -67,6 +67,34 @@ type Runtime struct {
 	equipment        equipmentState
 	worldQuery       worldQueryState
 	petitions        petitionState
+	lfg              lfgState
+	bf               battlefieldState
+	veh              vehicleState
+	bind             bindState
+	sockets          socketState
+	overrides        overrideBindings
+	tutorials        tutorialState
+	questConfirm     questConfirm
+	mirrors          [mirrorTimerCount]mirrorTimer
+	bootDeadline     time.Time
+	arena            arenaState
+	bank             bankState
+	spiritHealerAt   time.Time
+	stable           stableState
+	restStates       []RestState
+	languages        []Language
+	trackedOther     *trackingOther
+	encounters       []Encounter
+	cursorOverride   int
+	cursorMoney      moneyCursor
+	instanceLock     instanceLock
+	// CreatureFamilyOf looks up the beast family of a creature entry in the
+	// creature cache, asking the server for it the first time.
+	CreatureFamilyOf func(entry uint32) (family uint32, ok bool)
+	itemText         itemTextState
+	objectText       func(uint64) (uint32, uint32, string, bool)
+	ws               worldStateData
+	playerIdentity   func(uint64) (PlayerIdentity, bool)
 	totems           [4]totemSlot
 	packetHandlers   []func(world.Packet) bool
 	playerNames      func(uint64) string
@@ -322,6 +350,31 @@ func NewRuntime(host Host) *Runtime {
 	registerEquipmentAPI(rt)
 	registerWorldQueryAPI(rt)
 	registerPetitionAPI(rt)
+	registerLFGAPI(rt)
+	registerBattlefieldAPI(rt)
+	registerWorldStateAPI(rt)
+	registerVehicleAPI(rt)
+	registerBindAPI(rt)
+	registerSocketAPI(rt)
+	registerOverrideBindingAPI(rt)
+	registerTutorialAPI(rt)
+	registerUnitExtraAPI(rt)
+	registerQuestConfirmAPI(rt)
+	registerActionBarToggleAPI(rt)
+	registerMirrorTimerAPI(rt)
+	registerInstanceBootAPI(rt)
+	registerArenaAPI(rt)
+	registerBankAPI(rt)
+	registerSpiritHealerAPI(rt)
+	registerStableAPI(rt)
+	registerRestStateAPI(rt)
+	registerLanguageAPI(rt)
+	registerTrackingAPI(rt)
+	registerInstanceLockAPI(rt)
+	registerBattleNetAPI(rt)
+	registerCursorMiscAPI(rt)
+	registerQuestMapAPI(rt)
+	registerItemTextAPI(rt)
 	registerShapeshiftAPI(rt)
 	rt.views = defaultCameraViews
 	registerWorldActionAPI(rt)

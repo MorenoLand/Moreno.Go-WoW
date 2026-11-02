@@ -152,6 +152,10 @@ type GroupInfo struct {
 	Dungeon    uint8
 	Raid       uint8
 	Dynamic    uint8
+	// LFGState and LFGDungeon are set for a group the dungeon finder formed:
+	// where it is in the finder and the dungeon it is for.
+	LFGState   uint8
+	LFGDungeon uint32
 }
 
 // ParseGroupList reads SMSG_GROUP_LIST.
@@ -172,7 +176,10 @@ func ParseGroupList(body []byte) (GroupInfo, error) {
 		return info, err
 	}
 	if info.Type&GroupTypeLFG != 0 {
-		if err = r.Skip(5); err != nil {
+		if info.LFGState, err = r.U8(); err != nil {
+			return info, err
+		}
+		if info.LFGDungeon, err = r.U32(); err != nil {
 			return info, err
 		}
 	}

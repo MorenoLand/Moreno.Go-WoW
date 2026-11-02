@@ -100,6 +100,9 @@ type messageLine struct {
 // The original client models these as C++ frame classes; this struct keeps
 // the fields the glue scripts observe through their methods.
 type widget struct {
+	// parentless marks a frame the client leaves without a parent, which
+	// the engine hangs off the interface root.
+	parentless bool
 	kind            widgetKind
 	typeName        string // GetObjectType for frame types that share another kind's behaviour (GameTooltip, Cooldown, ...)
 	tip             *tooltipState
@@ -458,6 +461,7 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 				w.parent.children = children
 			}
 			changed := w.parent != p
+			w.parentless = false
 			w.parent = p
 			addWidgetChild(p, w)
 			if changed && p != nil && w.isScriptableFrame() {

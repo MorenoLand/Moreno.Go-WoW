@@ -134,9 +134,6 @@ func (c *worldCombat) apply(packet world.Packet) (bool, error) {
 	case world.AttackBadFacing:
 		c.complain("ERR_BADATTACKFACING")
 		return true, nil
-	case world.AttackNotStanding:
-		c.complain("SPELL_FAILED_NOT_STANDING")
-		return true, nil
 	case world.AttackDeadTarget, world.AttackCantAttack:
 		c.complain("ERR_INVALID_ATTACK_TARGET")
 		return true, nil

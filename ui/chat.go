@@ -195,6 +195,7 @@ func (rt *Runtime) tickChat() {
 	rt.FlushChat()
 	rt.flushEmotes()
 	rt.tickPetition()
+	rt.tickBattlefield()
 }
 
 // chatTypeForName turns the name a script gives a chat kind into the one the

@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -195,6 +196,83 @@ func (rt *Runtime) auraAt(unit string, index int, filter string) (AuraInfo, bool
 	return AuraInfo{}, false
 }
 
+// tooltipFormat fills a global string's %s and %N$s fields in order.
+func tooltipFormat(format string, args ...string) string {
+	var out strings.Builder
+	next := 0
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' || i+1 >= len(format) {
+			out.WriteByte(format[i])
+			continue
+		}
+		j := i + 1
+		for j < len(format) && format[j] >= '0' && format[j] <= '9' {
+			j++
+		}
+		index, positional := next, false
+		if j < len(format) && format[j] == '$' && j > i+1 {
+			positional = true
+			index, _ = strconv.Atoi(format[i+1 : j])
+			index--
+			j++
+		}
+		if j >= len(format) || format[j] != 's' {
+			out.WriteByte(format[i])
+			continue
+		}
+		if index >= 0 && index < len(args) {
+			out.WriteString(args[index])
+		}
+		if !positional {
+			next++
+		}
+		i = j
+	}
+	return out.String()
+}
+
+// unitLevelLine is the "Level 80 Human Death Knight (Player)" line: the
+// creature type stands in the class place and the rank or "Player" in the type
+// place.
+func (rt *Runtime) unitLevelLine(info *UnitInfo) string {
+	level := "??"
+	if info.Level > 0 {
+		level = strconv.Itoa(info.Level)
+	}
+	var race, class, kind string
+	if info.Player {
+		race, class = rt.unitRaceText(info), rt.unitClassText(info)
+		kind = rt.globalString("PLAYER", "Player")
+	} else {
+		class = info.CreatureType
+		switch info.Classification {
+		case "worldboss":
+			kind = rt.globalString("BOSS", "Boss")
+		case "elite", "rareelite":
+			kind = rt.globalString("ELITE", "Elite")
+		}
+	}
+	if info.Dead {
+		class = rt.globalString("CORPSE", "Corpse")
+	}
+	pick := func(name, fallback string, args ...string) string {
+		return tooltipFormat(rt.globalString(name, fallback), args...)
+	}
+	switch {
+	case race == "" && class == "" && kind == "":
+		return pick("TOOLTIP_UNIT_LEVEL", "Level %s", level)
+	case race == "" && class == "":
+		return pick("TOOLTIP_UNIT_LEVEL_TYPE", "Level %s (%s)", level, kind)
+	case race == "" && kind == "":
+		return pick("TOOLTIP_UNIT_LEVEL_CLASS", "Level %s %s", level, class)
+	case race == "":
+		return pick("TOOLTIP_UNIT_LEVEL_CLASS_TYPE", "Level %s %s (%s)", level, class, kind)
+	case kind == "":
+		return pick("TOOLTIP_UNIT_LEVEL_RACE_CLASS", "Level %s %s %s", level, race, class)
+	}
+	return pick("TOOLTIP_UNIT_LEVEL_RACE_CLASS_TYPE", "Level %s %s %s (%s)", level, race, class, kind)
+}
+
 func (rt *Runtime) fillUnitTooltip(w *widget, unit string) bool {
 	info := rt.unitInfo(unit)
 	if info == nil || !info.Exists {
@@ -202,15 +280,14 @@ func (rt *Runtime) fillUnitTooltip(w *widget, unit string) bool {
 	}
 	rt.clearTooltip(w)
 	w.tooltip().unit = unit
-	rt.tooltipAddLine(w, tooltipLine{left: info.Name})
-	if info.Level > 0 {
-		line := fmt.Sprintf("%s %d", rt.globalString("LEVEL", "Level"), info.Level)
-		for _, part := range []string{rt.unitRaceText(info), rt.unitClassText(info)} {
-			if part != "" {
-				line += " " + part
-			}
-		}
-		rt.tooltipAddLine(w, tooltipLine{left: line, leftColor: tooltipWhite, hasLeft: true})
+	name := info.Name
+	if info.Player && info.Server != "" {
+		name += " - " + info.Server
+	}
+	rt.tooltipAddLine(w, tooltipLine{left: name, leftColor: tooltipYellow, hasLeft: true})
+	rt.tooltipAddLine(w, tooltipLine{left: rt.unitLevelLine(info), leftColor: tooltipWhite, hasLeft: true})
+	if info.Player && info.PVPFlags&1 != 0 {
+		rt.tooltipAddLine(w, tooltipLine{left: rt.globalString("PVP_ENABLED", "PvP"), leftColor: tooltipWhite, hasLeft: true})
 	}
 	rt.showTooltip(w)
 	rt.fire(w, "OnTooltipSetUnit", []lua.LValue{w.luaValue(rt.L)})
@@ -266,6 +343,9 @@ func (rt *Runtime) tooltipContentMethods() map[string]func(L *lua.LState, w *wid
 		"SetTracking":   noop,
 	}
 	for name, fn := range rt.itemTooltipMethods() {
+		methods[name] = fn
+	}
+	for name, fn := range rt.lfgTooltipMethods() {
 		methods[name] = fn
 	}
 	return methods

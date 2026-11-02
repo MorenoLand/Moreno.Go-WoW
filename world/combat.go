@@ -20,7 +20,6 @@ const (
 	AttackStopPacket       uint16 = 0x0144
 	AttackNotInRange       uint16 = 0x0145
 	AttackBadFacing        uint16 = 0x0146
-	AttackNotStanding      uint16 = 0x0147
 	AttackDeadTarget       uint16 = 0x0148
 	AttackCantAttack       uint16 = 0x0149
 	AttackerStateUpdate    uint16 = 0x014A

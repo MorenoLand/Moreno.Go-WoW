@@ -34,6 +34,8 @@ type SocialHost interface {
 type socialState struct {
 	friends []ContactEntry
 	ignored []ContactEntry
+	// selectedFriend and selectedIgnore are the contacts picked in the lists.
+	selectedFriend, selectedIgnore uint64
 }
 
 // SetContacts replaces the social lists and tells the interface.
@@ -177,6 +179,93 @@ func registerSocialAPI(rt *Runtime) {
 		}
 		return 0
 	})
+	selectedIndex := func(list []ContactEntry, guid uint64) int {
+		for index := range list {
+			if guid != 0 && list[index].GUID == guid {
+				return index + 1
+			}
+		}
+		return 0
+	}
+	reg("GetSelectedFriend", func(L *lua.LState) int {
+		L.Push(lua.LNumber(selectedIndex(rt.social.friends, rt.social.selectedFriend)))
+		return 1
+	})
+	reg("SetSelectedFriend", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTNumber {
+			L.RaiseError("Usage: SetSelectedFriend(index)")
+		}
+		rt.social.selectedFriend = 0
+		if index := L.CheckInt(1); index >= 1 && index <= len(rt.social.friends) && index <= 101 {
+			rt.social.selectedFriend = rt.social.friends[index-1].GUID
+		}
+		return 0
+	})
+	reg("GetSelectedIgnore", func(L *lua.LState) int {
+		L.Push(lua.LNumber(selectedIndex(rt.social.ignored, rt.social.selectedIgnore)))
+		return 1
+	})
+	reg("SetSelectedIgnore", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTNumber {
+			L.RaiseError("Usage: SetSelectedIgnore(index)")
+		}
+		rt.social.selectedIgnore = 0
+		if index := L.CheckInt(1); index >= 1 && index <= len(rt.social.ignored) && index <= 51 {
+			rt.social.selectedIgnore = rt.social.ignored[index-1].GUID
+		}
+		return 0
+	})
+	reg("AddOrDelIgnore", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTString {
+			return 0
+		}
+		host := rt.socialHost()
+		if host == nil {
+			return 0
+		}
+		if ignored := contactFor(rt.social.ignored, L.Get(1)); ignored != nil {
+			_ = host.RemoveContact(ignored.GUID, true)
+		} else {
+			_ = host.AddIgnore(L.ToString(1))
+		}
+		return 0
+	})
+	reg("AddOrRemoveFriend", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTString {
+			return 0
+		}
+		host := rt.socialHost()
+		if host == nil {
+			return 0
+		}
+		if friend := contactFor(rt.social.friends, L.Get(1)); friend != nil {
+			_ = host.RemoveContact(friend.GUID, false)
+		} else {
+			_ = host.AddFriend(L.ToString(1), L.OptString(2, ""))
+		}
+		return 0
+	})
+	// Voice chat mutes exist only with voice chat, which the server does not
+	// offer: the lists stay empty.
+	reg("GetNumMutes", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("GetSelectedMute", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
+	reg("SetSelectedMute", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTNumber {
+			L.RaiseError("Usage: SetSelectedMute(index)")
+		}
+		return 0
+	})
+	reg("GetMuteName", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTNumber {
+			L.RaiseError("Usage: GetMuteName(index)")
+		}
+		L.Push(lua.LString(rt.globalString("UNKNOWN", "UNKNOWN")))
+		return 1
+	})
+	reg("GetMuteStatus", func(L *lua.LState) int { L.Push(lua.LNil); return 1 })
+	reg("AddMute", func(L *lua.LState) int { return 0 })
+	reg("DelMute", func(L *lua.LState) int { return 0 })
+	reg("AddOrDelMute", func(L *lua.LState) int { return 0 })
 	reg("SetFriendNotes", func(L *lua.LState) int {
 		if host, friend := rt.socialHost(), contactFor(rt.social.friends, L.Get(1)); host != nil && friend != nil {
 			friend.Note = L.CheckString(2)

@@ -5,9 +5,15 @@ import lua "github.com/yuin/gopher-lua"
 // visibleThroughParents reports whether every ancestor of w is shown, so that
 // showing or hiding w itself changes whether it is drawn.
 func (w *widget) visibleThroughParents() bool {
+	if w.parentless {
+		return true
+	}
 	for parent := w.parent; parent != nil; parent = parent.parent {
 		if !parent.shown {
 			return false
+		}
+		if parent.parentless {
+			return true
 		}
 	}
 	return true

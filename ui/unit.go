@@ -49,6 +49,8 @@ type UnitInfo struct {
 	// DisplayID is the model a creature wears, which its portrait shows.
 	DisplayID uint32
 	CreatureType   string
+	// CreatureFamily is the family of a beast, such as Wolf or Cat.
+	CreatureFamily string
 	Auras          []AuraInfo
 	// GuildName, GuildRank and GuildRankIndex are the guild of a player.
 	GuildName      string
@@ -62,9 +64,18 @@ type UnitInfo struct {
 	// DynamicFlags are the unit's dynamic flags, PVPFlags the PvP byte of its
 	// third bytes word.
 	DynamicFlags uint32
+	// UnitFlags are the unit flags field as the server sent it.
+	UnitFlags uint32
 	PVPFlags     uint8
 	// GuildID is the guild a player belongs to.
 	GuildID uint32
+	// ActionBarToggles are the extra action bars the player shows, a bit each.
+	ActionBarToggles uint8
+	// BankSlots is how many bank bag slots the player bought, RestState the
+	// rested byte of the player bytes.
+	BankSlots, RestState uint8
+	// ArenaTeams are the arena team fields of a character.
+	ArenaTeams [3]ArenaTeamField
 }
 
 type AuraInfo struct {
@@ -183,6 +194,19 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 	if value, ok := fields[fieldUnitBytes2]; ok {
 		info.PVPFlags = uint8(value >> 8)
 	}
+	if teams, found := arenaFields(fields); found && unit == "player" {
+		for slot := range teams {
+			if _, ok := fields[uint16(arenaTeamFieldFirst+slot*arenaTeamFieldCount)]; ok {
+				info.ArenaTeams[slot] = teams[slot]
+			}
+		}
+	}
+	if value, ok := fields[playerBytes2Field]; ok && unit == "player" {
+		info.BankSlots, info.RestState = uint8(value>>16), uint8(value>>24)
+	}
+	if value, ok := fields[playerBytesField]; ok && unit == "player" {
+		info.ActionBarToggles = uint8(value >> 16)
+	}
 	if value, ok := fields[634]; ok {
 		info.XP = int(value)
 	}
@@ -191,6 +215,7 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 	}
 	if value, ok := fields[0x3B]; ok {
 		info.InCombat = value&0x80000 != 0
+		info.UnitFlags = value
 	}
 	if value, ok := fields[0x45]; ok {
 		info.Mounted = value != 0
@@ -228,6 +253,10 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 	if old.XP != info.XP || old.XPMax != info.XPMax {
 		changed = true
 		rt.FireEvent("PLAYER_XP_UPDATE", lua.LString(unit))
+	}
+	if unit == "player" && old.ArenaTeams != info.ArenaTeams {
+		changed = true
+		rt.syncArenaTeams(true)
 	}
 	return changed
 }

@@ -130,7 +130,21 @@ func (rt *Runtime) itemTooltipLines(template *world.ItemTemplate, instance *Item
 			add(replaceFormat(rt.gs("ITEM_RESIST_SINGLE", "+%d %s Resistance"), value, rt.gs("RESISTANCE"+fmt.Sprint(index+1)+"_NAME", resistanceNames[index])), tooltipWhite, false)
 		}
 	}
-	for _, socket := range template.Sockets {
+	socketsMatch := true
+	for index, socket := range template.Sockets {
+		// A socket with a gem in it shows what the gem gives.
+		if instance != nil && socket.Color != 0 {
+			if gemItem := rt.existingGem(instance, index); gemItem != 0 {
+				if name := rt.sockets.tables.EnchantNames[instance.Enchants[enchantSlotSocket1+index]]; name != "" {
+					add(name, tooltipWhite, false)
+					if !rt.gemMatches(template, rt.itemTemplateIfKnown(gemItem), index) {
+						socketsMatch = false
+					}
+					continue
+				}
+			}
+		}
+		socketsMatch = false
 		var key, fallback string
 		switch {
 		case socket.Color&1 != 0:
@@ -145,6 +159,15 @@ func (rt *Runtime) itemTooltipLines(template *world.ItemTemplate, instance *Item
 			continue
 		}
 		add(rt.gs(key, fallback), rgba{r: 0.5, g: 0.5, b: 0.5, a: 1}, false)
+	}
+	if bonus := template.SocketBonus; bonus != 0 {
+		if name := rt.sockets.tables.EnchantNames[bonus]; name != "" {
+			color := rgba{r: 0.5, g: 0.5, b: 0.5, a: 1}
+			if socketsMatch && socketCountOf(template) > 0 {
+				color = tooltipGreen
+			}
+			add(replaceFormat(rt.gs("ITEM_SOCKET_BONUS", "Socket Bonus: %s"), name), color, false)
+		}
 	}
 	if instance != nil && template.MaxDurability > 0 {
 		max := instance.MaxDurability

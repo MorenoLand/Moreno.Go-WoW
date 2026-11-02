@@ -99,6 +99,9 @@ func syncWorldInventory(rt *ui.Runtime, entities map[uint64]*worldEntity, player
 			Flags:         entity.fields[fieldItemFlags],
 			Enchant:       entity.fields[fieldItemEnchant],
 		}
+		for slot := range item.Enchants {
+			item.Enchants[slot] = entity.fields[uint16(fieldItemEnchant+3*slot)]
+		}
 		if item.Count == 0 {
 			item.Count = 1 // a sparse field set omits zeros, and there is no stack of none
 		}

@@ -230,6 +230,7 @@ func (rt *Runtime) setMapToCurrentZone() {
 	if !state.showPage(best) {
 		state.continent, state.zone = worldMapWorld, 0
 	}
+	rt.FireEvent("WORLD_MAP_UPDATE")
 }
 
 // zoomOut moves up one level: zone to continent, continent to world, world to
@@ -362,6 +363,7 @@ func registerWorldMapAPI(rt *Runtime) {
 		if continent > 0 && zone > len(state.zonePages(continent)) {
 			state.zone = 0
 		}
+		rt.FireEvent("WORLD_MAP_UPDATE")
 		return 0
 	})
 	reg("SetMapByID", func(L *lua.LState) int {
@@ -375,9 +377,10 @@ func registerWorldMapAPI(rt *Runtime) {
 				break
 			}
 		}
+		rt.FireEvent("WORLD_MAP_UPDATE")
 		return 0
 	})
-	reg("ZoomOut", func(L *lua.LState) int { state.zoomOut(); return 0 })
+	reg("ZoomOut", func(L *lua.LState) int { state.zoomOut(); rt.FireEvent("WORLD_MAP_UPDATE"); return 0 })
 	reg("IsZoomOutAvailable", func(L *lua.LState) int { L.Push(lua.LBool(state.continent != worldMapCosmic)); return 1 })
 	reg("GetMapInfo", func(L *lua.LState) int {
 		page := state.currentPage()
@@ -470,6 +473,7 @@ func registerWorldMapAPI(rt *Runtime) {
 				state.zone = index
 			}
 		}
+		rt.FireEvent("WORLD_MAP_UPDATE")
 		return 0
 	})
 
@@ -577,4 +581,29 @@ func (rt *Runtime) SetPlayerMapFacing(radians float32) {
 	for _, arrow := range rt.mapArrowTextures {
 		arrow.rotation = float64(radians)
 	}
+}
+
+// registerQuestMapAPI defines the quest points of interest on the map. The
+// client learns them from the server's POI query, which this client does not
+// make yet, so no quest has a point and the map counts none.
+func registerQuestMapAPI(rt *Runtime) {
+	L := rt.L
+	L.SetGlobal("QuestMapUpdateAllQuests", L.NewFunction(func(L *lua.LState) int {
+		L.Push(lua.LNumber(0))
+		return 1
+	}))
+	L.SetGlobal("QuestPOIGetQuestIDByVisibleIndex", L.NewFunction(func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTNumber {
+			L.RaiseError("Usage: QuestPOIGetQuestIDByVisibleIndex(index)")
+		}
+		return 0
+	}))
+	L.SetGlobal("GetQuestWorldMapAreaID", L.NewFunction(func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTNumber {
+			L.RaiseError("Usage: GetQuestWorldMapAreaID(questID)")
+		}
+		L.Push(lua.LNumber(0))
+		L.Push(lua.LNumber(0))
+		return 2
+	}))
 }

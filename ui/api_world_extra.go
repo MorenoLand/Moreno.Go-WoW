@@ -247,6 +247,17 @@ func registerUnitReactionAPI(rt *Runtime) {
 		L.Push(lua.LString("normal"))
 		return 1
 	})
+	reg("UnitCreatureFamily", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTString {
+			L.RaiseError(`Usage: UnitCreatureFamily("unit")`)
+		}
+		if info := known(L.CheckString(1)); info != nil && info.CreatureFamily != "" {
+			L.Push(lua.LString(info.CreatureFamily))
+			return 1
+		}
+		L.Push(lua.LNil)
+		return 1
+	})
 	reg("UnitCreatureType", func(L *lua.LState) int {
 		if info := known(L.OptString(1, "")); info != nil && info.CreatureType != "" {
 			L.Push(lua.LString(info.CreatureType))

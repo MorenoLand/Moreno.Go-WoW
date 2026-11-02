@@ -443,6 +443,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	host.entities = func() map[uint64]*worldEntity { return worldEntities }
 	var worldNet worldNetStats
 	worldHoverState := newWorldHover()
+	worldHoverState.override = func() int {
+		if uiEngine == nil {
+			return 0
+		}
+		return uiEngine.Rt.CursorOverride()
+	}
 	var indoorMinimap worldIndoorMinimap
 	var lastAreaCheck, lastEntityCompact time.Time
 	worldPortraitState := newWorldPortraits()
@@ -454,6 +460,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		}
 		return activeSession.SendRaw(opcode, body)
 	}
+	worldNameState.send = worldSend
 	var selectTarget func(guid uint64) error
 	var previousTarget, lastEnemy, lastFriend uint64
 	host.startAttack = func(guid uint64) error {
@@ -560,12 +567,33 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			return
 		}
 		width, height := win.GetSize()
-		guid := worldPickEntity(cam, worldEntities, worldCharacter.GUID, x, y, float64(width), float64(height))
+		guid, unitAlong := worldPickEntityAt(cam, worldEntities, worldCharacter.GUID, x, y, float64(width), float64(height))
+		if guid != 0 && button == window.MouseButtonRight {
+			// A game object in front of the unit the ray also hits (a mailbox
+			// with someone stood behind it) is the one clicked.
+			if object, objectAlong := worldPickGameObjectAt(cam, worldEntities, worldNameState, x, y, float64(width), float64(height)); object != 0 && objectAlong < unitAlong {
+				useWorldGameObject(uiEngine.Rt, activeSession, worldEntities[object], worldEntities[worldCharacter.GUID])
+				return
+			}
+		}
+		if uiEngine != nil && uiEngine.Rt.CursorHoldsItem() {
+			// With an item on the cursor a click on the world asks whether to
+			// destroy it, and a click on another player starts a trade.
+			if entity := worldEntities[guid]; guid != 0 && entity != nil && entity.objectType == world.ObjectTypePlayer {
+				uiEngine.Rt.DropCursorItemOnPlayer(guid)
+			} else if guid == 0 {
+				uiEngine.Rt.ConfirmDropCursorItem()
+			}
+			return
+		}
 		if guid == 0 {
 			// A right click on a game object (a mailbox, a chest, a door, a quest
 			// object) uses it: the server answers with what it does.
 			if button == window.MouseButtonRight {
-				if object := worldPickGameObject(cam, worldEntities, x, y, float64(width), float64(height)); object != 0 {
+				if debug || os.Getenv("WOW_DIAG_PICK") != "" {
+					diagPickGameObjects(cam, worldEntities, worldNameState, x, y, float64(width), float64(height))
+				}
+				if object := worldPickGameObject(cam, worldEntities, worldNameState, x, y, float64(width), float64(height)); object != 0 {
 					useWorldGameObject(uiEngine.Rt, activeSession, worldEntities[object], worldEntities[worldCharacter.GUID])
 				}
 			}
@@ -1169,7 +1197,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				}
 			}
 			if worldMode && worldCamera != nil && wowCursor != nil {
-				worldHoverState.update(win, uiEngine.AssetLoader, cam, worldEntities, worldCharacter.GUID, worldFactionState, worldCamera.position, float64(cursor.Xpos), float64(cursor.Ypos), uiEngine.PointOverUI(float64(cursor.Xpos), float64(cursor.Ypos)))
+				worldHoverState.update(win, uiEngine.AssetLoader, cam, worldEntities, worldCharacter.GUID, worldFactionState, worldNameState, worldCamera.position, float64(cursor.Xpos), float64(cursor.Ypos), uiEngine.PointOverUI(float64(cursor.Xpos), float64(cursor.Ypos)))
 				if worldHoverState.guid != worldHoverTip {
 					worldHoverTip = worldHoverState.guid
 					if entity := worldEntities[worldHoverTip]; entity != nil && entity.objectType == world.ObjectTypeGameObject {
@@ -1297,7 +1325,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	defer signal.Stop(signals)
 	lastUpdate := time.Now()
 	lastFrame := lastUpdate
+	frameBeat := func() {}
+	if debug {
+		frameBeat = startHangWatch()
+	}
 	for !win.ShouldClose() {
+		frameBeat()
 		frameAt := time.Now()
 		if elapsed := frameAt.Sub(lastFrame).Seconds(); elapsed > 0 {
 			debugFrameMS = elapsed * 1000
@@ -1754,6 +1787,68 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					uiEngine.Rt.SetEmoteTables(loadEmoteTables(uiEngine.AssetLoader))
 					uiEngine.Rt.SetServerMessages(loadServerMessages(uiEngine.AssetLoader))
 					uiEngine.Rt.SetWhoTables(loadWhoTables(uiEngine.AssetLoader))
+					uiEngine.Rt.SetLFGTables(loadLFGTables(uiEngine.AssetLoader))
+					uiEngine.Rt.SetBattlefieldTables(loadBattlefieldTables(uiEngine.AssetLoader))
+					loadCreatureFamilies(uiEngine.AssetLoader)
+					uiEngine.Rt.SetBankSlotPrices(loadBankSlotPrices(uiEngine.AssetLoader))
+					uiEngine.Rt.SetRestStates(loadExhaustionStates(uiEngine.AssetLoader))
+					uiEngine.Rt.SetStableTables(loadStableTables(uiEngine.AssetLoader))
+					uiEngine.Rt.SetLanguages(loadLanguages(uiEngine.AssetLoader))
+					uiEngine.Rt.SetEncounters(loadEncounters(uiEngine.AssetLoader))
+					creatureAsked := map[uint32]bool{}
+					uiEngine.Rt.CreatureFamilyOf = func(entry uint32) (uint32, bool) {
+						if info, ok := worldNameState.creatures[entry]; ok {
+							return info.Family, info.Found
+						}
+						if !creatureAsked[entry] {
+							creatureAsked[entry] = true
+							_ = worldSend(world.CreatureQueryOpcode, world.BuildCreatureQuery(entry, 0))
+						}
+						return 0, false
+					}
+					uiEngine.Rt.SetVehicleTables(loadVehicleTables(uiEngine.AssetLoader))
+					uiEngine.Rt.SetSocketTables(loadSocketTables(uiEngine.AssetLoader))
+					uiEngine.Rt.SetPageMaterials(loadPageMaterials(uiEngine.AssetLoader))
+					uiEngine.Rt.SetGameObjectText(func(guid uint64) (uint32, uint32, string, bool) {
+						entity := worldEntities[guid]
+						if entity == nil {
+							return 0, 0, "", false
+						}
+						entry := entity.fields[objectEntryField]
+						data, found := worldNameState.objectData[entry]
+						if !found {
+							_ = worldNameState.objectName(entity, worldSend)
+							return 0, 0, "", false
+						}
+						return data[0], data[2], worldNameState.objects[entry], true
+					})
+					uiEngine.Rt.SetVehicleSource(func(guid uint64) ui.VehicleEntity {
+						entity := worldEntities[guid]
+						if entity == nil {
+							return ui.VehicleEntity{}
+						}
+						return ui.VehicleEntity{
+							Exists: true, Player: entity.objectType == world.ObjectTypePlayer,
+							Transport: entity.movement.TransportGUID, Seat: entity.movement.TransportSeat,
+							VehicleID: entity.movement.VehicleID,
+							CharmedBy: uint64(entity.fields[unitCharmedByField]) | uint64(entity.fields[unitCharmedByField+1])<<32,
+						}
+					}, func(vehicle uint64) []uint64 {
+						var riders []uint64
+						for guid, entity := range worldEntities {
+							if entity.movement.TransportGUID == vehicle {
+								riders = append(riders, guid)
+							}
+						}
+						return riders
+					})
+					uiEngine.Rt.SetPlayerIdentity(func(guid uint64) (ui.PlayerIdentity, bool) {
+						info, found := worldNameState.players[guid]
+						if !found {
+							return ui.PlayerIdentity{}, false
+						}
+						return ui.PlayerIdentity{Race: info.Race, Class: info.Class, Gender: info.Gender}, true
+					})
 					uiEngine.Rt.SetPlayerNames(func(guid uint64) string { return worldNameState.players[guid].Name })
 					uiEngine.Rt.SetUnitDistance(func(guid uint64) (float64, bool) {
 						own, other := worldEntities[worldCharacter.GUID], worldEntities[guid]
@@ -1927,6 +2022,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						worldLight = readWorldLightTables(uiEngine.AssetLoader)
 						worldFactionState = readWorldFactions(uiEngine.AssetLoader)
 						*worldNameState = *newWorldNames()
+						worldNameState.send = worldSend
 						worldCombatState.rt = uiEngine.Rt
 						worldCombatState.ownGUID = worldCharacter.GUID
 						worldCombatState.entities = func() map[uint64]*worldEntity { return worldEntities }

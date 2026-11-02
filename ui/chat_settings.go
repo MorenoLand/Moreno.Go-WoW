@@ -48,6 +48,8 @@ type chatWindow struct {
 type chatSettings struct {
 	windows [chatWindowCount]chatWindow
 	colors  []chatTypeColor
+	// byClass lists the chat types that colour a speaker's name by class.
+	byClass map[string]bool
 	// channelColors are the colours of the numbered channels.
 	channelColors [maxChatChannels]chatTypeColor
 	ready         bool
@@ -178,6 +180,33 @@ func registerChatSettingsAPI(rt *Runtime) {
 	reg("GetChatTypeIndex", func(L *lua.LState) int {
 		L.Push(lua.LNumber(rt.chatTypeIndex(L.CheckString(1))))
 		return 1
+	})
+	reg("SetChatColorNameByClass", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTString {
+			L.RaiseError("Usage: SetChatColorNameByClass(chatType, colorNameByClass)")
+		}
+		name, on := L.CheckString(1), lua.LVAsBool(L.Get(2))
+		found := false
+		for index := range rt.chatCfg.colors {
+			if strings.EqualFold(rt.chatCfg.colors[index].name, name) {
+				name, found = rt.chatCfg.colors[index].name, true
+				break
+			}
+		}
+		for index := range rt.chatCfg.channelColors {
+			if strings.EqualFold(rt.chatCfg.channelColors[index].name, name) {
+				name, found = rt.chatCfg.channelColors[index].name, true
+				break
+			}
+		}
+		if found {
+			if rt.chatCfg.byClass == nil {
+				rt.chatCfg.byClass = map[string]bool{}
+			}
+			rt.chatCfg.byClass[name] = on
+			rt.FireEvent("UPDATE_CHAT_COLOR_NAME_BY_CLASS", lua.LString(name), lua.LBool(on))
+		}
+		return 0
 	})
 	reg("ChangeChatColor", func(L *lua.LState) int {
 		name := L.CheckString(1)

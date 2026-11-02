@@ -42,6 +42,9 @@ type ItemInstance struct {
 	NumSlots                  int      // containers: how many squares
 	Slots                     []uint64 // containers: guid in each square
 	Enchant                   uint32
+	// Enchants is the enchantment in each of the slots of the item; the gems sit
+	// in the third to fifth.
+	Enchants [12]uint32
 }
 
 // ItemLocal is what Item.dbc says about an entry: enough to draw an icon
@@ -119,6 +122,9 @@ func (rt *Runtime) SetItemTemplate(template world.ItemTemplate) {
 	rt.RefreshGuildBank()
 	rt.refreshTradeSkill()
 	rt.refreshAuction()
+	if rt.merchant.open {
+		rt.FireEvent("MERCHANT_UPDATE")
+	}
 }
 
 // SetInventory replaces the item objects and the player's slot array with what
@@ -141,6 +147,19 @@ func (rt *Runtime) SetInventory(slots [invSlotCount]uint64, items map[uint64]*It
 			changedBags[0] = true
 		case slot >= invBankStart && slot < invBankEnd:
 			changedBags[-1] = true
+			rt.FireEvent("PLAYERBANKSLOTS_CHANGED", numberValue(slot-invBankStart+1))
+		case slot >= invBankBagStart && slot < invBankBagEnd:
+			rt.FireEvent("PLAYERBANKBAGSLOTS_CHANGED", numberValue(slot-invBankBagStart+1))
+		}
+	}
+	for index := 0; index < invBankBagEnd-invBankBagStart; index++ {
+		container := state.items[slots[invBankBagStart+index]]
+		old := previousItems[previousSlots[invBankBagStart+index]]
+		if container == nil && old == nil {
+			continue
+		}
+		if container == nil || old == nil || container.GUID != old.GUID || !sameSlots(container.Slots, old.Slots) || !containerContentsSame(container, old, items, previousItems) {
+			changedBags[invBagEnd-invBagStart+index+1] = true
 		}
 	}
 	for index := 0; index < invBagEnd-invBagStart; index++ {
@@ -266,6 +285,20 @@ func (rt *Runtime) itemLinkFor(entry uint32, enchant uint32) string {
 		return ""
 	}
 	return fmt.Sprintf("|cff%s|Hitem:%d:%d:0:0:0:0:0:0:0|h[%s]|h|r", itemQualityHex(template.Quality), entry, enchant, template.Name)
+}
+
+// itemInstanceLink writes the chat link of an item the character has: the
+// enchantment and the three gems it carries are in it.
+func (rt *Runtime) itemInstanceLink(item *ItemInstance) string {
+	template := rt.itemTemplate(item.Entry)
+	if template == nil {
+		return ""
+	}
+	var gems [socketCount]uint32
+	for index := range gems {
+		gems[index] = rt.existingGem(item, index)
+	}
+	return fmt.Sprintf("|cff%s|Hitem:%d:%d:%d:%d:%d:0:0:0:0|h[%s]|h|r", itemQualityHex(template.Quality), item.Entry, item.Enchant, gems[0], gems[1], gems[2], template.Name)
 }
 
 // itemEntryFromLink reads the item id out of an item link or a plain number.

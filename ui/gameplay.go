@@ -487,6 +487,7 @@ func registerGameplayAPI(rt *Runtime) {
 			rt.clearItemCursor()
 		}
 		rt.gameplay.Cursor = world.ActionButton{}
+		rt.cursorMoney = moneyCursor{}
 		rt.FireEvent("CURSOR_UPDATE")
 		return 0
 	})

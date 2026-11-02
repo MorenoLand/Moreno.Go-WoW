@@ -75,6 +75,13 @@ type UpdateMovement struct {
 	Position      WorldPosition
 	HasPosition   bool
 	Speeds        [9]float32
+	// TransportGUID is the transport or vehicle the unit rides, with the seat it
+	// takes there and the offset from the transport it stands at.
+	TransportGUID     uint64
+	TransportSeat     int8
+	TransportPosition WorldPosition
+	// VehicleID is the vehicle record of a unit that is a vehicle.
+	VehicleID uint32
 }
 
 type MoveFacing struct {
@@ -185,15 +192,29 @@ func readUpdateMovement(r *Reader) (UpdateMovement, error) {
 		}
 		result.HasPosition = true
 		if movementFlags&MovementFlagOnTransport != 0 {
-			if _, err = ReadPackedGUID(r); err != nil {
+			if result.TransportGUID, err = ReadPackedGUID(r); err != nil {
 				return UpdateMovement{}, err
 			}
-			if err = r.Skip(16); err != nil {
+			if result.TransportPosition.X, err = r.F32(); err != nil {
 				return UpdateMovement{}, err
 			}
-			if err = r.Skip(4 + 1); err != nil {
+			if result.TransportPosition.Y, err = r.F32(); err != nil {
 				return UpdateMovement{}, err
 			}
+			if result.TransportPosition.Z, err = r.F32(); err != nil {
+				return UpdateMovement{}, err
+			}
+			if result.TransportPosition.Orientation, err = r.F32(); err != nil {
+				return UpdateMovement{}, err
+			}
+			if err = r.Skip(4); err != nil {
+				return UpdateMovement{}, err
+			}
+			seat, err := r.U8()
+			if err != nil {
+				return UpdateMovement{}, err
+			}
+			result.TransportSeat = int8(seat)
 			if movementFlags2&MovementFlag2Interpolated != 0 {
 				if err = r.Skip(4); err != nil {
 					return UpdateMovement{}, err
@@ -287,7 +308,10 @@ func readUpdateMovement(r *Reader) (UpdateMovement, error) {
 		}
 	}
 	if flags&UpdateFlagVehicle != 0 {
-		if err = r.Skip(8); err != nil {
+		if result.VehicleID, err = r.U32(); err != nil {
+			return UpdateMovement{}, err
+		}
+		if err = r.Skip(4); err != nil {
 			return UpdateMovement{}, err
 		}
 	}

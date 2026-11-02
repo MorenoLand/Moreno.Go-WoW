@@ -1,6 +1,7 @@
 package render
 
 import (
+	"fmt"
 	"math"
 	"sort"
 
@@ -87,8 +88,12 @@ type worldNames struct {
 	// objects are game object names by entry, objectAsked the entries queried.
 	objects     map[uint32]string
 	objectAsked map[uint32]bool
+	// objectData is the type-specific numbers of each object queried.
+	objectData map[uint32][24]uint32
 	// guildInfo is what each guild queried answered, with its rank names.
 	guildInfo map[uint32]world.GuildQuery
+	// send asks the server what it does not know yet.
+	send func(world.ClientOpcode, []byte) error
 }
 
 func newWorldNames() *worldNames {
@@ -114,6 +119,9 @@ func (n *worldNames) request(entity *worldEntity, send func(world.ClientOpcode, 
 }
 
 var worldCreatureTypeNames = map[uint32]string{1: "Beast", 2: "Dragonkin", 3: "Demon", 4: "Elemental", 5: "Giant", 6: "Undead", 7: "Humanoid", 8: "Critter", 9: "Mechanical", 10: "Not specified", 11: "Totem", 12: "Non-combat Pet", 13: "Gas Cloud"}
+
+// worldCreatureFamilyNames are the names in CreatureFamily.dbc.
+var worldCreatureFamilyNames = map[uint32]string{}
 
 var worldClassificationNames = map[uint32]string{0: "normal", 1: "elite", 2: "rareelite", 3: "worldboss", 4: "rare"}
 
@@ -150,6 +158,7 @@ func (n *worldNames) unitInfoFor(entity *worldEntity, factions *worldFactions, p
 		}
 		info.Classification = worldClassificationNames[creature.Rank]
 		info.CreatureType = worldCreatureTypeNames[creature.Type]
+		info.CreatureFamily = worldCreatureFamilyNames[creature.Family]
 	}
 	info.Hostile, info.Friendly = factions.reaction(playerFaction, entity.fields[unitFactionField])
 	info.OnTaxi = entity.fields[0x3B]&0x00100000 != 0
@@ -214,8 +223,14 @@ func worldEntityPickCenter(entity *worldEntity) math32.Vector3 {
 
 // worldPickEntity returns the nearest selectable unit under a window position.
 func worldPickEntity(cam *camera.Camera, entities map[uint64]*worldEntity, ownGUID uint64, x, y, width, height float64) uint64 {
+	guid, _ := worldPickEntityAt(cam, entities, ownGUID, x, y, width, height)
+	return guid
+}
+
+// worldPickEntityAt is worldPickEntity with how far along the ray the unit is.
+func worldPickEntityAt(cam *camera.Camera, entities map[uint64]*worldEntity, ownGUID uint64, x, y, width, height float64) (uint64, float32) {
 	if cam == nil || width <= 0 || height <= 0 {
-		return 0
+		return 0, math.MaxFloat32
 	}
 	ndcX, ndcY := float32(x/width*2-1), float32(1-y/height*2)
 	far := cam.Unproject(math32.NewVector3(ndcX, ndcY, 0.9))
@@ -245,7 +260,7 @@ func worldPickEntity(cam *camera.Camera, entities map[uint64]*worldEntity, ownGU
 			best, bestDistance = guid, along
 		}
 	}
-	return best
+	return best, bestDistance
 }
 
 // worldTabTargets lists the units Tab cycles through: living ones the player
@@ -323,14 +338,48 @@ func (n *worldNames) handleObject(packet world.Packet) bool {
 	}
 	if info, err := world.ParseGameObjectQuery(packet.Body); err == nil && info.Found {
 		n.objects[info.Entry] = info.Name
+		if n.objectData == nil {
+			n.objectData = map[uint32][24]uint32{}
+		}
+		n.objectData[info.Entry] = info.Data
 	}
 	return true
 }
 
 // worldPickGameObject returns the nearest game object under a window position.
-func worldPickGameObject(cam *camera.Camera, entities map[uint64]*worldEntity, x, y, width, height float64) uint64 {
+// objectInteractive is whether a game object answers the mouse: the highlight
+// and tooltip, the cursor and a right click. Wow.exe asks each kind of object
+// (vtable slot 3 of its GameObject_C handler): a generic object (5) and a
+// capture point (29) only when their highlight datum is set (data 1 and 19),
+// the movers, a camera and the like never, anything else always.
+func (n *worldNames) objectInteractive(entity *worldEntity) bool {
+	switch kind := (entity.fields[gameObjectBytes1Field] >> 8) & 0xFF; kind {
+	case 11, 14, 15, 31, 35:
+		return false
+	case 5, 29:
+		data, ok := n.objectData[entity.fields[objectEntryField]]
+		if !ok {
+			n.objectName(entity, n.send)
+			return false
+		}
+		if kind == 5 {
+			return data[1] != 0
+		}
+		return data[19] != 0
+	}
+	return true
+}
+
+func worldPickGameObject(cam *camera.Camera, entities map[uint64]*worldEntity, names *worldNames, x, y, width, height float64) uint64 {
+	guid, _ := worldPickGameObjectAt(cam, entities, names, x, y, width, height)
+	return guid
+}
+
+// worldPickGameObjectAt is worldPickGameObject with how far along the ray the
+// object is.
+func worldPickGameObjectAt(cam *camera.Camera, entities map[uint64]*worldEntity, names *worldNames, x, y, width, height float64) (uint64, float32) {
 	if cam == nil || width <= 0 || height <= 0 {
-		return 0
+		return 0, math.MaxFloat32
 	}
 	ndcX, ndcY := float32(x/width*2-1), float32(1-y/height*2)
 	far := cam.Unproject(math32.NewVector3(ndcX, ndcY, 0.9))
@@ -340,6 +389,9 @@ func worldPickGameObject(cam *camera.Camera, entities map[uint64]*worldEntity, x
 	best, bestDistance := uint64(0), float32(math.MaxFloat32)
 	for guid, entity := range entities {
 		if entity.objectType != world.ObjectTypeGameObject || !entity.hasPosition || entity.node == nil || !entity.node.Visible() {
+			continue
+		}
+		if names != nil && !names.objectInteractive(entity) {
 			continue
 		}
 		height := float32(1)
@@ -364,5 +416,29 @@ func worldPickGameObject(cam *camera.Camera, entities map[uint64]*worldEntity, x
 			best, bestDistance = guid, along
 		}
 	}
-	return best
+	return best, bestDistance
+}
+
+// diagPickGameObjects prints, for a right click on empty world, how the ray
+// passed each game object near it (WOW_DIAG_PICK=1).
+func diagPickGameObjects(cam *camera.Camera, entities map[uint64]*worldEntity, names *worldNames, x, y, width, height float64) {
+	ndcX, ndcY := float32(x/width*2-1), float32(1-y/height*2)
+	far := cam.Unproject(math32.NewVector3(ndcX, ndcY, 0.9))
+	origin := cam.Position()
+	dir := far.Sub(&origin)
+	dir.Normalize()
+	for guid, entity := range entities {
+		if entity.objectType != world.ObjectTypeGameObject || !entity.hasPosition {
+			continue
+		}
+		p := entity.movement.Position
+		oc := math32.Vector3{X: p.X, Y: p.Y, Z: p.Z + 0.5}
+		oc.Sub(&origin)
+		along := oc.Dot(dir)
+		perp := float32(math.Sqrt(math.Abs(float64(oc.LengthSq() - along*along))))
+		if perp > 6 || along <= 0 {
+			continue
+		}
+		fmt.Printf("pick diag: guid=%x entry=%d kind=%d node=%v visible=%v along=%.1f perp=%.1f interactive=%v\n", guid, entity.fields[objectEntryField], (entity.fields[gameObjectBytes1Field]>>8)&0xFF, entity.node != nil, entity.node != nil && entity.node.Visible(), along, perp, names.objectInteractive(entity))
+	}
 }

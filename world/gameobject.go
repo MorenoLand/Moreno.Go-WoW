@@ -24,6 +24,9 @@ type GameObjectInfo struct {
 	Type      uint32
 	DisplayID uint32
 	Name      string
+	// Data is the object's type-specific numbers; a text object keeps the page,
+	// the language and the material of what it reads there.
+	Data [24]uint32
 }
 
 // ParseGameObjectQuery reads SMSG_GAMEOBJECT_QUERY_RESPONSE: the entry (its high
@@ -46,6 +49,19 @@ func ParseGameObjectQuery(body []byte) (GameObjectInfo, error) {
 	if info.DisplayID, err = r.U32(); err != nil {
 		return info, err
 	}
-	info.Name, err = r.CString()
-	return info, err
+	if info.Name, err = r.CString(); err != nil {
+		return info, err
+	}
+	// The three other names, the icon, the cast bar caption and one more text.
+	for range 6 {
+		if _, err = r.CString(); err != nil {
+			return info, nil
+		}
+	}
+	for index := range info.Data {
+		if info.Data[index], err = r.U32(); err != nil {
+			return info, nil
+		}
+	}
+	return info, nil
 }

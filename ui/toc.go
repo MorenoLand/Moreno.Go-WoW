@@ -571,11 +571,14 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 			addWidgetChild(root, w)
 		}
 	}
-	// A frame defined without a parent hangs off the world UI's root, as the
-	// client does for FrameXML frames.
+	// A frame defined without a parent hangs off the world UI's root so the
+	// interface draws and routes input to it. Wow.exe leaves it parentless:
+	// such frames (the world map, the cinematic and movie frames) show whether
+	// or not the interface is hidden, so they are told when they are shown.
 	if w.parent == nil && w.name != "UIParent" && w.name != "WorldFrame" && w.name != "GlueParent" {
 		if root := l.rt.widgets["UIParent"]; root != nil && root != w {
 			w.parent = root
+			w.parentless = true
 			addWidgetChild(root, w)
 		}
 	}
