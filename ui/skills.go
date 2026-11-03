@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/binary"
 	"sort"
 	"strings"
 
@@ -134,6 +135,17 @@ func registerSkillAPI(rt *Runtime) {
 		}
 		L.Push(lua.LString(entry.Description))
 		return 13
+	})
+	reg("AbandonSkill", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTNumber {
+			L.RaiseError("Usage: AbandonSkill(index)")
+			return 0
+		}
+		rows := rt.skillRows()
+		if index := L.CheckInt(1) - 1; index >= 0 && index < len(rows) && rows[index].entry != nil {
+			rt.send(0x0202, binary.LittleEndian.AppendUint32(nil, rows[index].entry.ID))
+		}
+		return 0
 	})
 	reg("GetSelectedSkill", func(L *lua.LState) int {
 		L.Push(lua.LNumber(rt.skills.selected))

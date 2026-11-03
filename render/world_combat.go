@@ -169,7 +169,7 @@ func (c *worldCombat) apply(packet world.Packet) (bool, error) {
 			lua.LNumber(heal.Amount), flagValue(heal.Critical))
 		return true, nil
 	}
-	return false, nil
+	return c.applyLog(packet)
 }
 
 func (c *worldCombat) meleeEvent(hit world.MeleeHit) {

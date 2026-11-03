@@ -68,6 +68,7 @@ type clientHost struct {
 	enterWorld    func(int)
 	sendChat      func(string, string, string, string) error
 	castSpell     func(uint32, uint64) error
+	castSpellAt   func(uint32, float32, float32, float32) error
 	cancelCast    func(uint32) error
 	setSelection  func(uint64) error
 	cancelAura    func(uint32) error
@@ -182,6 +183,12 @@ func (h *clientHost) CastSpell(id uint32, target uint64) error {
 	}
 	return h.castSpell(id, target)
 }
+func (h *clientHost) CastSpellAt(id uint32, x, y, z float32) error {
+	if h.castSpellAt == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return h.castSpellAt(id, x, y, z)
+}
 func (h *clientHost) SetSelection(guid uint64) error {
 	if h.setSelection == nil {
 		return fmt.Errorf("world session is closed")
@@ -289,6 +296,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			return fmt.Errorf("world session is closed")
 		}
 		return activeSession.CastSpell(id, target)
+	}
+	host.castSpellAt = func(id uint32, x, y, z float32) error {
+		if activeSession == nil {
+			return fmt.Errorf("world session is closed")
+		}
+		return activeSession.CastSpellAt(id, x, y, z)
 	}
 	host.setSelection = func(guid uint64) error {
 		if activeSession == nil {
@@ -564,6 +577,19 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	}
 	worldClick := func(button window.MouseButton, x, y float64) {
 		if activeSession == nil || worldCamera == nil {
+			return
+		}
+		if uiEngine != nil && uiEngine.Rt.Targeting() != 0 {
+			// A spell waiting for a place: the left click picks the ground at
+			// the height of the character's feet, any other click gives up.
+			if button != window.MouseButtonLeft {
+				uiEngine.Rt.StopTargeting()
+				return
+			}
+			width, height := win.GetSize()
+			if point, ok := worldGroundPoint(cam, x, y, float64(width), float64(height), worldEntities[worldCharacter.GUID]); ok {
+				_ = uiEngine.Rt.TargetGround(point.X, point.Y, point.Z)
+			}
 			return
 		}
 		width, height := win.GetSize()
@@ -1797,6 +1823,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					uiEngine.Rt.SetSurveyTables(loadSurveyTables(uiEngine.AssetLoader))
 					uiEngine.Rt.SetEncounters(loadEncounters(uiEngine.AssetLoader))
 					uiEngine.Rt.SetSpellIcons(loadSpellIcons(uiEngine.AssetLoader))
+					uiEngine.Rt.SetCalendarHolidays(loadCalendarHolidays(uiEngine.AssetLoader))
 					uiEngine.Rt.UnitRaceOfGUID = func(guid uint64) (uint8, bool) {
 						if entity := worldEntities[guid]; entity != nil {
 							if bytes, ok := entity.fields[world.UnitBytes0Field]; ok {
@@ -2197,6 +2224,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						if worldAuras.apply(uiEngine.Rt, uiEngine.AssetLoader, auraUpdate, all, worldCharacter.GUID) {
 							refresh()
 						}
+						worldCombatState.auraEvents(&worldAuras)
 					case world.LoginSetTimeSpeed:
 						if gameTime, timeErr := world.ParseLoginSetTimeSpeed(event.Packet.Body); timeErr == nil {
 							worldClock.set(gameTime, time.Now())
@@ -2217,7 +2245,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 							}
 							break
 						}
+						alive := worldCombatState.aliveBefore(blocks)
 						models, modelErrors := applyWorldUpdateBlocks(scene, uiEngine.AssetLoader, &worldCreatureCache, worldEntities, blocks, worldCharacter.GUID, worldFloor)
+						worldCombatState.deathEvents(alive)
 						if player := worldEntities[worldCharacter.GUID]; player != nil {
 							if worldCamera != nil {
 								worldCamera.syncFromUpdate(player.movement)

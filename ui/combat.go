@@ -186,6 +186,14 @@ func registerCombatAPI(rt *Runtime) {
 }
 
 // SpellName is the catalog name of a spell, or "" if the catalog lacks it.
+// SpellSchool is the school mask of a spell, physical when it is not known.
+func (rt *Runtime) SpellSchool(id uint32) uint32 {
+	if school := rt.gameplay.Catalog[id].School; school != 0 {
+		return school
+	}
+	return 1
+}
+
 func (rt *Runtime) SpellName(id uint32) string {
 	return rt.gameplay.Catalog[id].Name
 }

@@ -442,3 +442,24 @@ func diagPickGameObjects(cam *camera.Camera, entities map[uint64]*worldEntity, n
 		fmt.Printf("pick diag: guid=%x entry=%d kind=%d node=%v visible=%v along=%.1f perp=%.1f interactive=%v\n", guid, entity.fields[objectEntryField], (entity.fields[gameObjectBytes1Field]>>8)&0xFF, entity.node != nil, entity.node != nil && entity.node.Visible(), along, perp, names.objectInteractive(entity))
 	}
 }
+
+// worldGroundPoint is where the ray under a window position meets the plane
+// of the ground at the character's feet.
+func worldGroundPoint(cam *camera.Camera, x, y, width, height float64, own *worldEntity) (math32.Vector3, bool) {
+	if cam == nil || own == nil || width <= 0 || height <= 0 {
+		return math32.Vector3{}, false
+	}
+	ndcX, ndcY := float32(x/width*2-1), float32(1-y/height*2)
+	far := cam.Unproject(math32.NewVector3(ndcX, ndcY, 0.9))
+	origin := cam.Position()
+	dir := far.Sub(&origin)
+	dir.Normalize()
+	if dir.Z > -0.01 && dir.Z < 0.01 {
+		return math32.Vector3{}, false
+	}
+	along := (own.movement.Position.Z - origin.Z) / dir.Z
+	if along <= 0 {
+		return math32.Vector3{}, false
+	}
+	return math32.Vector3{X: origin.X + dir.X*along, Y: origin.Y + dir.Y*along, Z: own.movement.Position.Z}, true
+}

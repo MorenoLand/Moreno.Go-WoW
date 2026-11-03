@@ -112,6 +112,9 @@ func readWorldSpellCatalog(loader *ui.Loader) (map[uint32]ui.SpellInfo, map[uint
 		info.BaseLevel = int(spells.value(row, 38))
 		info.SpellLevel = int(spells.value(row, 39))
 		info.CooldownMS = int(spells.value(row, 29))
+		if spells.fields > 225 {
+			info.School = spells.value(row, 225)
+		}
 		info.CategoryCooldownMS = int(spells.value(row, 30))
 		for effect := 0; effect < 3; effect++ {
 			info.Effects[effect] = ui.SpellEffectInfo{
@@ -125,6 +128,8 @@ func readWorldSpellCatalog(loader *ui.Loader) (map[uint32]ui.SpellInfo, map[uint
 				Amplitude:      float64(math.Float32frombits(spells.value(row, 101+effect))),
 				Chain:          int(spells.value(row, 104+effect)),
 				Misc:           int(int32(spells.value(row, 110+effect))),
+				TargetA:        int(spells.value(row, 86+effect)),
+				TargetB:        int(spells.value(row, 89+effect)),
 			}
 		}
 		for reagent := 0; reagent < 8; reagent++ {

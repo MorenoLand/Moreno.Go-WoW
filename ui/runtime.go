@@ -44,6 +44,7 @@ type Runtime struct {
 	tradeSkill       tradeSkillState
 	auction          auctionState
 	calendar         calendarState
+	cal              calendarData
 	macros           macroState
 	achievements     achievementState
 	glyphs           glyphState
@@ -93,6 +94,9 @@ type Runtime struct {
 	logs             logState
 	spellIcons       map[uint32]string
 	possessSpellID   uint32
+	targetingSpell   uint32
+	spiritHealerGUID uint64
+	rafGrantFrom     uint64
 	// pvpTimerAt is when the PvP flag runs out, once the server has said.
 	pvpTimerAt time.Time
 	// UnitRaceOfGUID gives the race of a player the world has loaded.
@@ -391,6 +395,10 @@ func NewRuntime(host Host) *Runtime {
 	registerQuestSpecialAPI(rt)
 	registerPossessAPI(rt)
 	registerAutocastAPI(rt)
+	registerSpellTargetingAPI(rt)
+	registerActionRangeAPI(rt)
+	registerRAFAPI(rt)
+	registerUnitOnQuestAPI(rt)
 	registerExeMiscAPI(rt)
 	registerQuestMapAPI(rt)
 	registerItemTextAPI(rt)

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/binary"
 	"github.com/MorenoLand/Moreno.WoW/world"
 	lua "github.com/yuin/gopher-lua"
 )
@@ -366,7 +367,44 @@ func registerMailAPI(rt *Runtime) {
 		L.Push(lua.LBool(mail != nil && mailCanDelete(mail)))
 		return 1
 	})
-	reg("CanComplainInboxItem", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	canComplain := func(mail *world.MailMessage) bool {
+		return mail != nil && mail.Kind == 0 && mail.Flags&2 == 0 && mail.Stationery != 61 &&
+			mail.Sender != rt.playerGUID() && !rt.isIgnoredGUID(mail.Sender)
+	}
+	reg("CanComplainInboxItem", func(L *lua.LState) int {
+		L.Push(lua.LBool(state.open && canComplain(rt.mailAt(L.CheckInt(1)))))
+		return 1
+	})
+	reg("ComplainInboxItem", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTNumber {
+			L.RaiseError("Usage: ComplainInboxItem(index)")
+			return 0
+		}
+		index := L.CheckInt(1)
+		mail := rt.mailAt(index)
+		if !state.open || !canComplain(mail) {
+			return 0
+		}
+		if rt.complaints.complained[mail.Sender] {
+			rt.say("CHAT_MSG_SYSTEM", rt.globalString(complaintAddedKey, ""))
+			return 0
+		}
+		if rt.complaints.complained == nil {
+			rt.complaints.complained = map[uint64]bool{}
+		}
+		rt.complaints.complained[mail.Sender] = true
+		body := []byte{0}
+		body = binary.LittleEndian.AppendUint64(body, mail.Sender)
+		body = binary.LittleEndian.AppendUint32(body, 0)
+		body = binary.LittleEndian.AppendUint32(body, mail.ID)
+		body = binary.LittleEndian.AppendUint32(body, 0)
+		rt.send(complainOpcode, body)
+		rt.FireEvent("CLOSE_INBOX_ITEM", lua.LNumber(index))
+		if host := rt.mailHost(); host != nil {
+			_ = host.RequestMailList(state.mailbox)
+		}
+		return 0
+	})
 	reg("GetLatestThreeSenders", func(L *lua.LState) int { return 0 })
 	reg("HasNewMail", func(L *lua.LState) int { L.Push(lua.LBool(state.hasNew)); return 1 })
 	reg("CheckInbox", func(L *lua.LState) int {

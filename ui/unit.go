@@ -66,6 +66,8 @@ type UnitInfo struct {
 	DynamicFlags uint32
 	// UnitFlags are the unit flags field as the server sent it.
 	UnitFlags uint32
+	// QuestIDs are the quests in the quest log of a player the world has loaded.
+	QuestIDs [questLogSlots]uint32
 	// Charm and Summon are the units the unit has charmed and summoned.
 	Charm, Summon uint64
 	PVPFlags     uint8
@@ -191,6 +193,13 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 	}
 	if value, ok := fields[playerFlagsField+1]; ok && info.Player {
 		info.GuildID = value
+	}
+	if info.Player {
+		for slot := 0; slot < questLogSlots; slot++ {
+			if value, ok := fields[uint16(questLogField+slot*questLogStride)]; ok {
+				info.QuestIDs[slot] = value
+			}
+		}
 	}
 	if value, ok := fields[fieldDynamicFlags]; ok {
 		info.DynamicFlags = value

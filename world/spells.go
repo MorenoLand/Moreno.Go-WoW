@@ -3,6 +3,7 @@ package world
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 )
 
 const (
@@ -188,6 +189,28 @@ func BuildCastSpell(id uint32, target uint64, count uint8) []byte {
 		body = append(body, packed...)
 	}
 	return body
+}
+
+// BuildCastSpellAt is the body of a cast at a place on the ground.
+func BuildCastSpellAt(id uint32, x, y, z float32) []byte {
+	body := make([]byte, 10, 23)
+	binary.LittleEndian.PutUint32(body[1:5], id)
+	binary.LittleEndian.PutUint32(body[6:10], 0x40)
+	body = append(body, 0)
+	for _, value := range [3]float32{x, y, z} {
+		body = binary.LittleEndian.AppendUint32(body, math.Float32bits(value))
+	}
+	return body
+}
+
+func (c *Connection) CastSpellAt(id uint32, x, y, z float32) error {
+	if c == nil || c.conn == nil {
+		return fmt.Errorf("world connection is closed")
+	}
+	if id == 0 {
+		return fmt.Errorf("spell ID is zero")
+	}
+	return c.send(CastSpellOpcode, BuildCastSpellAt(id, x, y, z))
 }
 
 func (c *Connection) CastSpell(id uint32, target uint64) error {

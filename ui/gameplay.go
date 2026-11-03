@@ -21,6 +21,8 @@ type SpellInfo struct {
 	DurationMS, ProcChance, ProcCharges int
 	StackAmount, BaseLevel, MaxLevel    int
 	SpellLevel, CooldownMS              int
+	// School is the school mask of the spell.
+	School uint32
 	CategoryCooldownMS                  int
 	// What a profession recipe needs and makes: the reagents and how many of
 	// each, the item each effect creates, the tool categories it asks for, and
@@ -399,6 +401,13 @@ func (rt *Runtime) cast(id uint32, unit string) error {
 			_ = aura.CancelMount()
 		}
 	}
+	if spellNeedsGround(spell) {
+		if _, ok := rt.Host.(WorldGroundSpellHost); ok {
+			rt.targetingSpell = id
+			rt.FireEvent("CURSOR_UPDATE")
+			return nil
+		}
+	}
 	return host.CastSpell(id, target)
 }
 
@@ -424,7 +433,6 @@ func registerGameplayAPI(rt *Runtime) {
 	reg := func(name string, fn lua.LGFunction) { L.SetGlobal(name, L.NewFunction(fn)) }
 	reg("TargetUnit", func(L *lua.LState) int { rt.selectUnit(L.OptString(1, "")); return 0 })
 	reg("ClearTarget", func(L *lua.LState) int { L.Push(lua.LBool(rt.selectUnit(""))); return 1 })
-	reg("SpellIsTargeting", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("SpellCanTargetItem", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("GetSpellAutocast", func(L *lua.LState) int { L.Push(lua.LFalse); L.Push(lua.LFalse); return 2 })
 	reg("GetActionBarPage", func(L *lua.LState) int {
@@ -834,6 +842,8 @@ type SpellEffectInfo struct {
 	PointsPerLevel, Radius float64
 	PeriodMS, Chain        int
 	Amplitude              float64
+	// TargetA and TargetB are the implicit targets of the effect.
+	TargetA, TargetB int
 }
 
 // spellCooldownLeft is the seconds a spell has yet to wait.

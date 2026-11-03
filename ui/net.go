@@ -66,6 +66,8 @@ func (rt *Runtime) registerPacketHandlers() {
 	rt.addPacketHandler(rt.handleInstanceLockPacket)
 	rt.addPacketHandler(rt.handleGMTicketPacket)
 	rt.addPacketHandler(rt.handleBGPositionsPacket)
+	rt.addPacketHandler(rt.handleCalendarPacket)
+	rt.addPacketHandler(rt.handleRAFPacket)
 }
 
 // handleGroupPacket takes the packets of groups, raids and loot rolls.

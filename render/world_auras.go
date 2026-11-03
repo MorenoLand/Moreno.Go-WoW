@@ -72,6 +72,15 @@ func (cache *worldSpellCache) info(loader *ui.Loader, spellID uint32) worldSpell
 type worldAuraState struct {
 	slots  map[uint64][]world.AuraSlot
 	spells worldSpellCache
+	// changes are the auras that came, went or changed since the combat log
+	// last took them.
+	changes []worldAuraChange
+}
+
+// worldAuraChange is one aura slot that changed on a unit.
+type worldAuraChange struct {
+	guid     uint64
+	old, now world.AuraSlot
 }
 
 func (state *worldAuraState) reset() { state.slots = make(map[uint64][]world.AuraSlot) }
@@ -87,6 +96,9 @@ func (state *worldAuraState) apply(rt *ui.Runtime, loader *ui.Loader, update wor
 	for _, entry := range update.Updates {
 		if len(slots) <= int(entry.Slot) {
 			slots = append(slots, make([]world.AuraSlot, int(entry.Slot)+1-len(slots))...)
+		}
+		if !all {
+			state.changes = append(state.changes, worldAuraChange{guid: update.GUID, old: slots[entry.Slot], now: entry.Aura})
 		}
 		slots[entry.Slot] = entry.Aura
 	}

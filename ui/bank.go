@@ -102,9 +102,11 @@ func (rt *Runtime) handleSpiritHealerTime(packet world.Packet) bool {
 		return false
 	}
 	reader := world.NewReader(packet.Body, "SMSG_AREA_SPIRIT_HEALER_TIME")
-	if _, err := reader.U64(); err != nil {
+	healer, err := reader.U64()
+	if err != nil {
 		return true
 	}
+	rt.spiritHealerGUID = healer
 	if milliseconds, err := reader.U32(); err == nil {
 		rt.spiritHealerAt = time.Now().Add(time.Duration(milliseconds) * time.Millisecond)
 	}
@@ -113,6 +115,12 @@ func (rt *Runtime) handleSpiritHealerTime(packet world.Packet) bool {
 
 func registerSpiritHealerAPI(rt *Runtime) {
 	L := rt.L
+	L.SetGlobal("AcceptAreaSpiritHeal", L.NewFunction(func(L *lua.LState) int {
+		if rt.spiritHealerGUID != 0 {
+			rt.send(0x02E3, binary.LittleEndian.AppendUint64(nil, rt.spiritHealerGUID))
+		}
+		return 0
+	}))
 	L.SetGlobal("GetAreaSpiritHealerTime", L.NewFunction(func(L *lua.LState) int {
 		seconds := 0
 		if !rt.spiritHealerAt.IsZero() {
