@@ -249,6 +249,13 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 			rt.FireEvent(entry.Event, lua.LString(unit))
 		}
 	}
+	if unit == "player" && old.UnitFlags != 0 && old.InCombat != info.InCombat {
+		if info.InCombat {
+			rt.FireEvent("PLAYER_REGEN_DISABLED")
+		} else {
+			rt.FireEvent("PLAYER_REGEN_ENABLED")
+		}
+	}
 	if unit == "player" {
 		switch {
 		case !old.Dead && info.Dead:
@@ -295,7 +302,16 @@ func (rt *Runtime) SetUnitAuras(unit string, auras []AuraInfo) {
 	if info == nil {
 		return
 	}
+	player := strings.EqualFold(strings.TrimSpace(unit), "player")
+	formBefore := 0
+	if player {
+		formBefore = rt.shapeshiftForm()
+	}
 	info.Auras = append([]AuraInfo(nil), auras...)
+	if player && rt.shapeshiftForm() != formBefore {
+		rt.FireEvent("UPDATE_SHAPESHIFT_FORM")
+		rt.FireEvent("UPDATE_SHAPESHIFT_USABLE")
+	}
 	if rt.widgets["BuffFrame"] != nil {
 		rt.FireEvent("UNIT_AURA", lua.LString(strings.ToLower(strings.TrimSpace(unit))))
 	}

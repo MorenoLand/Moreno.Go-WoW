@@ -203,6 +203,34 @@ func BuildCastSpellAt(id uint32, x, y, z float32) []byte {
 	return body
 }
 
+// BuildCastSpellOnItem is the body of a cast on an item.
+func BuildCastSpellOnItem(id uint32, item uint64) []byte {
+	body := make([]byte, 10)
+	binary.LittleEndian.PutUint32(body[1:5], id)
+	binary.LittleEndian.PutUint32(body[6:10], 0x10)
+	mask := uint8(0)
+	packed := make([]byte, 0, 8)
+	for i := uint(0); i < 8; i++ {
+		value := byte(item >> (i * 8))
+		if value != 0 {
+			mask |= 1 << i
+			packed = append(packed, value)
+		}
+	}
+	body = append(body, mask)
+	return append(body, packed...)
+}
+
+func (c *Connection) CastSpellOnItem(id uint32, item uint64) error {
+	if c == nil || c.conn == nil {
+		return fmt.Errorf("world connection is closed")
+	}
+	if id == 0 {
+		return fmt.Errorf("spell ID is zero")
+	}
+	return c.send(CastSpellOpcode, BuildCastSpellOnItem(id, item))
+}
+
 func (c *Connection) CastSpellAt(id uint32, x, y, z float32) error {
 	if c == nil || c.conn == nil {
 		return fmt.Errorf("world connection is closed")

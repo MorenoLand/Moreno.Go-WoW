@@ -133,6 +133,7 @@ func AuctionListKind(opcode uint16) (int, bool) {
 
 // ApplyAuctionResult applies the server's answer to a command.
 func (rt *Runtime) ApplyAuctionResult(result world.AuctionResult) {
+	defer rt.multiSellAnswer(result)
 	if result.Error != world.AuctionOK {
 		rt.ShowGlobalError(auctionErrorName(result.Error))
 		if result.Command == world.AuctionCommandSell {
@@ -568,6 +569,10 @@ func registerAuctionAPI(rt *Runtime) {
 		cursor := &rt.inventory.cursor
 		if cursor.active && cursor.bag != cursorGuildBank {
 			if item := rt.inventory.items[cursor.guid]; item != nil {
+				if code := rt.auctionItemError(item); code != 0 {
+					rt.ShowGameError(code)
+					return 0
+				}
 				state.sellGUID = item.GUID
 				if rt.clearItemCursor != nil {
 					rt.clearItemCursor()
@@ -613,26 +618,6 @@ func registerAuctionAPI(rt *Runtime) {
 		count := uint32(max(L.OptInt(2, item.Count), 1))
 		L.Push(lua.LNumber(rt.auctionDeposit(price, count, L.CheckInt(1))))
 		return 1
-	})
-	reg("StartAuction", func(L *lua.LState) int {
-		item := rt.sellItem()
-		if item == nil {
-			return 0
-		}
-		bid, buyout, minutes := uint32(L.CheckNumber(1)), uint32(L.CheckNumber(2)), uint32(L.CheckInt(3))
-		stack, stacks := uint32(max(L.OptInt(4, item.Count), 1)), max(L.OptInt(5, 1), 1)
-		if stacks > 1 {
-			rt.FireEvent("AUCTION_MULTISELL_START", numberValue(stacks))
-		}
-		for index := 0; index < stacks; index++ {
-			send(world.ClientAuctionSellItem, world.BuildAuctionSell(state.auctioneer, item.GUID, stack, bid, buyout, minutes))
-			if stacks > 1 {
-				rt.FireEvent("AUCTION_MULTISELL_UPDATE", numberValue(index+1), numberValue(stacks))
-			}
-		}
-		state.sellGUID = 0
-		rt.FireEvent("NEW_AUCTION_UPDATE")
-		return 0
 	})
 	reg("CloseAuctionStaticPopups", func(L *lua.LState) int { return 0 })
 	reg("SetAuctionsTabShowing", func(L *lua.LState) int { return 0 })

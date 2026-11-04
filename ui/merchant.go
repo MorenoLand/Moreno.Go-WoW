@@ -18,6 +18,8 @@ type merchantState struct {
 	vendor world.Vendor
 	// canRepair is set for a vendor that repairs gear.
 	canRepair bool
+	// repairMode is set while the cursor repairs what it is clicked on.
+	repairMode bool
 }
 
 func (rt *Runtime) merchantHost() MerchantHost {
@@ -112,8 +114,6 @@ func registerMerchantAPI(rt *Runtime) {
 		L.Push(lua.LNumber(stack))
 		return 1
 	})
-	reg("GetMerchantItemCostInfo", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("GetMerchantItemCostItem", func(L *lua.LState) int { return 0 })
 	reg("BuyMerchantItem", func(L *lua.LState) int {
 		index := L.CheckInt(1)
 		item, ok := itemAt(index)
@@ -149,13 +149,7 @@ func registerMerchantAPI(rt *Runtime) {
 		}
 		return 0
 	})
-	reg("GetNumBuybackItems", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("GetBuybackItemInfo", func(L *lua.LState) int { return 0 })
-	reg("GetBuybackItemLink", func(L *lua.LState) int { return 0 })
-	reg("BuybackItem", func(L *lua.LState) int { return 0 })
-	reg("PickupMerchantItem", func(L *lua.LState) int { return 0 })
 	reg("ShowBuybackSellCursor", func(L *lua.LState) int { return 0 })
-	reg("ShowRepairCursor", func(L *lua.LState) int { return 0 })
 }
 
 // SetRepairPrice gives the merchant window the price of repairing an item: the

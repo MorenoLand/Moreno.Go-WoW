@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	rdebug "runtime/debug"
 	"strconv"
 	"sync"
@@ -69,6 +70,7 @@ type clientHost struct {
 	sendChat      func(string, string, string, string) error
 	castSpell     func(uint32, uint64) error
 	castSpellAt   func(uint32, float32, float32, float32) error
+	castSpellItem func(uint32, uint64) error
 	cancelCast    func(uint32) error
 	setSelection  func(uint64) error
 	cancelAura    func(uint32) error
@@ -183,6 +185,12 @@ func (h *clientHost) CastSpell(id uint32, target uint64) error {
 	}
 	return h.castSpell(id, target)
 }
+func (h *clientHost) CastSpellOnItem(id uint32, item uint64) error {
+	if h.castSpellItem == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return h.castSpellItem(id, item)
+}
 func (h *clientHost) CastSpellAt(id uint32, x, y, z float32) error {
 	if h.castSpellAt == nil {
 		return fmt.Errorf("world session is closed")
@@ -296,6 +304,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 			return fmt.Errorf("world session is closed")
 		}
 		return activeSession.CastSpell(id, target)
+	}
+	host.castSpellItem = func(id uint32, item uint64) error {
+		if activeSession == nil {
+			return fmt.Errorf("world session is closed")
+		}
+		return activeSession.CastSpellOnItem(id, item)
 	}
 	host.castSpellAt = func(id uint32, x, y, z float32) error {
 		if activeSession == nil {
@@ -446,6 +460,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 	var worldStatTables worldGameTables
 	var worldGroupDetails worldGroupSync
 	worldTokens := newWorldTokenState()
+	var worldArenaState worldArena
 	var worldGlyphLast [2*glyphSocketCount + 1]uint32
 
 	worldCreatureCache := worldCreatureTables{}
@@ -587,6 +602,15 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				return
 			}
 			width, height := win.GetSize()
+			if uiEngine.Rt.TargetingKind() == ui.TargetingUnit {
+				if guid, _ := worldPickEntityAt(cam, worldEntities, worldCharacter.GUID, x, y, float64(width), float64(height)); guid != 0 {
+					_ = uiEngine.Rt.TargetUnit(guid)
+				}
+				return
+			}
+			if uiEngine.Rt.TargetingKind() != ui.TargetingGround {
+				return
+			}
 			if point, ok := worldGroundPoint(cam, x, y, float64(width), float64(height), worldEntities[worldCharacter.GUID]); ok {
 				_ = uiEngine.Rt.TargetGround(point.X, point.Y, point.Z)
 			}
@@ -1425,6 +1449,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				}
 				worldDrawRadius = float32(math.Min(float64(viewFar), worldObjectDistance))
 				worldMovement.update(time.Now(), worldCamera)
+				uiEngine.Rt.VehicleAimTick()
 				worldNet.update(frameAt, activeSession, uiEngine.Rt)
 				if frameAt.Sub(lastEntityCompact) >= 3*time.Second {
 					lastEntityCompact = frameAt
@@ -1439,6 +1464,11 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					if zone != "" {
 						indoors := worldInsideInstance != 0
 						uiEngine.Rt.SetArea(zone, subZone, row.pvpType(worldTeamOfRace(worldCharacter.Race)), worldAreas(uiEngine.AssetLoader).factionText(row), indoors)
+						zoneFlags := row.flags
+						if parent, found := worldAreas(uiEngine.AssetLoader).areas[row.parent]; found && row.parent != 0 {
+							zoneFlags = parent.flags
+						}
+						uiEngine.Rt.SetAreaFlags(zoneFlags, row.flags)
 					}
 				}
 				if playerMount != nil && worldPlayer != nil {
@@ -1823,6 +1853,12 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					uiEngine.Rt.SetSurveyTables(loadSurveyTables(uiEngine.AssetLoader))
 					uiEngine.Rt.SetEncounters(loadEncounters(uiEngine.AssetLoader))
 					uiEngine.Rt.SetSpellIcons(loadSpellIcons(uiEngine.AssetLoader))
+					uiEngine.Rt.SetEnchantNames(loadEnchantNames(uiEngine.AssetLoader))
+					uiEngine.Rt.SetSoulboundEnchants(loadSoulboundEnchants(uiEngine.AssetLoader))
+					uiEngine.Rt.SetExtendedCosts(loadExtendedCosts(uiEngine.AssetLoader))
+					uiEngine.Rt.SetMapIconScales(loadMapIconScales(uiEngine.AssetLoader))
+					uiEngine.Rt.SetBarberTables(loadBarberTables(uiEngine.AssetLoader))
+					uiEngine.Rt.SetStationery(loadStationery(uiEngine.AssetLoader))
 					uiEngine.Rt.SetCalendarHolidays(loadCalendarHolidays(uiEngine.AssetLoader))
 					uiEngine.Rt.UnitRaceOfGUID = func(guid uint64) (uint8, bool) {
 						if entity := worldEntities[guid]; entity != nil {
@@ -1887,6 +1923,55 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 						return ui.PlayerIdentity{Race: info.Race, Class: info.Class, Gender: info.Gender}, true
 					})
 					uiEngine.Rt.SetPlayerNames(func(guid uint64) string { return worldNameState.players[guid].Name })
+					uiEngine.Rt.SetBattlefieldVehicles(func() []ui.BattlefieldVehicle {
+						var list []ui.BattlefieldVehicle
+						for guid, entity := range worldEntities {
+							if entity.movement.VehicleID == 0 || entity.objectType == world.ObjectTypePlayer || !entity.hasPosition {
+								continue
+							}
+							occupied := false
+							for _, other := range worldEntities {
+								if other.movement.TransportGUID == guid {
+									occupied = true
+									break
+								}
+							}
+							list = append(list, ui.BattlefieldVehicle{MapID: worldMapID, X: entity.movement.Position.X, Y: entity.movement.Position.Y,
+								Name: worldNameState.creatures[entity.fields[objectEntryField]].Name, Occupied: occupied,
+								Facing: entity.movement.Position.Orientation, Controlled: uint64(entity.fields[unitCharmedByField])|uint64(entity.fields[unitCharmedByField+1])<<32 == worldCharacter.GUID,
+								Alive: entity.fields[unitHealthField] > 0})
+						}
+						sort.Slice(list, func(a, b int) bool { return list[a].Name < list[b].Name })
+						return list
+					})
+					uiEngine.Rt.SetVehicleAim(func() float64 {
+						if worldCamera == nil {
+							return 0
+						}
+						return float64(worldCamera.pitch)
+					}, func(pitch float64) {
+						if worldCamera != nil {
+							worldCamera.pitch = float32(pitch)
+						}
+					})
+					uiEngine.Rt.SetPlayerSpeed(func() float64 {
+						if worldCamera == nil {
+							return 0
+						}
+						flags := worldCamera.flags()
+						if flags&(world.MovementFlagForward|world.MovementFlagBackward|world.MovementFlagStrafeLeft|world.MovementFlagStrafeRight) == 0 {
+							return 0
+						}
+						return float64(worldCamera.movementSpeed(flags&world.MovementFlagBackward != 0))
+					})
+					uiEngine.Rt.SetUnitReach(func(guid uint64) (float64, bool) {
+						entity := worldEntities[guid]
+						if entity == nil {
+							return 0, false
+						}
+						bits, ok := entity.fields[0x42]
+						return float64(math.Float32frombits(bits)), ok
+					})
 					uiEngine.Rt.SetUnitDistance(func(guid uint64) (float64, bool) {
 						own, other := worldEntities[worldCharacter.GUID], worldEntities[guid]
 						if own == nil || other == nil || !other.hasPosition {
@@ -2194,6 +2279,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 							watched = player.fields[fieldWatchedFaction]
 						}
 						worldRep.push(uiEngine.Rt, uiEngine.AssetLoader, worldCharacter.Race, worldCharacter.Class, watched)
+						for _, gain := range worldRep.gains {
+							uiEngine.Rt.ReputationChanged(gain.name, int(gain.delta))
+						}
+						worldRep.gains = nil
 						refresh()
 						break
 					}
@@ -2268,6 +2357,7 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 							if syncWorldUnits(uiEngine.Rt, worldTokens, worldEntities, player, worldNameState, worldFactionState, worldSend, &worldAuras, uiEngine.AssetLoader) {
 								refresh()
 							}
+							syncWorldArena(uiEngine.Rt, &worldArenaState, worldMapID, worldEntities, player, worldNameState, worldFactionState, worldTokens, worldSend, uiEngine.AssetLoader)
 							uiEngine.Rt.SetGuildFields(player.fields[playerGuildField], int(player.fields[playerGuildField+1]))
 							syncWorldGroup(uiEngine.Rt, &worldGroupDetails, worldNameState, worldEntities, worldFactionState, player.fields[unitFactionField], worldSend)
 							uiEngine.Rt.SetQuestLog(ui.QuestSlotsFrom(player.fields))

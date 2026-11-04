@@ -308,8 +308,11 @@ type SpellExecuteEntry struct {
 	Effect uint32
 	// Target is the unit the effect interrupted or the thing it summoned.
 	Target uint64
-	// Spell is the spell that was interrupted.
+	// Spell is the spell that was interrupted, or the amount an effect took or
+	// the attacks it gave.
 	Spell uint32
+	// Power is the kind of power an effect took.
+	Power uint32
 }
 
 // ParseSpellLogExecute reads the interrupts and the summons out of
@@ -349,6 +352,28 @@ func ParseSpellLogExecute(body []byte) (caster uint64, spell uint32, entries []S
 					return
 				}
 				if entry.Spell, err = r.U32(); err != nil {
+					return
+				}
+			case 111, 115:
+				if entry.Target, err = ReadPackedGUID(r); err != nil {
+					return
+				}
+				if err = r.Skip(8); err != nil {
+					return
+				}
+			case 8, 62:
+				if entry.Target, err = ReadPackedGUID(r); err != nil {
+					return
+				}
+				if entry.Spell, err = r.U32(); err != nil {
+					return
+				}
+				var power uint32
+				if power, err = r.U32(); err != nil {
+					return
+				}
+				entry.Power = power
+				if err = r.Skip(4); err != nil {
 					return
 				}
 			case 18, 113, 28, 56, 76, 104, 105, 106, 107:

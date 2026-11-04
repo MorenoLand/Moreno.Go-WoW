@@ -23,6 +23,8 @@ type SpellInfo struct {
 	SpellLevel, CooldownMS              int
 	// School is the school mask of the spell.
 	School uint32
+	// TargetMask is what the spell says it is aimed at (item, unit, ground).
+	TargetMask uint32
 	CategoryCooldownMS                  int
 	// What a profession recipe needs and makes: the reagents and how many of
 	// each, the item each effect creates, the tool categories it asks for, and
@@ -403,7 +405,14 @@ func (rt *Runtime) cast(id uint32, unit string) error {
 	}
 	if spellNeedsGround(spell) {
 		if _, ok := rt.Host.(WorldGroundSpellHost); ok {
-			rt.targetingSpell = id
+			rt.targetingSpell, rt.targetingKind = id, targetingGround
+			rt.FireEvent("CURSOR_UPDATE")
+			return nil
+		}
+	}
+	if spell.TargetMask&spellTargetItem != 0 && spell.TargetMask&spellTargetUnit == 0 {
+		if _, ok := rt.Host.(WorldItemSpellHost); ok {
+			rt.targetingSpell, rt.targetingKind = id, targetingItem
 			rt.FireEvent("CURSOR_UPDATE")
 			return nil
 		}
@@ -453,7 +462,7 @@ func registerGameplayAPI(rt *Runtime) {
 	})
 	reg("GetCursorInfo", func(L *lua.LState) int {
 		cursor := rt.gameplay.Cursor
-		if cursor.ID == 0 {
+		if !actionFilled(cursor) {
 			L.Push(lua.LNil)
 			return 1
 		}
@@ -475,6 +484,14 @@ func registerGameplayAPI(rt *Runtime) {
 			L.Push(lua.LString("macro"))
 		case 128:
 			L.Push(lua.LString("item"))
+		case actionTypeEquipmentSet:
+			L.Push(lua.LString("equipmentset"))
+			for _, set := range rt.equipment.sets {
+				if set.index == cursor.ID {
+					L.Push(lua.LString(set.name))
+					return 2
+				}
+			}
 		default:
 			L.Push(lua.LNil)
 			return 1
@@ -521,7 +538,7 @@ func registerGameplayAPI(rt *Runtime) {
 			}
 			cursor := rt.gameplay.Cursor
 			existing := rt.action(slot)
-			if name == "PlaceAction" && cursor.ID == 0 {
+			if name == "PlaceAction" && !actionFilled(cursor) {
 				return 0
 			}
 			host, ok := rt.Host.(WorldActionHost)
@@ -543,10 +560,10 @@ func registerGameplayAPI(rt *Runtime) {
 			return 0
 		})
 	}
-	reg("HasAction", func(L *lua.LState) int { L.Push(lua.LBool(rt.action(L.CheckInt(1)).ID != 0)); return 1 })
+	reg("HasAction", func(L *lua.LState) int { L.Push(lua.LBool(actionFilled(rt.action(L.CheckInt(1))))); return 1 })
 	reg("GetActionInfo", func(L *lua.LState) int {
 		action := rt.action(L.CheckInt(1))
-		if action.ID == 0 {
+		if !actionFilled(action) {
 			L.Push(lua.LNil)
 			return 1
 		}
@@ -556,6 +573,15 @@ func registerGameplayAPI(rt *Runtime) {
 			return 1
 		}
 		L.Push(lua.LString(kind))
+		if action.Type == actionTypeEquipmentSet {
+			for _, set := range rt.equipment.sets {
+				if set.index == action.ID {
+					L.Push(lua.LString(set.name))
+					L.Push(lua.LNil)
+					return 3
+				}
+			}
+		}
 		L.Push(lua.LNumber(action.ID))
 		L.Push(lua.LNil)
 		return 3
@@ -572,6 +598,12 @@ func registerGameplayAPI(rt *Runtime) {
 		if macro, _ := rt.macroAt(int(action.ID)); macro != nil {
 			icon = macro.Icon
 		}
+		case actionTypeEquipmentSet:
+			for _, set := range rt.equipment.sets {
+				if set.index == action.ID {
+					icon = equipmentIconPath + set.icon
+				}
+			}
 		}
 		if icon == "" {
 			L.Push(lua.LNil)
@@ -622,7 +654,16 @@ func registerGameplayAPI(rt *Runtime) {
 	})
 	reg("UseAction", func(L *lua.LState) int {
 		action := rt.action(L.CheckInt(1))
-		if action.ID == 0 {
+		if !actionFilled(action) {
+			return 0
+		}
+		if action.Type == actionTypeEquipmentSet {
+			for _, set := range rt.equipment.sets {
+				if set.index == action.ID {
+					rt.useEquipmentSet(set)
+					break
+				}
+			}
 			return 0
 		}
 		if action.Type == actionTypeItem {

@@ -16,6 +16,8 @@ const (
 	exploredZoneWords   = 128
 	fieldItemStackCount = 14
 	fieldItemFlags      = 21
+	fieldItemDuration   = 15
+	fieldItemCharges    = 16
 	fieldItemEnchant    = 22
 	fieldItemDurability = 60
 	fieldItemMaxDura    = 61
@@ -97,6 +99,8 @@ func syncWorldInventory(rt *ui.Runtime, entities map[uint64]*worldEntity, player
 			Contained:     fieldGUID(entity.fields, fieldItemContained),
 			Owner:         fieldGUID(entity.fields, fieldItemOwner),
 			Flags:         entity.fields[fieldItemFlags],
+			Charges:       int32(entity.fields[fieldItemCharges]),
+			Duration:      entity.fields[fieldItemDuration],
 			Enchant:       entity.fields[fieldItemEnchant],
 		}
 		for slot := range item.Enchants {

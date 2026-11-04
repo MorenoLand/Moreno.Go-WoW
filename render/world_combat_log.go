@@ -13,7 +13,14 @@ func (c *worldCombat) spellArgs(id uint32) []lua.LValue {
 	return []lua.LValue{lua.LNumber(id), lua.LString(c.rt.SpellName(id)), lua.LNumber(c.rt.SpellSchool(id))}
 }
 
+// rangedSpells are the spells the log reports as ranged attacks: Auto Shot and
+// Shoot.
+var rangedSpells = map[uint32]bool{75: true, 5019: true}
+
 func (c *worldCombat) spellEvent(subevent string, source, dest ui.CombatUnit, id uint32, extra ...lua.LValue) {
+	if rangedSpells[id] && (subevent == "SPELL_MISSED" || subevent == "SPELL_DAMAGE") {
+		subevent = "RANGE_" + subevent[len("SPELL_"):]
+	}
 	c.rt.CombatEvent(subevent, source, dest, append(c.spellArgs(id), extra...)...)
 }
 
@@ -28,6 +35,7 @@ func (c *worldCombat) applyLog(packet world.Packet) (bool, error) {
 				name = world.SpellMissNames[miss.Miss]
 			}
 			c.spellEvent("SPELL_MISSED", c.unit(miss.Caster), c.unit(miss.Target), miss.SpellID, lua.LString(name))
+			c.textMiss("SPELL_", miss.Target, name)
 		}
 		return true, err
 	case world.SpellEnergizeLogPacket:
@@ -35,6 +43,7 @@ func (c *worldCombat) applyLog(packet world.Packet) (bool, error) {
 		if err == nil {
 			c.spellEvent("SPELL_ENERGIZE", c.unit(energize.Caster), c.unit(energize.Victim), energize.SpellID,
 				lua.LNumber(energize.Amount), lua.LNumber(energize.PowerType))
+			c.textEnergize(energize.Victim, energize.Amount, energize.PowerType, false)
 		}
 		return true, err
 	case world.PeriodicAuraLogPacket:
@@ -46,11 +55,14 @@ func (c *worldCombat) applyLog(packet world.Packet) (bool, error) {
 				c.spellEvent("SPELL_PERIODIC_DAMAGE", source, dest, tick.SpellID, lua.LNumber(tick.Amount), lua.LNumber(tick.Overkill),
 					lua.LNumber(tick.School), lua.LNumber(tick.Resisted), lua.LNumber(0), lua.LNumber(tick.Absorbed),
 					flagValue(tick.Critical), lua.LNil, lua.LNil)
+				c.textDamage("SPELL_", tick.Target, tick.Amount, tick.Resisted, tick.Absorbed, 0, false)
 			case 8, 20:
 				c.spellEvent("SPELL_PERIODIC_HEAL", source, dest, tick.SpellID, lua.LNumber(tick.Amount), lua.LNumber(tick.Overkill),
 					lua.LNumber(tick.Absorbed), flagValue(tick.Critical))
+				c.textHeal(tick.Target, tick.Caster, tick.Amount, false, true)
 			case 21, 24:
 				c.spellEvent("SPELL_PERIODIC_ENERGIZE", source, dest, tick.SpellID, lua.LNumber(tick.Amount), lua.LNumber(tick.PowerType))
+				c.textEnergize(tick.Target, int32(tick.Amount), tick.PowerType, true)
 			case 64:
 				c.spellEvent("SPELL_PERIODIC_LEECH", source, dest, tick.SpellID, lua.LNumber(tick.Amount), lua.LNumber(tick.PowerType), lua.LNumber(0))
 			}
@@ -66,6 +78,7 @@ func (c *worldCombat) applyLog(packet world.Packet) (bool, error) {
 			c.rt.CombatEvent("ENVIRONMENTAL_DAMAGE", ui.CombatUnit{}, c.unit(damage.Victim), lua.LString(name),
 				lua.LNumber(damage.Amount), lua.LNumber(0), lua.LNumber(1), lua.LNumber(damage.Resisted), lua.LNumber(0),
 				lua.LNumber(damage.Absorbed), lua.LNil, lua.LNil, lua.LNil)
+			c.textDamage("", damage.Victim, damage.Amount, damage.Resisted, damage.Absorbed, 0, false)
 		}
 		return true, err
 	case world.SpellDispelLogPacket, world.SpellStealLogPacket:
@@ -101,6 +114,7 @@ func (c *worldCombat) applyLog(packet world.Packet) (bool, error) {
 		if err == nil {
 			c.spellEvent("DAMAGE_SHIELD", c.unit(shield.Victim), c.unit(shield.Caster), shield.SpellID, lua.LNumber(shield.Damage),
 				lua.LNumber(shield.School), lua.LNumber(0), lua.LNumber(0), lua.LNumber(0), lua.LNil, lua.LNil, lua.LNil)
+			c.textDamage("SPELL_", shield.Victim, shield.Damage, 0, 0, 0, false)
 		}
 		return true, err
 	case world.CastFailed:
@@ -135,6 +149,19 @@ func (c *worldCombat) applyLog(packet world.Packet) (bool, error) {
 			c.castFailed(caster, spell, code)
 		}
 		return false, nil
+	case 0x028C:
+		// SMSG_PVP_CREDIT: honor for a kill.
+		reader := world.NewReader(packet.Body, "SMSG_PVP_CREDIT")
+		honor, err := reader.U32()
+		if err != nil {
+			return true, err
+		}
+		victim, err := reader.U64()
+		if err != nil {
+			return true, err
+		}
+		c.rt.HonorGained(c.unit(victim).Name, int(int32(honor)))
+		return true, nil
 	case world.SpellLogExecutePacket:
 		return false, c.executeEvents(packet)
 	case world.PartyKillLogPacket:
@@ -184,11 +211,13 @@ func (c *worldCombat) auraEvents(auras *worldAuraState) {
 			continue
 		case old.Empty():
 			c.auraEvent("SPELL_AURA_APPLIED", change.guid, now)
+			c.textAura(change.guid, now, true)
 			if now.Charges > 1 {
 				c.auraEvent("SPELL_AURA_APPLIED_DOSE", change.guid, now, lua.LNumber(now.Charges))
 			}
 		case now.Empty():
 			c.auraEvent("SPELL_AURA_REMOVED", change.guid, old)
+			c.textAura(change.guid, old, false)
 		case old.SpellID != now.SpellID:
 			c.auraEvent("SPELL_AURA_REMOVED", change.guid, old)
 			c.auraEvent("SPELL_AURA_APPLIED", change.guid, now)
@@ -253,6 +282,10 @@ func (c *worldCombat) executeEvents(packet world.Packet) error {
 				lua.LNumber(entry.Spell), lua.LString(c.rt.SpellName(entry.Spell)), lua.LNumber(c.rt.SpellSchool(entry.Spell)))
 		case 19:
 			c.spellEvent("SPELL_EXTRA_ATTACKS", c.unit(caster), c.unit(entry.Target), spell, lua.LNumber(entry.Spell))
+		case 111, 115:
+			c.spellEvent("SPELL_DURABILITY_DAMAGE", c.unit(caster), c.unit(entry.Target), spell)
+		case 8, 62:
+			c.spellEvent("SPELL_DRAIN", c.unit(caster), c.unit(entry.Target), spell, lua.LNumber(entry.Spell), lua.LNumber(entry.Power), lua.LNumber(0))
 		case 18, 113:
 			c.spellEvent("SPELL_RESURRECT", c.unit(caster), c.unit(entry.Target), spell)
 		default:

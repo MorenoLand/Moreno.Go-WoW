@@ -114,6 +114,7 @@ func (c *worldCombat) apply(packet world.Packet) (bool, error) {
 		}
 		if info.Found {
 			c.names.creatures[info.Entry] = info
+			c.rt.SetCreatureTypeFlags(info.Entry, info.TypeFlag)
 		}
 		return true, nil
 	case world.AttackStartPacket:
@@ -154,10 +155,11 @@ func (c *worldCombat) apply(packet world.Packet) (bool, error) {
 			overkill = lua.LNumber(damage.Overkill)
 		}
 		school := lua.LNumber(damage.School)
-		c.rt.CombatEvent("SPELL_DAMAGE", c.unit(damage.Caster), c.unit(damage.Victim),
+		c.rt.CombatEvent(map[bool]string{false: "SPELL_DAMAGE", true: "RANGE_DAMAGE"}[rangedSpells[damage.SpellID]], c.unit(damage.Caster), c.unit(damage.Victim),
 			lua.LNumber(damage.SpellID), lua.LString(c.rt.SpellName(damage.SpellID)), school,
 			lua.LNumber(damage.Damage), overkill, school, lua.LNumber(damage.Resisted), lua.LNumber(damage.Blocked), lua.LNumber(damage.Absorbed),
 			flagValue(damage.Flags&0x02 != 0), lua.LNil, lua.LNil)
+		c.textDamage("SPELL_", damage.Victim, damage.Damage, damage.Resisted, damage.Absorbed, damage.Blocked, damage.Flags&0x02 != 0)
 		return true, nil
 	case world.SpellHealLog:
 		heal, err := world.ParseSpellHealLog(packet.Body)
@@ -167,6 +169,7 @@ func (c *worldCombat) apply(packet world.Packet) (bool, error) {
 		c.rt.CombatEvent("SPELL_HEAL", c.unit(heal.Caster), c.unit(heal.Victim),
 			lua.LNumber(heal.SpellID), lua.LString(c.rt.SpellName(heal.SpellID)), lua.LNumber(2),
 			lua.LNumber(heal.Amount), flagValue(heal.Critical))
+		c.textHeal(heal.Victim, heal.Caster, heal.Amount, heal.Critical, false)
 		return true, nil
 	}
 	return c.applyLog(packet)
@@ -195,6 +198,7 @@ func (c *worldCombat) meleeEvent(hit world.MeleeHit) {
 	}
 	if missType != "" {
 		c.rt.CombatEvent("SWING_MISSED", source, dest, lua.LString(missType))
+		c.textMiss("", hit.Victim, missType)
 		return
 	}
 	overkill := lua.LValue(lua.LNumber(0))
@@ -205,6 +209,7 @@ func (c *worldCombat) meleeEvent(hit world.MeleeHit) {
 	if school == 0 {
 		school = 1
 	}
+	c.textDamage("", hit.Victim, hit.Damage, hit.Resisted, hit.Absorbed, hit.BlockedValue, hit.HitInfo&world.HitInfoCritical != 0)
 	c.rt.CombatEvent("SWING_DAMAGE", source, dest,
 		lua.LNumber(hit.Damage), overkill, lua.LNumber(school), lua.LNumber(hit.Resisted), lua.LNumber(hit.BlockedValue), lua.LNumber(hit.Absorbed),
 		flagValue(hit.HitInfo&world.HitInfoCritical != 0), flagValue(hit.HitInfo&world.HitInfoGlancing != 0), flagValue(hit.HitInfo&world.HitInfoCrushing != 0))

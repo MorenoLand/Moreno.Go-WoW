@@ -24,6 +24,8 @@ const (
 type VehicleRow struct {
 	ID    uint32
 	Flags uint32
+	// PitchMin and PitchMax limit the aim angle when the vehicle sets its own.
+	PitchMin, PitchMax float32
 	Seats [vehicleSeats]uint32
 }
 

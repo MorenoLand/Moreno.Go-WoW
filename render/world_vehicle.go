@@ -1,6 +1,10 @@
 package render
 
-import "github.com/MorenoLand/Moreno.WoW/ui"
+import (
+	"math"
+
+	"github.com/MorenoLand/Moreno.WoW/ui"
+)
 
 // unitCharmedByField is where a unit's UNIT_FIELD_CHARMEDBY sits in its update
 // fields (OBJECT_END + 12, two words).
@@ -11,7 +15,7 @@ func loadVehicleTables(loader *ui.Loader) ui.VehicleTables {
 	tables := ui.VehicleTables{Indicators: map[uint32]string{}}
 	if table, err := loadCharacterDBC(loader, `DBFilesClient\Vehicle.dbc`); err == nil && table.fields >= 14 {
 		for row := 0; row < table.records; row++ {
-			entry := ui.VehicleRow{ID: table.value(row, 0), Flags: table.value(row, 1)}
+			entry := ui.VehicleRow{ID: table.value(row, 0), Flags: table.value(row, 1), PitchMin: math.Float32frombits(table.value(row, 4)), PitchMax: math.Float32frombits(table.value(row, 5))}
 			for seat := range entry.Seats {
 				entry.Seats[seat] = table.value(row, 6+seat)
 			}

@@ -91,6 +91,9 @@ func (rt *Runtime) deliverChat(message world.ChatMessage) {
 			language = ""
 		}
 	}
+	if message.Type == world.ChatWhisper || message.Type == world.ChatWhisperInform {
+		rt.rememberTalk(author)
+	}
 	line := rt.nextChatLine()
 	rt.recordChatLine(message, line, author, uint32(channelIndex))
 	rt.logLine(0, message.Text)

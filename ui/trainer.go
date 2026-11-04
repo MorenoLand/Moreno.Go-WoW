@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"sort"
+	"strings"
+
 	"github.com/MorenoLand/Moreno.WoW/world"
 	lua "github.com/yuin/gopher-lua"
 )
@@ -16,6 +19,8 @@ type trainerState struct {
 	selected int
 	// filter shows each kind of line: available, unavailable, used.
 	filter map[string]bool
+	// collapsed are the skill lines whose spells are hidden.
+	collapsed map[uint32]bool
 }
 
 func (rt *Runtime) trainerHost() TrainerHost {
@@ -59,12 +64,92 @@ func trainerCategory(state uint8) string {
 	return "unavailable"
 }
 
-// trainerRows are the lines the filter lets through.
-func (rt *Runtime) trainerRows() []world.TrainerSpell {
-	var rows []world.TrainerSpell
-	for _, spell := range rt.trainer.trainer.Spells {
-		if rt.trainer.filter[trainerCategory(spell.State)] {
-			rows = append(rows, spell)
+// trainerRow is a line of the list: a skill line heading or a spell.
+type trainerRow struct {
+	header bool
+	line   uint32
+	spell  world.TrainerSpell
+}
+
+// trainerLineOf is the skill line a spell is listed under: the line of the
+// spell it teaches when it only teaches another, or its own.
+func (rt *Runtime) trainerLineOf(id uint32) uint32 {
+	spell := rt.gameplay.Catalog[id]
+	for index, effect := range spell.Effects {
+		if effect.Effect == 36 && effect.TargetA != 5 && spell.Created[index] != 0 {
+			return rt.gameplay.Catalog[spell.Created[index]].SkillLine
+		}
+	}
+	return spell.SkillLine
+}
+
+// trainerRows are the lines the list shows: the skill lines that have a spell
+// the filter lets through, and under each that is not collapsed its spells by
+// the level they need, then by name.
+func (rt *Runtime) trainerRows() []trainerRow {
+	state := &rt.trainer
+	if state.trainer.Type == 2 {
+		var rows []trainerRow
+		for _, spell := range state.trainer.Spells {
+			if state.filter[trainerCategory(spell.State)] {
+				rows = append(rows, trainerRow{spell: spell})
+			}
+		}
+		return rows
+	}
+	type group struct {
+		line   uint32
+		dotted bool
+		spells []world.TrainerSpell
+	}
+	var groups []*group
+	byLine := map[uint32]*group{}
+	for _, spell := range state.trainer.Spells {
+		line := rt.trainerLineOf(spell.ID)
+		if line == 0 {
+			continue
+		}
+		g := byLine[line]
+		if g == nil {
+			g = &group{line: line}
+			byLine[line] = g
+			groups = append(groups, g)
+		}
+		if spell.ProfessionDot[0] != 0 || spell.ProfessionDot[1] != 0 {
+			g.dotted = true
+		}
+		if state.filter[trainerCategory(spell.State)] {
+			g.spells = append(g.spells, spell)
+		}
+	}
+	name := func(g *group) string { return rt.gameplay.Skills[g.line].Name }
+	sort.SliceStable(groups, func(a, b int) bool {
+		if groups[a].dotted != groups[b].dotted {
+			return !groups[a].dotted
+		}
+		return strings.Compare(name(groups[a]), name(groups[b])) < 0
+	})
+	var rows []trainerRow
+	for _, g := range groups {
+		if len(g.spells) == 0 {
+			continue
+		}
+		rows = append(rows, trainerRow{header: true, line: g.line})
+		if state.collapsed[g.line] {
+			continue
+		}
+		sort.SliceStable(g.spells, func(a, b int) bool {
+			x, y := g.spells[a], g.spells[b]
+			if x.RequiredLevel != y.RequiredLevel {
+				return x.RequiredLevel < y.RequiredLevel
+			}
+			if x.RequiredRank != y.RequiredRank {
+				return x.RequiredRank < y.RequiredRank
+			}
+			return strings.Compare(rt.gameplay.Catalog[x.ID].Name, rt.gameplay.Catalog[y.ID].Name) < 0
+		})
+		for _, spell := range g.spells {
+			rows = append(rows, trainerRow{line: g.line, spell: spell})
 		}
 	}
 	return rows
@@ -76,16 +161,28 @@ func registerTrainerAPI(rt *Runtime) {
 	reg := func(name string, fn lua.LGFunction) { L.SetGlobal(name, L.NewFunction(fn)) }
 	rowAt := func(index int) (world.TrainerSpell, bool) {
 		rows := rt.trainerRows()
-		if index < 1 || index > len(rows) {
+		if index < 1 || index > len(rows) || rows[index-1].header {
 			return world.TrainerSpell{}, false
 		}
-		return rows[index-1], true
+		return rows[index-1].spell, true
 	}
 	reg("GetNumTrainerServices", func(L *lua.LState) int {
 		L.Push(lua.LNumber(len(rt.trainerRows())))
 		return 1
 	})
 	reg("GetTrainerServiceInfo", func(L *lua.LState) int {
+		if rows := rt.trainerRows(); L.CheckInt(1) >= 1 && L.CheckInt(1) <= len(rows) && rows[L.CheckInt(1)-1].header {
+			row := rows[L.CheckInt(1)-1]
+			L.Push(lua.LString(rt.gameplay.Skills[row.line].Name))
+			L.Push(lua.LString(""))
+			L.Push(lua.LString("header"))
+			if rt.trainer.collapsed[row.line] {
+				L.Push(lua.LNil)
+			} else {
+				L.Push(lua.LTrue)
+			}
+			return 4
+		}
 		spell, ok := rowAt(L.CheckInt(1))
 		if !ok {
 			return 0
@@ -182,6 +279,38 @@ func registerTrainerAPI(rt *Runtime) {
 		}
 		return 0
 	})
+	setCollapsed := func(name string, collapse bool) {
+		reg(name, func(L *lua.LState) int {
+			if L.Get(1).Type() != lua.LTNumber {
+				L.RaiseError("Usage: %sTrainerSkillLine(index)", map[bool]string{true: "Collapse", false: "Expand"}[collapse])
+				return 0
+			}
+			index := L.CheckInt(1)
+			rows := rt.trainerRows()
+			if index < 1 {
+				rt.trainer.collapsed = map[uint32]bool{}
+				if collapse {
+					for _, row := range rows {
+						if row.header {
+							rt.trainer.collapsed[row.line] = true
+						}
+					}
+				}
+			} else if index > len(rows) || !rows[index-1].header {
+				L.RaiseError("Bad skill line in %sTrainerSkillLine", map[bool]string{true: "Collapse", false: "Expand"}[collapse])
+				return 0
+			} else {
+				if rt.trainer.collapsed == nil {
+					rt.trainer.collapsed = map[uint32]bool{}
+				}
+				rt.trainer.collapsed[rows[index-1].line] = collapse
+			}
+			rt.FireEvent("TRAINER_UPDATE")
+			return 0
+		})
+	}
+	setCollapsed("ExpandTrainerSkillLine", false)
+	setCollapsed("CollapseTrainerSkillLine", true)
 	reg("SelectTrainerService", func(L *lua.LState) int {
 		rt.trainer.selected = L.CheckInt(1)
 		rt.FireEvent("TRAINER_UPDATE")

@@ -31,6 +31,10 @@ var channelOnlyCommands = []struct {
 	{"ChannelToggleAnnouncements", world.ClientChannelAnnounce},
 	{"DisplayChannelOwner", world.ClientChannelOwner},
 	{"ListChannelByName", world.ClientChannelList},
+	{"ChannelVoiceOn", 0x03D6},
+	{"ChannelVoiceOff", 0x03D7},
+	{"SetChannelWatch", 0x03EF},
+	{"DeclineInvite", 0x0410},
 }
 
 // channelDisplay is one line of the list the channel pane shows: a header, or

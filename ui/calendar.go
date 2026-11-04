@@ -164,3 +164,12 @@ func registerCalendarAPI(rt *Runtime) {
 	})
 	registerCalendarEventAPI(rt)
 }
+
+func registerOpenCalendarAPI(rt *Runtime) {
+	rt.L.SetGlobal("OpenCalendar", rt.L.NewFunction(func(L *lua.LState) int {
+		if !rt.cal.requested {
+			rt.calendarEnsure()
+		}
+		return 0
+	}))
+}

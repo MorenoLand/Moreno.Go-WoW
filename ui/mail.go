@@ -212,6 +212,50 @@ func mailAttachmentAt(mail *world.MailMessage, position int) *world.MailAttachme
 	return nil
 }
 
+// The errors that keep an item out of the mail.
+const (
+	mailErrQuest    = 375
+	mailErrBound    = 376
+	mailErrConjured = 377
+	mailErrBag      = 378
+	mailErrNoSlot   = 584
+	mailErrLimited  = 678
+	// templateAccountBound is the item flag that lets a bound item be mailed.
+	templateAccountBound = 0x08000000
+)
+
+// mailItemError is the number of the error that keeps an item from being sent,
+// zero when it can be.
+func (rt *Runtime) mailItemError(item *ItemInstance) int {
+	template := rt.itemTemplate(item.Entry)
+	if template == nil {
+		return auctionErrNotFound
+	}
+	if rt.itemBoundToOwner(item, template) {
+		if template.Bonding == itemBondingQuest {
+			return mailErrQuest
+		}
+		if template.Flags&templateAccountBound == 0 {
+			return mailErrBound
+		}
+	}
+	if template.Flags&templateConjured != 0 {
+		return mailErrConjured
+	}
+	if template.Flags&templateRealTime != 0 || item.Duration != 0 || template.HolidayID != 0 {
+		return mailErrLimited
+	}
+	if template.Area != 0 || template.Map != 0 {
+		return mailErrConjured
+	}
+	for _, slot := range item.Slots {
+		if slot != 0 {
+			return mailErrBag
+		}
+	}
+	return 0
+}
+
 // sendAttachmentFree is the first empty square of the mail being written.
 func (rt *Runtime) sendAttachmentFree() int {
 	for index := range rt.mail.attached {
@@ -522,10 +566,15 @@ func registerMailAPI(rt *Runtime) {
 		if item == nil || rt.sendAttachmentHolds(item.GUID) {
 			return 0
 		}
+		if code := rt.mailItemError(item); code != 0 {
+			rt.ShowGameError(code)
+			return 0
+		}
 		if slot < 0 || slot >= mailAttachmentSlots || state.attached[slot].guid != 0 {
 			slot = rt.sendAttachmentFree()
 		}
 		if slot < 0 {
+			rt.ShowGameError(mailErrNoSlot)
 			return 0
 		}
 		state.attached[slot] = mailAttachment{guid: item.GUID, entry: item.Entry, count: max(item.Count, 1)}
@@ -533,6 +582,13 @@ func registerMailAPI(rt *Runtime) {
 			rt.clearItemCursor()
 		}
 		rt.FireEvent("MAIL_SEND_INFO_UPDATE")
+		return 0
+	})
+	// Answering the question a sent item may raise; nothing raises it yet.
+	reg("RespondMailLockSendItem", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTNumber {
+			L.RaiseError("Usage: RespondMailLockSendItem(slot, keepItem)")
+		}
 		return 0
 	})
 	reg("GetSendMailMoney", func(L *lua.LState) int { L.Push(lua.LNumber(state.money)); return 1 })

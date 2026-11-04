@@ -431,6 +431,13 @@ func registerItemAPI(rt *Runtime) {
 	rt.sockets.pickup = pickup
 	reg("PickupContainerItem", func(L *lua.LState) int {
 		bag, slot := L.CheckInt(1), L.CheckInt(2)
+		if rt.merchant.repairMode {
+			rt.repairItem(rt.bagItem(bag, slot))
+			return 0
+		}
+		if rt.targetItem(rt.bagItem(bag, slot)) {
+			return 0
+		}
 		if state.cursor.active {
 			rt.moveCursorItem(L, bag, slot)
 			drop()
@@ -443,6 +450,13 @@ func registerItemAPI(rt *Runtime) {
 	})
 	reg("PickupInventoryItem", func(L *lua.LState) int {
 		slot := L.CheckInt(1)
+		if rt.merchant.repairMode {
+			rt.repairItem(rt.equippedItem(slot))
+			return 0
+		}
+		if rt.targetItem(rt.equippedItem(slot)) {
+			return 0
+		}
 		if state.cursor.active {
 			rt.moveCursorItem(L, -3, slot)
 			drop()
@@ -517,6 +531,9 @@ func registerItemAPI(rt *Runtime) {
 		if item == nil {
 			return 0
 		}
+		if rt.targetItem(item) {
+			return 0
+		}
 		srcBag, srcSlot, ok := rt.serverBagAndSlot(bag, slot)
 		if !ok {
 			return 0
@@ -526,6 +543,9 @@ func registerItemAPI(rt *Runtime) {
 	})
 	reg("UseInventoryItem", func(L *lua.LState) int {
 		slot := L.CheckInt(1)
+		if rt.targetItem(rt.equippedItem(slot)) {
+			return 0
+		}
 		if item := rt.equippedItem(slot); item != nil {
 			rt.useItem(L, item, world255(), uint8(serverSlotOfInventory(slot)))
 		}

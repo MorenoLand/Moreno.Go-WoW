@@ -60,6 +60,8 @@ const (
 
 // questDialog is the window of a quest giver.
 type questDialog struct {
+	// suggested is the size of the group the quest suggests.
+	suggested uint32
 	kind      questDialogKind
 	giver     uint64
 	id        uint32
@@ -117,6 +119,7 @@ func (rt *Runtime) SetQuestLog(slots [questLogSlots]QuestLogSlot) {
 			rt.requestQuestInfo(slot.ID)
 		}
 	}
+	rt.requestQuestPOI()
 	if changed {
 		rt.FireEvent("QUEST_LOG_UPDATE")
 		rt.FireEvent("UNIT_QUEST_LOG_CHANGED", lua.LString("player"))
@@ -260,7 +263,7 @@ func (rt *Runtime) ShowQuestGreeting(list world.QuestList) {
 // ShowQuestDetails opens the offer of a quest.
 func (rt *Runtime) ShowQuestDetails(details world.QuestDetails) {
 	rt.CloseGossipWindow()
-	rt.quests.dialog = questDialog{kind: questDialogDetail, giver: details.Giver, id: details.ID, title: details.Title, text: details.Details, objective: details.Objectives, rewards: details.Rewards, auto: details.AutoLaunched}
+	rt.quests.dialog = questDialog{kind: questDialogDetail, giver: details.Giver, id: details.ID, title: details.Title, text: details.Details, objective: details.Objectives, rewards: details.Rewards, auto: details.AutoLaunched, suggested: details.SuggestedGroup}
 	rt.FireEvent("QUEST_DETAIL")
 }
 
@@ -274,7 +277,7 @@ func (rt *Runtime) ShowQuestProgress(progress world.QuestProgress) {
 // ShowQuestReward opens the reward window.
 func (rt *Runtime) ShowQuestReward(offer world.QuestOffer) {
 	rt.CloseGossipWindow()
-	rt.quests.dialog = questDialog{kind: questDialogComplete, giver: offer.Giver, id: offer.ID, title: offer.Title, text: offer.RewardText, rewards: offer.Rewards, auto: offer.AutoLaunched}
+	rt.quests.dialog = questDialog{kind: questDialogComplete, giver: offer.Giver, id: offer.ID, title: offer.Title, text: offer.RewardText, rewards: offer.Rewards, auto: offer.AutoLaunched, suggested: offer.SuggestedGroup}
 	rt.FireEvent("QUEST_COMPLETE")
 }
 

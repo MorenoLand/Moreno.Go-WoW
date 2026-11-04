@@ -27,6 +27,14 @@ type worldReputation struct {
 	// received is set once the server has sent the list.
 	received bool
 	watched  int
+	// gains are the changes of standing the last packet told of.
+	gains []worldRepGain
+}
+
+// worldRepGain is a faction whose standing changed.
+type worldRepGain struct {
+	name  string
+	delta int32
 }
 
 func (rep *worldReputation) load(loader *ui.Loader) {
@@ -105,6 +113,14 @@ func (rep *worldReputation) handle(packet world.Packet) bool {
 		}
 		for _, change := range changes {
 			if change.Index < world.FactionSlots {
+				if delta := change.Standing - rep.slots[change.Index].Standing; delta != 0 && rep.received {
+					for _, record := range rep.records {
+						if record.index == change.Index {
+							rep.gains = append(rep.gains, worldRepGain{name: record.name, delta: delta})
+							break
+						}
+					}
+				}
 				rep.slots[change.Index].Standing = change.Standing
 			}
 		}

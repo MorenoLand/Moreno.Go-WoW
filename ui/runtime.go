@@ -29,6 +29,12 @@ type Runtime struct {
 	skills           skillState
 	factions         factionState
 	social           socialState
+	recentTalk       []string
+	arenaOpponents   int
+	creatureFlags    map[uint32]uint32
+	soulboundEnchants map[uint32]bool
+	mapIconScales     map[uint32]float32
+	multiSell        multiSell
 	talents          talentState
 	loot             lootState
 	death            deathState
@@ -95,8 +101,22 @@ type Runtime struct {
 	spellIcons       map[uint32]string
 	possessSpellID   uint32
 	targetingSpell   uint32
+	targetingKind    int
 	spiritHealerGUID uint64
 	rafGrantFrom     uint64
+	combatTextGUID   uint64
+	combo            comboState
+	threat           threatState
+	playerSpeed      func() float64
+	stationery       stationeryState
+	barber           barberState
+	tabard           tabardState
+	extendedCosts    map[uint32]ExtendedCost
+	poi              questPOIState
+	vehicleAim       vehicleAimHooks
+	bfVehicles       func() []BattlefieldVehicle
+	pendingEnchant   *pendingEnchant
+	enchantNames     map[uint32]string
 	// pvpTimerAt is when the PvP flag runs out, once the server has said.
 	pvpTimerAt time.Time
 	// UnitRaceOfGUID gives the race of a player the world has loaded.
@@ -399,6 +419,33 @@ func NewRuntime(host Host) *Runtime {
 	registerActionRangeAPI(rt)
 	registerRAFAPI(rt)
 	registerUnitOnQuestAPI(rt)
+	registerCombatTextAPI(rt)
+	registerComboAPI(rt)
+	registerThreatAPI(rt)
+	registerUnitSpeedAPI(rt)
+	registerArenaSeasonAPI(rt)
+	registerHasKeyAPI(rt)
+	registerAreaFlagsAPI(rt)
+	registerNPCDistanceAPI(rt)
+	registerTempEnchantAPI(rt)
+	registerStationeryAPI(rt)
+	registerMultiCastAPI(rt)
+	registerOpenCalendarAPI(rt)
+	registerAutoCompleteAPI(rt)
+	registerArenaOpponentsAPI(rt)
+	registerForceGossipAPI(rt)
+	registerAuctionSellAPI(rt)
+	registerMerchantCursorAPI(rt)
+	registerMapIconScaleAPI(rt)
+	registerBarberAPI(rt)
+	registerTabardAPI(rt)
+	registerEquipmentCursorAPI(rt)
+	registerMerchantExtraAPI(rt)
+	registerQuestPOIAPI(rt)
+	registerVehicleAimAPI(rt)
+	registerBattlefieldVehicleAPI(rt)
+	registerEnchantConfirmAPI(rt)
+	registerThreatColorsAPI(rt)
 	registerExeMiscAPI(rt)
 	registerQuestMapAPI(rt)
 	registerItemTextAPI(rt)

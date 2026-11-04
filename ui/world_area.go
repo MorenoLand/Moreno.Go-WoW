@@ -11,6 +11,9 @@ type areaState struct {
 	faction string
 	// indoors is set while the place is inside a map object.
 	indoors bool
+	// zoneFlags and subZoneFlags are the AreaTable flags of the zone and the
+	// sub zone.
+	zoneFlags, subZoneFlags uint32
 }
 
 // SetArea records the zone and sub zone the player is in and tells the

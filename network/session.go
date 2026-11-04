@@ -145,6 +145,12 @@ func (s *Session) CastSpell(id uint32, target uint64) error {
 	}
 	return s.connection.CastSpell(id, target)
 }
+func (s *Session) CastSpellOnItem(id uint32, item uint64) error {
+	if s == nil || s.connection == nil {
+		return fmt.Errorf("world session is closed")
+	}
+	return s.connection.CastSpellOnItem(id, item)
+}
 func (s *Session) CastSpellAt(id uint32, x, y, z float32) error {
 	if s == nil || s.connection == nil {
 		return fmt.Errorf("world session is closed")

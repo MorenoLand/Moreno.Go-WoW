@@ -115,6 +115,7 @@ func readWorldSpellCatalog(loader *ui.Loader) (map[uint32]ui.SpellInfo, map[uint
 		if spells.fields > 225 {
 			info.School = spells.value(row, 225)
 		}
+		info.TargetMask = spells.value(row, 18)
 		info.CategoryCooldownMS = int(spells.value(row, 30))
 		for effect := 0; effect < 3; effect++ {
 			info.Effects[effect] = ui.SpellEffectInfo{

@@ -76,8 +76,8 @@ func registerWorldAPIDefaults(rt *Runtime) {
 	returns("GetNumSkillLines", number(0))
 	returns("GetSkillLineInfo", text(""), lua.LNil, lua.LNil, number(0), number(0), number(0), number(0), lua.LNil, number(0), number(0), number(0), number(0), text(""))
 	returns("GetSelectedSkill", number(0))
-	nothing("SetSelectedSkill", "ExpandSkillHeader", "CollapseSkillHeader", "AddSkillUp", "AcceptSkillUps", "CancelSkillUps", "RemoveSkillUp",
-		"BuySkillTier", "SkillSortButton_OnClick", "SkillSortButton_OnShow")
+	nothing(
+		"SkillSortButton_OnClick", "SkillSortButton_OnShow")
 
 	// Reputation.
 	returns("GetNumFactions", number(0))
@@ -92,7 +92,6 @@ func registerWorldAPIDefaults(rt *Runtime) {
 	returns("GetBattlefieldStatus", text("none"))
 	returns("GetWorldPVPQueueStatus", text("none"))
 	returns("GetBattlefieldWinner", lua.LNil)
-	returns("GetNumArenaOpponents", number(0))
 	returns("GetExpansionLevel", number(2))
 	nothing("CloseBattlefield", "RequestBattlefieldPositions", "SortBattlefieldScoreData", "RequestRaidInfo", "RequestLFDPartyLockInfo",
 		"RequestLFDPlayerLockInfo", "LeaveLFG", "RefreshLFGList", "SearchLFGSort", "SetLFGComment", "AcceptProposal", "RejectProposal",
@@ -114,7 +113,7 @@ func registerWorldAPIDefaults(rt *Runtime) {
 		"PickupSendMailCOD", "TakeInboxMoney", "TakeInboxTextItem", "CloseMail", "CloseTabardCreation", "ClosePetStables", "CloseGossip",
 		"CloseGuildRegistrar", "ClosePetition", "ClosePetitionVendor", "CloseItemText", "CloseTaxiMap", "ClickTradeButton",
 		"ClickTargetTradeButton", "ClickStablePet", "PickupStablePet", "PickupMerchantItem", "RepairAllItems", "ShowRepairCursor",
-		"HideRepairCursor", "ShowMerchantSellCursor", "BuybackItem", "BuyGuildCharter", "BuyPetition", "AcceptTrade", "DropCursorMoney",
+		"HideRepairCursor", "BuybackItem", "BuyGuildCharter", "BuyPetition", "AcceptTrade", "DropCursorMoney",
 		"ItemTextNextPage", "ItemTextPrevPage", "TakeTaxiNode", "QuestLogPushQuest", "RollOnLoot")
 
 	// Pets, companions, runes and totems.
@@ -232,7 +231,7 @@ func registerSurveyedAPIDefaults(rt *Runtime) {
 		"GetUnitHealthRegenRateFromSpirit": 1, "GetUnitManaRegenRateFromSpirit": 1, "GetPetSpellBonusDamage": 1,
 		"UnitStat": 4, "UnitArmor": 4, "UnitAttackPower": 3, "UnitRangedAttackPower": 3, "UnitDefense": 2,
 		"UnitAttackSpeed": 2, "UnitRangedAttack": 4, "UnitAttackBothHands": 4, "UnitResistance": 4,
-		"GetExpertise": 2, "GetManaRegen": 2, "GetExpertisePercent": 2, "GetAdjustedSkillPoints": 1,
+		"GetExpertise": 2, "GetManaRegen": 2, "GetExpertisePercent": 2,
 		"GetHonorCurrency": 2, "GetArenaCurrency": 1, "GetPVPTimer": 1, "GetLFGDeserterExpiration": 0,
 		"GetLFGRandomCooldownExpiration": 0, "GetTimeToWellRested": 0, "GetPossessInfo": 0,
 	} {

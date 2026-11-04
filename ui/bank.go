@@ -113,12 +113,31 @@ func (rt *Runtime) handleSpiritHealerTime(packet world.Packet) bool {
 	return true
 }
 
+// spellWaitingToResurrect is the aura a ghost carries while the spirit healer
+// has it queued.
+const spellWaitingToResurrect = 2584
+
 func registerSpiritHealerAPI(rt *Runtime) {
 	L := rt.L
 	L.SetGlobal("AcceptAreaSpiritHeal", L.NewFunction(func(L *lua.LState) int {
 		if rt.spiritHealerGUID != 0 {
 			rt.send(0x02E3, binary.LittleEndian.AppendUint64(nil, rt.spiritHealerGUID))
 		}
+		return 0
+	}))
+	// Leaving the queue for the spirit healer takes off the aura that waits.
+	L.SetGlobal("CancelAreaSpiritHeal", L.NewFunction(func(L *lua.LState) int {
+		if host, ok := rt.Host.(interface{ CancelAura(uint32) error }); ok {
+			_ = host.CancelAura(spellWaitingToResurrect)
+		}
+		return 0
+	}))
+	L.SetGlobal("SetTaxiBenchmarkMode", L.NewFunction(func(L *lua.LState) int {
+		on := byte(0)
+		if lua.LVAsBool(L.Get(1)) {
+			on = 1
+		}
+		rt.send(0x0389, []byte{on})
 		return 0
 	}))
 	L.SetGlobal("GetAreaSpiritHealerTime", L.NewFunction(func(L *lua.LState) int {

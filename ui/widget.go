@@ -1779,6 +1779,9 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 	for name, fn := range rt.coordinateMethods() {
 		methods[name] = fn
 	}
+	for name, fn := range rt.tabardMethods() {
+		methods[name] = fn
+	}
 	tooltipMethods := rt.tooltipMethods()
 	animationMethods := rt.animationMethods()
 	for name, fn := range tooltipMethods {

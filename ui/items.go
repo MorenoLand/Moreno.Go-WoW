@@ -39,6 +39,9 @@ type ItemInstance struct {
 	Durability, MaxDurability int
 	Contained, Owner          uint64
 	Flags                     uint32
+	// Charges and Duration are the charges and the seconds the item has left.
+	Charges  int32
+	Duration uint32
 	NumSlots                  int      // containers: how many squares
 	Slots                     []uint64 // containers: guid in each square
 	Enchant                   uint32
@@ -150,6 +153,10 @@ func (rt *Runtime) SetInventory(slots [invSlotCount]uint64, items map[uint64]*It
 			rt.FireEvent("PLAYERBANKSLOTS_CHANGED", numberValue(slot-invBankStart+1))
 		case slot >= invBankBagStart && slot < invBankBagEnd:
 			rt.FireEvent("PLAYERBANKBAGSLOTS_CHANGED", numberValue(slot-invBankBagStart+1))
+		case slot >= invBuybackStart && slot < invBuybackEnd:
+			if rt.merchant.open {
+				rt.FireEvent("MERCHANT_UPDATE")
+			}
 		}
 	}
 	for index := 0; index < invBankBagEnd-invBankBagStart; index++ {
