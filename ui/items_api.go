@@ -160,7 +160,6 @@ func registerItemAPI(rt *Runtime) {
 		L.Push(lua.LNumber(1))
 		return 3
 	})
-	reg("GetContainerItemGems", func(L *lua.LState) int { return 0 })
 	reg("GetContainerItemQuestInfo", func(L *lua.LState) int {
 		L.Push(lua.LFalse)
 		L.Push(lua.LNil)
@@ -300,14 +299,12 @@ func registerItemAPI(rt *Runtime) {
 		L.Push(lua.LBool(item != nil && item.MaxDurability > 0 && item.Durability == 0))
 		return 1
 	})
-	reg("GetInventoryAlertStatus", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
 	reg("GetInventoryItemCooldown", func(L *lua.LState) int {
 		L.Push(lua.LNumber(0))
 		L.Push(lua.LNumber(0))
 		L.Push(lua.LNumber(1))
 		return 3
 	})
-	reg("GetInventoryItemGems", func(L *lua.LState) int { return 0 })
 	reg("IsInventoryItemLocked", func(L *lua.LState) int {
 		L.Push(lua.LBool(state.cursor.active && state.cursor.bag == -3 && state.cursor.slot == L.CheckInt(1)))
 		return 1

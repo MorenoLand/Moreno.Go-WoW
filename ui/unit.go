@@ -37,6 +37,8 @@ type UnitInfo struct {
 	Dead       bool
 	// Ghost is set for a player who has released the corpse (PLAYER_FLAGS_GHOST).
 	Ghost bool
+	// PlayerFlags are the flags of a player as the server last said.
+	PlayerFlags uint32
 	Visible    bool
 	XP, XPMax  int
 	// Hostile and Friendly are the unit's reaction towards the player; neither
@@ -118,6 +120,9 @@ func (rt *Runtime) SetUnit(unit string, info UnitInfo) {
 	if unit == "player" {
 		rt.updatePossessBar()
 	}
+	if unit == "mouseover" {
+		rt.FireEvent("UPDATE_MOUSEOVER_UNIT")
+	}
 }
 
 // SetTarget replaces the "target" unit and fires PLAYER_TARGET_CHANGED; a nil
@@ -151,7 +156,12 @@ func (rt *Runtime) ClearUnit(unit string) {
 	if rt == nil || rt.units == nil {
 		return
 	}
-	delete(rt.units, strings.ToLower(strings.TrimSpace(unit)))
+	unit = strings.ToLower(strings.TrimSpace(unit))
+	_, had := rt.units[unit]
+	delete(rt.units, unit)
+	if had && unit == "mouseover" {
+		rt.FireEvent("UPDATE_MOUSEOVER_UNIT")
+	}
 }
 
 func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
@@ -187,6 +197,8 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 	}
 	if value, ok := fields[playerFlagsField]; ok && unit == "player" {
 		info.Ghost = value&playerFlagGhost != 0
+		info.PlayerFlags = value
+		defer rt.playerFlagEvents(old.PlayerFlags, value, old.UnitFlags != 0)
 	}
 	if value, ok := fields[playerFlagsField]; ok && info.Player {
 		info.AFK, info.DND = value&0x2 != 0, value&0x4 != 0
@@ -217,6 +229,12 @@ func (rt *Runtime) ApplyUnitFields(unit string, fields map[uint16]uint32) bool {
 	}
 	if value, ok := fields[playerBytes2Field]; ok && unit == "player" {
 		info.BankSlots, info.RestState = uint8(value>>16), uint8(value>>24)
+		if old.BankSlots != info.BankSlots {
+			defer rt.FireEvent("PLAYERBANKBAGSLOTS_CHANGED")
+		}
+		if old.RestState != info.RestState {
+			defer rt.FireEvent("UPDATE_EXHAUSTION")
+		}
 	}
 	if value, ok := fields[playerBytesField]; ok && unit == "player" {
 		info.ActionBarToggles = uint8(value >> 16)
@@ -793,24 +811,6 @@ func registerUnitAPI(rt *Runtime) {
 	})
 	reg("UnitClassification", func(L *lua.LState) int {
 		L.Push(lua.LString("normal"))
-		return 1
-	})
-	reg("UnitCanAttack", func(L *lua.LState) int {
-		L.Push(lua.LBool(false))
-		return 1
-	})
-	reg("UnitCanAssist", func(L *lua.LState) int {
-		a := strings.ToLower(L.OptString(1, ""))
-		b := strings.ToLower(L.OptString(2, ""))
-		L.Push(lua.LBool(a != "" && a == b))
-		return 1
-	})
-	reg("UnitIsFriend", func(L *lua.LState) int {
-		L.Push(lua.LBool(true))
-		return 1
-	})
-	reg("UnitIsEnemy", func(L *lua.LState) int {
-		L.Push(lua.LBool(false))
 		return 1
 	})
 	reg("UnitFactionGroup", func(L *lua.LState) int {

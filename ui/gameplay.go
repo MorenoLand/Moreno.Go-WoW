@@ -21,6 +21,13 @@ type SpellInfo struct {
 	DurationMS, ProcChance, ProcCharges int
 	StackAmount, BaseLevel, MaxLevel    int
 	SpellLevel, CooldownMS              int
+	// EquipClass, EquipSubClassMask and EquipInvMask name the items the spell
+	// lets the character wield.
+	EquipClass                      int32
+	EquipSubClassMask, EquipInvMask uint32
+	// Word16 is the sixteenth word of the spell record, which says whether the
+	// spell is aimed at friends or foes.
+	Word16 uint32
 	// School is the school mask of the spell.
 	School uint32
 	// TargetMask is what the spell says it is aimed at (item, unit, ground).
@@ -131,23 +138,50 @@ func (rt *Runtime) UpdateSpellChannel(duration uint32) {
 	}
 	rt.FireEvent(event, lua.LString("player"), lua.LString(info.Name), lua.LString(info.Rank))
 }
-func (rt *Runtime) StopSpellCast(id uint32, count uint8, failed bool) {
-rt.tradeSkillCastDone(id, failed)
-if !failed {
-rt.openTradeSkillFor(id)
-		info := rt.gameplay.Catalog[id]
+func (rt *Runtime) StopSpellCast(id uint32, count uint8, failed bool, reason uint8) {
+	rt.tradeSkillCastDone(id, failed)
+	info := rt.gameplay.Catalog[id]
+	if !failed {
+		rt.openTradeSkillFor(id)
 		rt.FireEvent("UNIT_SPELLCAST_SUCCEEDED", lua.LString("player"), lua.LString(info.Name), lua.LString(info.Rank), lua.LNumber(count))
+	} else {
+		// What went wrong picks the event: an interruption, a failure nobody
+		// is told about, or a plain failure.
+		event := "UNIT_SPELLCAST_FAILED"
+		switch reason {
+		case 0x28, 0x29:
+			event = "UNIT_SPELLCAST_INTERRUPTED"
+		case 0x18, 0x1b, 0x69:
+			event = "UNIT_SPELLCAST_FAILED_QUIET"
+		}
+		rt.FireEvent(event, lua.LString("player"), lua.LString(info.Name), lua.LString(info.Rank), lua.LNumber(count))
 	}
 	if rt.gameplay.Cast.ID != id || rt.gameplay.Cast.Count != count || rt.gameplay.Cast.Channel {
 		return
 	}
-	info := rt.gameplay.Catalog[id]
 	rt.gameplay.Cast = activeSpellCast{}
-	event := "UNIT_SPELLCAST_STOP"
-	if failed {
-		event = "UNIT_SPELLCAST_FAILED"
+	rt.FireEvent("UNIT_SPELLCAST_STOP", lua.LString("player"), lua.LString(info.Name), lua.LString(info.Rank), lua.LNumber(count))
+}
+
+// DelaySpellCast moves the end of the player's cast back, as the server says a
+// hit pushed it.
+func (rt *Runtime) DelaySpellCast(delayMS uint32) {
+	cast := &rt.gameplay.Cast
+	if cast.ID == 0 {
+		return
 	}
-	rt.FireEvent(event, lua.LString("player"), lua.LString(info.Name), lua.LString(info.Rank), lua.LNumber(count))
+	info := rt.gameplay.Catalog[cast.ID]
+	delay := float64(delayMS) / 1000
+	if cast.Channel {
+		cast.End -= delay
+	} else {
+		cast.End += delay
+	}
+	event := "UNIT_SPELLCAST_DELAYED"
+	if cast.Channel {
+		event = "UNIT_SPELLCAST_CHANNEL_UPDATE"
+	}
+	rt.FireEvent(event, lua.LString("player"), lua.LString(info.Name), lua.LString(info.Rank))
 }
 func (rt *Runtime) SetSpellCatalog(catalog map[uint32]SpellInfo, skills map[uint32]SpellSkillLine) {
 	rt.gameplay.Catalog = catalog
@@ -417,7 +451,20 @@ func (rt *Runtime) cast(id uint32, unit string) error {
 			return nil
 		}
 	}
-	return host.CastSpell(id, target)
+	if err := host.CastSpell(id, target); err != nil {
+		return err
+	}
+	targetName := ""
+	if target != 0 {
+		targetName = rt.nameOf(target)
+		if targetName == "" {
+			if info := rt.unitByGUID(target); info != nil {
+				targetName = info.Name
+			}
+		}
+	}
+	rt.FireEvent("UNIT_SPELLCAST_SENT", lua.LString("player"), lua.LString(spell.Name), lua.LString(spell.Rank), lua.LString(targetName))
+	return nil
 }
 
 // selectUnit asks the server to select the unit behind a Lua unit token.
@@ -442,7 +489,6 @@ func registerGameplayAPI(rt *Runtime) {
 	reg := func(name string, fn lua.LGFunction) { L.SetGlobal(name, L.NewFunction(fn)) }
 	reg("TargetUnit", func(L *lua.LState) int { rt.selectUnit(L.OptString(1, "")); return 0 })
 	reg("ClearTarget", func(L *lua.LState) int { L.Push(lua.LBool(rt.selectUnit(""))); return 1 })
-	reg("SpellCanTargetItem", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("GetSpellAutocast", func(L *lua.LState) int { L.Push(lua.LFalse); L.Push(lua.LFalse); return 2 })
 	reg("GetActionBarPage", func(L *lua.LState) int {
 		page := rt.gameplay.Page

@@ -246,6 +246,12 @@ func newUIEngine(rt *Runtime, loader *Loader, bgImagePath string) (*UIEngine, er
 	rt.engine = eng
 	rt.measureText = eng.measureFontString
 	rt.layoutOf = eng.onDemandRect
+	rt.cursorUnits = func() (float64, float64) {
+		if eng.uiScale <= 0 {
+			return 0, 0
+		}
+		return rt.cursorX / eng.uiScale, (float64(eng.screenHeight) - rt.cursorY) / eng.uiScale
+	}
 	rt.loadAddOn = eng.loadAddOn
 	return eng, nil
 }
@@ -300,6 +306,7 @@ func (eng *UIEngine) Update(elapsed float64) bool {
 	if eng.Rt != nil {
 		eng.Rt.TickGroup(elapsed)
 		eng.Rt.tickChat()
+		eng.Rt.flushTradeLink()
 	}
 	if eng.Rt != nil && eng.Rt.tickLogout(elapsed) {
 		statusChanged = true
@@ -1422,6 +1429,8 @@ func (eng *UIEngine) layoutRect(w *widget, parent Rect) Rect {
 		// A frame with no anchor points has no position in the original client,
 		// so neither it nor anything anchored to it is drawn.
 		rect = Rect{X0: -1e6, Y0: -1e6, X1: -1e6, Y1: -1e6}
+	} else if w.clampedToScreen {
+		rect = clampToScreen(rect, eng.screen, effectiveScaleOf(w), w.clampInsets)
 	}
 	eng.rects[w] = rect
 	w.renderRect = rect
@@ -1897,6 +1906,7 @@ func (eng *UIEngine) SetInitialCredentials(account, password string, rememberMe 
 	eng.ClearLoadingScreen()
 	eng.rememberMe = rememberMe
 	eng.Rt.SetCVar("accountName", account)
+	eng.Rt.SetWTFAccount(account)
 	eng.Rt.SetCVar("currentGlueScreen", "login")
 	eng.Rt.Execute("for _, name in ipairs({'VideoOptionsFrame', 'AudioOptionsFrame', 'OptionsSelectFrame', 'CinematicsFrame', 'MovieFrame', 'RealmList', 'AddonList', 'GlueDialog'}) do local frame = _G[name]; if frame then frame:Hide() end end", "@credentials.lua")
 	eng.Rt.Execute("GlueParent_OnEvent('SET_GLUE_SCREEN', 'login')", "@credentials.lua")
@@ -1934,6 +1944,7 @@ func (eng *UIEngine) HandleCursor(x, y float64) bool {
 	if eng.Rt != nil {
 		eng.Rt.cursorX = x
 		eng.Rt.cursorY = y
+		eng.Rt.dragCursor()
 	}
 	if eng.selecting != nil {
 		eng.setEditCursorAt(eng.selecting, x, true)

@@ -11,6 +11,12 @@ import (
 type MapPage struct {
 	ID, MapID, AreaID      uint32
 	Directory              string
+	// DisplayMapID is the map the page borrows its terrain from; all ones when it
+	// shows its own.
+	DisplayMapID uint32
+	// DefaultFloor is the floor map of the page that shows first, 0 for a page
+	// with none.
+	DefaultFloor uint32
 	XMax, XMin, YMax, YMin float32
 }
 
@@ -60,7 +66,35 @@ type MapCatalog struct {
 	MapNames map[uint32]string
 	// MapTypes are the instance types of the maps: 1 dungeon, 2 raid.
 	MapTypes map[uint32]uint32
+	// MapFlags are the flags of the maps.
+	MapFlags map[uint32]uint32
+	// DungeonFloors are the floor maps of instances (DungeonMap.dbc).
+	DungeonFloors []DungeonFloor
+	// ContinentPlaces say where each continent sits on the world map, and
+	// Transforms move the places of one map onto another.
+	ContinentPlaces map[uint32]ContinentPlace
+	Transforms      []MapTransform
 }
+
+// ContinentPlace is the offset and the scale of a continent on the world map.
+type ContinentPlace struct{ OffsetX, OffsetY, Scale float32 }
+
+// MapTransform moves a box of one map onto another map.
+type MapTransform struct {
+	MapID                  uint32
+	MinX, MinY, MaxX, MaxY float32
+	NewMapID               uint32
+	OffsetX, OffsetY       float32
+}
+
+// DungeonFloor is one floor map of an instance.
+type DungeonFloor struct {
+	ID, MapID uint32
+	Floor     int
+}
+
+// pageTerrainOwn is the display map of a page that shows its own terrain.
+const pageTerrainOwn = 0xFFFFFFFF
 
 // Page sizes in the pixel space overlays are stated in.
 const (
@@ -79,6 +113,10 @@ type worldMapState struct {
 	catalog   *MapCatalog
 	continent int
 	zone      int // 0 shows the continent page
+	// dungeon is the page of the instance in view, which has no continent, and
+	// floor the floor map of it that is showing (0 for none).
+	dungeon *MapPage
+	floor   uint32
 	playerMap uint32
 	playerX   float32
 	playerY   float32
@@ -157,6 +195,9 @@ func (state *worldMapState) zonePages(continent int) []*MapPage {
 // currentPage is the page the map is showing, or nil for the world and cosmic
 // views, which have no page of their own.
 func (state *worldMapState) currentPage() *MapPage {
+	if state.dungeon != nil {
+		return state.dungeon
+	}
 	if state.zone == 0 {
 		return state.continentPage(state.continent)
 	}
@@ -188,6 +229,13 @@ func (state *worldMapState) showPage(page *MapPage) bool {
 	if continent == 0 {
 		return false
 	}
+	if page.DefaultFloor > 0 {
+		// A page that is a floor of a dungeon opens as the dungeon.
+		state.dungeon, state.floor = page, page.DefaultFloor
+		state.continent, state.zone = worldMapCosmic, 0
+		return true
+	}
+	state.dungeon, state.floor = nil, 0
 	state.continent = continent
 	state.zone = 0
 	if page.AreaID == 0 {
@@ -228,7 +276,14 @@ func (rt *Runtime) setMapToCurrentZone() {
 		}
 	}
 	if !state.showPage(best) {
-		state.continent, state.zone = worldMapWorld, 0
+		if best != nil && state.continentOfMap(best.MapID) == 0 {
+			// An instance has no continent: its own page is the whole view.
+			state.dungeon, state.floor = best, 0
+			state.continent, state.zone = worldMapCosmic, 0
+		} else {
+			state.dungeon, state.floor = nil, 0
+			state.continent, state.zone = worldMapWorld, 0
+		}
 	}
 	rt.FireEvent("WORLD_MAP_UPDATE")
 }
@@ -236,6 +291,11 @@ func (rt *Runtime) setMapToCurrentZone() {
 // zoomOut moves up one level: zone to continent, continent to world, world to
 // cosmic.
 func (state *worldMapState) zoomOut() {
+	if state.dungeon != nil {
+		state.dungeon, state.floor = nil, 0
+		state.continent, state.zone = worldMapWorld, 0
+		return
+	}
 	switch {
 	case state.zone != 0:
 		state.zone = 0
@@ -348,10 +408,62 @@ func registerWorldMapAPI(rt *Runtime) {
 		}
 		return 1
 	})
-	reg("GetCurrentMapDungeonLevel", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("GetNumDungeonMapLevels", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("SetDungeonMapLevel", func(L *lua.LState) int { return 0 })
-	reg("DungeonUsesTerrainMap", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("GetCurrentMapDungeonLevel", func(L *lua.LState) int {
+		level := 0
+		if state.dungeon != nil {
+			if floor, ok := state.floorByID(state.floor); ok {
+				level = floor.Floor
+			}
+			if state.dungeon.DisplayMapID == pageTerrainOwn {
+				level++
+			}
+		}
+		L.Push(lua.LNumber(level))
+		return 1
+	})
+	reg("GetNumDungeonMapLevels", func(L *lua.LState) int {
+		L.Push(lua.LNumber(state.dungeonLevels()))
+		return 1
+	})
+	reg("SetDungeonMapLevel", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTNumber {
+			L.RaiseError("Usage: SetDungeonMapLevel(level)")
+			return 0
+		}
+		level := L.CheckInt(1)
+		if state.dungeon == nil {
+			return 0
+		}
+		if state.dungeon.DisplayMapID == pageTerrainOwn {
+			level--
+			if level < 0 {
+				return 0
+			}
+		} else if level < 1 {
+			return 0
+		}
+		if level == 0 {
+			state.floor = 0
+			rt.FireEvent("WORLD_MAP_UPDATE")
+			return 0
+		}
+		for _, floor := range state.catalog.DungeonFloors {
+			if floor.MapID == state.dungeon.MapID && floor.Floor == level && floor.ID > 0 {
+				state.floor = floor.ID
+				rt.FireEvent("WORLD_MAP_UPDATE")
+				return 0
+			}
+		}
+		return 0
+	})
+	reg("DungeonUsesTerrainMap", func(L *lua.LState) int {
+		if state.dungeon != nil && state.dungeon.DisplayMapID == pageTerrainOwn {
+			L.Push(lua.LNumber(1))
+		} else {
+			L.Push(lua.LNil)
+		}
+		return 1
+	})
 	reg("SetMapToCurrentZone", func(L *lua.LState) int { rt.setMapToCurrentZone(); return 0 })
 	reg("SetMapZoom", func(L *lua.LState) int {
 		continent := L.CheckInt(1)
@@ -421,8 +533,6 @@ func registerWorldMapAPI(rt *Runtime) {
 	})
 	reg("GetCorpseMapPosition", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 2 })
 	reg("GetDeathReleasePosition", func(L *lua.LState) int { L.Push(lua.LNumber(0)); L.Push(lua.LNumber(0)); return 2 })
-	reg("GetNumMapLandmarks", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("GetMapLandmarkInfo", func(L *lua.LState) int { return 0 })
 	// The zone under the cursor: the continent view names the zone box the
 	// point falls in, the zone view names the explored patch it falls on.
 	reg("UpdateMapHighlight", func(L *lua.LState) int {
@@ -606,4 +716,35 @@ func registerQuestMapAPI(rt *Runtime) {
 		L.Push(lua.LNumber(0))
 		return 2
 	}))
+}
+
+// floorByID finds a floor map of an instance.
+func (state *worldMapState) floorByID(id uint32) (DungeonFloor, bool) {
+	if state.catalog != nil {
+		for _, floor := range state.catalog.DungeonFloors {
+			if floor.ID == id {
+				return floor, true
+			}
+		}
+	}
+	return DungeonFloor{}, false
+}
+
+// dungeonLevels is how many levels the instance in view has: its floors, and
+// the ground map of the page itself when it shows its own terrain.
+func (state *worldMapState) dungeonLevels() int {
+	if state.dungeon == nil || state.catalog == nil {
+		return 0
+	}
+	seen := map[int]bool{}
+	for _, floor := range state.catalog.DungeonFloors {
+		if floor.MapID == state.dungeon.MapID {
+			seen[floor.Floor] = true
+		}
+	}
+	count := len(seen)
+	if state.dungeon.DisplayMapID == pageTerrainOwn {
+		count++
+	}
+	return count
 }

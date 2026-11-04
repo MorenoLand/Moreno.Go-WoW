@@ -47,8 +47,6 @@ func registerGapAPI(rt *Runtime) {
 	returns("UnitIsSameServer", lua.LTrue)
 	// Container items bought with honor or arena points, gems that trade, and
 	// calendar event pictures.
-	returns("GetContainerItemPurchaseInfo")
-	returns("GetContainerItemPurchaseItem")
 	returns("GetSocketItemBoundTradeable", lua.LFalse)
 	returns("GetSocketItemRefundable", lua.LFalse)
 	returns("CalendarEventGetTextures")
@@ -57,6 +55,8 @@ func registerGapAPI(rt *Runtime) {
 // PlayerMotion is what the world tells of how the player moves and where.
 type PlayerMotion struct {
 	Swimming, Flying, Indoors, FlyableArea bool
+	// WaterWalking is set while the player walks on water.
+	WaterWalking bool
 }
 
 // SetPlayerMotion records how the player moves and whether they are indoors.
@@ -86,7 +86,7 @@ func registerPlayerStateAPI(rt *Runtime) {
 	reg("IsFlying", func(L *lua.LState) int { L.Push(lua.LBool(rt.motion.Flying)); return 1 })
 	reg("IsIndoors", func(L *lua.LState) int { L.Push(lua.LBool(rt.motion.Indoors)); return 1 })
 	reg("IsOutdoors", func(L *lua.LState) int { L.Push(lua.LBool(!rt.motion.Indoors)); return 1 })
-	reg("IsFlyableArea", func(L *lua.LState) int { L.Push(lua.LBool(rt.motion.FlyableArea)); return 1 })
+	reg("IsFlyableArea", func(L *lua.LState) int { L.Push(lua.LBool(rt.flyableArea())); return 1 })
 	reg("IsMounted", func(L *lua.LState) int {
 		info := rt.unitInfo("player")
 		L.Push(lua.LBool(info != nil && info.Mounted))
@@ -115,20 +115,6 @@ func registerPlayerStateAPI(rt *Runtime) {
 		}
 		return 1
 	})
-	spellKind := func(helpful bool) lua.LGFunction {
-		return func(L *lua.LState) int {
-			if info, ok := rt.spellNamed(L, 1); ok {
-				L.Push(lua.LBool(spellIsHelpful(info) == helpful))
-				return 1
-			}
-			L.Push(lua.LNil)
-			return 1
-		}
-	}
-	reg("IsHelpfulSpell", spellKind(true))
-	reg("IsHarmfulSpell", spellKind(false))
-	reg("IsHelpfulItem", func(L *lua.LState) int { L.Push(lua.LNil); return 1 })
-	reg("IsHarmfulItem", func(L *lua.LState) int { L.Push(lua.LNil); return 1 })
 }
 
 // spellAuraStealth is the aura type of stealth.

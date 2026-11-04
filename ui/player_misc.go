@@ -58,6 +58,8 @@ type miscState struct {
 	titles []CharTitle
 	summon summonState
 	duel   uint64
+	// duelOpponent is the player the character is to duel.
+	duelOpponent uint64
 }
 
 // SetTitles gives the interface the rows of CharTitles.dbc.
@@ -135,6 +137,11 @@ func (rt *Runtime) handleMiscPacket(packet world.Packet) bool {
 			return true
 		}
 		level, _ := reader.U32()
+		rt.notePlayed(int(total))
+		if rt.refund.quietPlayed > 0 {
+			rt.refund.quietPlayed--
+			return true
+		}
 		rt.FireEvent("TIME_PLAYED_MSG", lua.LNumber(total), lua.LNumber(level))
 	case packetDuelRequested:
 		arbiter, err := reader.U64()
@@ -142,6 +149,9 @@ func (rt *Runtime) handleMiscPacket(packet world.Packet) bool {
 			return true
 		}
 		challenger, _ := reader.U64()
+		if challenger != rt.playerGUID() {
+			rt.misc.duelOpponent = challenger
+		}
 		rt.misc.duel = arbiter
 		rt.FireEvent("DUEL_REQUESTED", lua.LString(rt.nameOf(challenger)))
 	case packetDuelOutOfBounds:
@@ -149,7 +159,7 @@ func (rt *Runtime) handleMiscPacket(packet world.Packet) bool {
 	case packetDuelInBounds:
 		rt.FireEvent("DUEL_INBOUNDS")
 	case packetDuelComplete:
-		rt.misc.duel = 0
+		rt.misc.duel, rt.misc.duelOpponent = 0, 0
 		rt.FireEvent("DUEL_FINISHED")
 	case packetSummonRequest:
 		summoner, err := reader.U64()
@@ -302,7 +312,7 @@ func registerMiscAPI(rt *Runtime) {
 	reg("CancelDuel", func(L *lua.LState) int {
 		if rt.misc.duel != 0 {
 			rt.send(clientDuelCancelled, binary.LittleEndian.AppendUint64(nil, rt.misc.duel))
-			rt.misc.duel = 0
+			rt.misc.duel, rt.misc.duelOpponent = 0, 0
 		}
 		return 0
 	})

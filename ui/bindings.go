@@ -383,8 +383,6 @@ func registerBindingAPI(rt *Runtime) {
 		rt.runBindingCommand(rt.bindings.byName[L.CheckString(1)], state)
 		return 0
 	})
-	reg("SaveBindings", func(L *lua.LState) int { return 0 })
-	reg("LoadBindings", func(L *lua.LState) int { return 0 })
 	reg("GetCurrentBindingSet", func(L *lua.LState) int { L.Push(lua.LNumber(1)); return 1 })
 	reg("GetBindingFromClick", func(L *lua.LState) int {
 		button := strings.ToUpper(L.CheckString(1))

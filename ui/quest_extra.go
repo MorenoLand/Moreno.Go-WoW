@@ -236,9 +236,6 @@ func registerQuestExtraAPI(rt *Runtime) {
 		return 0
 	})
 	// What the map marks of a quest (its drops and objectives) is not kept.
-	reg("GetNumQuestItemDrops", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("GetQuestLogItemDrop", func(L *lua.LState) int { return 0 })
-	reg("GetQuestPOILeaderBoard", func(L *lua.LState) int { return 0 })
 	reg("GetDebugZoneMap", func(L *lua.LState) int { return 0 })
 }
 

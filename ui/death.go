@@ -31,6 +31,8 @@ type deathState struct {
 	timer       bool
 	// corpseNear is set while the recover-corpse offer is showing.
 	corpseNear bool
+	// releaseStart is when the wait to release began.
+	releaseStart time.Time
 }
 
 // SetCorpseReclaimDelay records how long until the corpse can be reclaimed.
@@ -98,9 +100,6 @@ func registerDeathAPI(rt *Runtime) {
 		L.Push(lua.LNumber(int(remaining + 0.999)))
 		return 1
 	})
-	reg("HasSoulstone", func(L *lua.LState) int { L.Push(lua.LNil); return 1 })
-	reg("UseSoulstone", func(L *lua.LState) int { return 0 })
-	reg("GetReleaseTimeRemaining", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
 	reg("ResurrectGetOfferer", func(L *lua.LState) int {
 		L.Push(lua.LString(rt.death.offererName))
 		return 1

@@ -50,6 +50,8 @@ type serverMessageState struct {
 	// spiritHealer, binder and trainer are the guids a pending confirmation
 	// answers to.
 	spiritHealer, binder, trainer uint64
+	// wipeCost is what the trainer asks to unlearn the talents.
+	wipeCost uint32
 }
 
 // SetServerMessages gives the interface the text of each kind of server
@@ -135,7 +137,11 @@ func (rt *Runtime) handleServerTextPacket(packet world.Packet) bool {
 			rt.ShowGameError(errTalentWipeNobody)
 			return true
 		}
-		rt.serverText.trainer = guid
+		// The offer is only taken from a trainer within reach.
+		if !rt.nearNPC(guid) {
+			return true
+		}
+		rt.serverText.trainer, rt.serverText.wipeCost = guid, cost
 		rt.FireEvent("CONFIRM_TALENT_WIPE", lua.LNumber(cost))
 	case packetBinder:
 		if guid, err := reader.U64(); err == nil {
@@ -182,7 +188,11 @@ func registerServerTextAPI(rt *Runtime) {
 		return 0
 	})
 	reg("ConfirmTalentWipe", func(L *lua.LState) int {
-		if guid := rt.serverText.trainer; guid != 0 {
+		if guid := rt.serverText.trainer; guid != 0 && rt.nearNPC(guid) {
+			if rt.inventory.money < rt.serverText.wipeCost {
+				rt.ShowGameError(0x28)
+				return 0
+			}
 			rt.send(clientTalentWipe, binary.LittleEndian.AppendUint64(nil, guid))
 		}
 		return 0

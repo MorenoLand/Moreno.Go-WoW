@@ -49,6 +49,16 @@ func (rt *Runtime) loadMacros() {
 	state.loaded = true
 	if store := rt.macroStore(); store != nil {
 		state.account, state.character = store.LoadMacros(false), store.LoadMacros(true)
+		return
+	}
+	if path := rt.macroFile(false); path != "" {
+		state.account = readMacroFile(path)
+	}
+	if path := rt.macroFile(true); path != "" {
+		state.character = readMacroFile(path)
+	} else {
+		// The character is not known yet: ask again when it is.
+		state.loaded = false
 	}
 }
 
@@ -56,7 +66,10 @@ func (rt *Runtime) saveMacros() {
 	if store := rt.macroStore(); store != nil {
 		store.SaveMacros(false, rt.macros.account)
 		store.SaveMacros(true, rt.macros.character)
+		return
 	}
+	writeMacroFile(rt.macroFile(false), rt.macros.account)
+	writeMacroFile(rt.macroFile(true), rt.macros.character)
 }
 
 // macroAt finds a macro by its 1-based index over both lists.
@@ -215,7 +228,11 @@ func registerMacroAPI(rt *Runtime) {
 		}
 		return 0
 	})
-	reg("StopMacro", func(L *lua.LState) int { return 0 })
+	// Stopping a macro skips the rest of its lines.
+	reg("StopMacro", func(L *lua.LState) int {
+		L.SetGlobal("__macro_stop", lua.LTrue)
+		return 0
+	})
 	reg("RunMacro", func(L *lua.LState) int {
 		if text := rt.macroText(rt.macroArg(L, 1)); text != "" {
 			rt.runMacroText(text)
@@ -240,6 +257,7 @@ func (rt *Runtime) runMacroText(text string) {
 const macroRunner = `
 local text = __macro_text
 __macro_text = nil
+__macro_stop = nil
 local box = MacroRunnerEditBox
 if not box then
 	box = CreateFrame("EditBox", "MacroRunnerEditBox", UIParent)
@@ -257,6 +275,10 @@ for line in string.gmatch(text .. "\n", "([^\n]*)\n") do
 			box:SetText(command .. " " .. parsed)
 			ChatEdit_ParseText(box, 1)
 		end
+	end
+	if __macro_stop then
+		__macro_stop = nil
+		break
 	end
 end
 `

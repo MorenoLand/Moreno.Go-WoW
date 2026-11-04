@@ -272,6 +272,8 @@ func (rt *Runtime) itemTooltipMethods() map[string]func(L *lua.LState, w *widget
 			switch {
 			case strings.Contains(link, "item:"):
 				rt.fillItemTooltip(w, itemEntryFromLink(link), nil)
+			case strings.Contains(link, "trade:"):
+				rt.viewTradeLink(link[strings.Index(link, "trade:")+6:])
 			case strings.Contains(link, "spell:"):
 				var id uint32
 				if index := strings.Index(link, "spell:"); index >= 0 {

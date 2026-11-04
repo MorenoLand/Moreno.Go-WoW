@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/MorenoLand/Moreno.WoW/world"
@@ -136,8 +137,24 @@ func registerCombatAPI(rt *Runtime) {
 	reg("CombatLogClearEntries", func(L *lua.LState) int { rt.combat.entries, rt.combat.cursor = nil, 0; return 0 })
 	reg("CombatLogResetFilter", func(L *lua.LState) int { return 0 })
 	reg("CombatLogAddFilter", func(L *lua.LState) int { L.Push(lua.LTrue); return 1 })
-	reg("CombatLogSetRetentionTime", func(L *lua.LState) int { return 0 })
-	reg("CombatLogGetRetentionTime", func(L *lua.LState) int { L.Push(lua.LNumber(300)); return 1 })
+	// The time the combat log keeps its lines is a variable of the client.
+	reg("CombatLogSetRetentionTime", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTNumber {
+			L.RaiseError("Usage: CombatLogSetRetentionTime(seconds)")
+			return 0
+		}
+		rt.SetCVar("combatLogRetentionTime", strconv.Itoa(L.CheckInt(1)))
+		return 0
+	})
+	reg("CombatLogGetRetentionTime", func(L *lua.LState) int {
+		value, ok := rt.GetCVar("combatLogRetentionTime")
+		if !ok {
+			value = combatLogRetentionDefault
+		}
+		seconds, _ := strconv.Atoi(value)
+		L.Push(lua.LNumber(seconds))
+		return 1
+	})
 
 	reg("StartAttack", func(L *lua.LState) int {
 		if !rt.combat.attacking {
@@ -308,3 +325,6 @@ func spellIsMount(info SpellInfo) bool {
 	}
 	return false
 }
+
+// combatLogRetentionDefault is how many seconds the combat log keeps its lines.
+const combatLogRetentionDefault = "300"

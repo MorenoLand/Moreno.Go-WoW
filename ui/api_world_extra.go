@@ -46,7 +46,6 @@ func registerWorldExtraAPI(rt *Runtime) {
 		return 1
 	})
 	reg("GetPVPRankProgress", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("GetQuestTimers", func(L *lua.LState) int { return 0 })
 	reg("CalendarGetNumPendingInvites", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
 	reg("GetMirrorTimerInfo", func(L *lua.LState) int {
 		L.Push(lua.LString("UNKNOWN"))
@@ -180,14 +179,6 @@ func registerUnitReactionAPI(rt *Runtime) {
 		}
 		return 4
 	}
-	reg("UnitReaction", func(L *lua.LState) int {
-		if r := reaction(L.OptString(1, ""), L.OptString(2, "")); r != 0 {
-			L.Push(lua.LNumber(r))
-			return 1
-		}
-		L.Push(lua.LNil)
-		return 1
-	})
 	// UnitSelectionColor is the colour a unit's name and target frame take from how
 	// it stands to the player: hostile red, neutral yellow, friendly green (blue
 	// for a friendly player).
@@ -211,28 +202,6 @@ func registerUnitReactionAPI(rt *Runtime) {
 		L.Push(lua.LNumber(blue))
 		L.Push(lua.LNumber(1))
 		return 4
-	})
-	reg("UnitCanAttack", func(L *lua.LState) int {
-		a, b := L.OptString(1, ""), L.OptString(2, "")
-		r := reaction(a, b)
-		target := known(b)
-		L.Push(lua.LBool(r != 0 && r < 5 && target != nil && !target.Dead && !strings.EqualFold(a, b)))
-		return 1
-	})
-	reg("UnitCanAssist", func(L *lua.LState) int {
-		a, b := L.OptString(1, ""), L.OptString(2, "")
-		r := reaction(a, b)
-		target := known(b)
-		L.Push(lua.LBool(r >= 5 && target != nil && !target.Dead))
-		return 1
-	})
-	reg("UnitIsEnemy", func(L *lua.LState) int {
-		L.Push(lua.LBool(reaction(L.OptString(1, ""), L.OptString(2, "")) == 2))
-		return 1
-	})
-	reg("UnitIsFriend", func(L *lua.LState) int {
-		L.Push(lua.LBool(reaction(L.OptString(1, ""), L.OptString(2, "")) >= 5))
-		return 1
 	})
 	reg("UnitAffectingCombat", func(L *lua.LState) int {
 		info := known(L.OptString(1, ""))

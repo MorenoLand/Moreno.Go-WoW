@@ -59,25 +59,16 @@ func registerInspectAPI(rt *Runtime) {
 		guid := rt.UnitGUID(L.CheckString(1))
 		if host := rt.inspectHost(); host != nil && guid != 0 {
 			rt.talents.inspected, rt.talents.inspectedGUID = nil, guid
+			rt.resetInspectPVP()
 			_ = host.Inspect(guid)
 		}
 		return 0
 	})
 	reg("ClearInspectPlayer", func(L *lua.LState) int {
 		rt.talents.inspected, rt.talents.inspectedGUID = nil, 0
+		rt.resetInspectPVP()
 		return 0
 	})
-	// Honor and arena figures of the inspected player are not sent to a client
-	// that did not ask in the old way: the window shows none.
-	reg("HasInspectHonorData", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
-	reg("RequestInspectHonorData", func(L *lua.LState) int { return 0 })
-	reg("GetInspectHonorData", func(L *lua.LState) int {
-		for index := 0; index < 8; index++ {
-			L.Push(lua.LNumber(0))
-		}
-		return 8
-	})
-	reg("GetInspectArenaTeamData", func(L *lua.LState) int { return 0 })
 }
 
 // SetUnitDistance gives the interface the distance in yards between the

@@ -30,6 +30,8 @@ type tradeRow struct {
 type tradeSkillState struct {
 	open      bool
 	line      uint32
+	// spell is the spell of the profession whose recipes are showing.
+	spell uint32
 	collapsed map[string]bool
 	selected  int
 	// Filters.
@@ -46,6 +48,10 @@ type tradeSkillState struct {
 	repeatLeft  int
 	// toolNames are the names of the tool categories (TotemCategory.dbc).
 	toolNames map[uint32]string
+	// linked is the recipe list of another player the window shows.
+	linked *tradeLink
+	// pendingLink waits for the name of the player whose link was opened.
+	pendingLink *pendingTradeLink
 }
 
 // SetToolNames installs the names of the tools recipes ask for.
@@ -69,7 +75,8 @@ func (rt *Runtime) openTradeSkillFor(spell uint32) {
 		return
 	}
 	state := &rt.tradeSkill
-	state.line = info.SkillLine
+	state.line, state.spell = info.SkillLine, spell
+	state.linked = nil
 	state.selected = 0
 	state.nameFilter, state.minLevel, state.maxLevel, state.onlyMakeable = "", 0, 0, false
 	state.subclassOff, state.slotOff = nil, nil
@@ -90,6 +97,7 @@ func (rt *Runtime) CloseTradeSkill() {
 		return
 	}
 	rt.tradeSkill.open = false
+	rt.tradeSkill.linked = nil
 	rt.tradeSkill.repeatLeft = 0
 	rt.FireEvent("TRADE_SKILL_CLOSE")
 }
@@ -212,6 +220,9 @@ func inventoryTypeConstant(kind uint32) string {
 
 // skillRankOf is the character's rank in a skill line.
 func (rt *Runtime) skillRankOf(line uint32) (name string, rank, max int) {
+	if link := rt.tradeSkill.linked; link != nil && rt.tradeSkill.open && line == rt.tradeSkill.line {
+		return rt.gameplay.Skills[line].Name, link.rank, link.max
+	}
 	for _, entry := range rt.skills.entries {
 		if entry.ID == line {
 			return entry.Name, entry.Rank, entry.Max
@@ -238,6 +249,17 @@ func recipeDifficulty(info SpellInfo, rank int) string {
 func (rt *Runtime) knownRecipes() []uint32 {
 	state := &rt.tradeSkill
 	var list []uint32
+	if state.linked != nil {
+		for index, ability := range rt.skillAbilities[state.line] {
+			if !state.linked.has(index) {
+				continue
+			}
+			if info, ok := rt.gameplay.Catalog[ability.Spell]; ok && isRecipe(info) {
+				list = append(list, ability.Spell)
+			}
+		}
+		return list
+	}
 	for id := range rt.gameplay.Known {
 		info, ok := rt.gameplay.Catalog[id]
 		if !ok || info.SkillLine != state.line || !isRecipe(info) {
@@ -534,8 +556,27 @@ func registerTradeSkillAPI(rt *Runtime) {
 		}
 		return 0
 	})
-	reg("GetTradeSkillListLink", func(L *lua.LState) int { return 0 })
-	reg("IsTradeSkillLinked", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	// The link that hands the recipes of the open profession to others.
+	reg("GetTradeSkillListLink", func(L *lua.LState) int {
+		if link, ok := rt.tradeSkillListLink(); ok {
+			L.Push(lua.LString(link))
+		} else {
+			L.Push(lua.LNil)
+		}
+		return 1
+	})
+	// Looking at the recipes another player linked is not something the
+	// window does here, so what shows is always the character's own.
+	reg("IsTradeSkillLinked", func(L *lua.LState) int {
+		if link := state.linked; link != nil {
+			L.Push(lua.LNumber(1))
+			L.Push(lua.LString(link.name))
+			return 2
+		}
+		L.Push(lua.LNil)
+		L.Push(lua.LNil)
+		return 2
+	})
 	reg("GetTradeSkillSelectionIndex", func(L *lua.LState) int { L.Push(lua.LNumber(state.selected)); return 1 })
 	reg("SelectTradeSkill", func(L *lua.LState) int { state.selected = L.CheckInt(1); return 0 })
 	toggle := func(collapsed bool) lua.LGFunction {

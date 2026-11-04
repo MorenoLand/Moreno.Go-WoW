@@ -17,6 +17,21 @@ func loadSoulboundEnchants(loader *ui.Loader) map[uint32]bool {
 	return bound
 }
 
+// loadEnchantGems lists the gem item each socket enchantment comes from.
+func loadEnchantGems(loader *ui.Loader) map[uint32]uint32 {
+	table, err := loadCharacterDBC(loader, `DBFilesClient\SpellItemEnchantment.dbc`)
+	if err != nil || table.fields < 34 {
+		return nil
+	}
+	gems := map[uint32]uint32{}
+	for row := 0; row < table.records; row++ {
+		if item := table.value(row, 33); item != 0 {
+			gems[table.value(row, 0)] = item
+		}
+	}
+	return gems
+}
+
 // loadEnchantNames reads the names of the enchantments of
 // SpellItemEnchantment.dbc.
 func loadEnchantNames(loader *ui.Loader) map[uint32]string {

@@ -385,6 +385,9 @@ type QuestInfo struct {
 	Type, SuggestedSize uint32
 	Flags               uint32
 	RewardMoney         uint32
+	// RewardMoneyMax is the gold given instead at the highest level; RewardSpellCast
+	// the spell cast on the player.
+	RewardMoneyMax, RewardSpellCast uint32
 	Title               string
 	Objectives          string
 	Details             string
@@ -397,6 +400,8 @@ type QuestInfo struct {
 	// items each objective's creature drops.
 	StartItem uint32
 	ItemDrop  [4]uint32
+	// ItemDropCount is how many of each of those items the quest asks for.
+	ItemDropCount [4]uint32
 	Items   [6]QuestItem
 	// Text is the line each target is described by.
 	TargetText [4]string
@@ -467,13 +472,13 @@ func ParseQuestQueryResponse(body []byte) (QuestInfo, error) {
 	}
 	// Bonus money, then the display spell, the spell, the honor, the honor
 	// multiplier and the start item.
-	if err = r.Skip(4); err != nil {
+	if info.RewardMoneyMax, err = r.U32(); err != nil {
 	return info, err
 	}
 	if info.RewardSpell, err = r.U32(); err != nil {
 	return info, err
 	}
-	if err = r.Skip(4); err != nil {
+	if info.RewardSpellCast, err = r.U32(); err != nil {
 	return info, err
 	}
 	honor, err := r.U32()
@@ -570,7 +575,7 @@ func ParseQuestQueryResponse(body []byte) (QuestInfo, error) {
 		if info.ItemDrop[index], err = r.U32(); err != nil {
 			return info, err
 		}
-		if err = r.Skip(4); err != nil {
+		if info.ItemDropCount[index], err = r.U32(); err != nil {
 			return info, err
 		}
 	}

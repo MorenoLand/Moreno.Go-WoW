@@ -279,62 +279,11 @@ func (rt *Runtime) evaluateMacroConditions(spec string) string {
 	return ""
 }
 
-// macroConditionsHold reports whether every comma separated condition holds.
+// macroConditionsHold reports whether every comma separated condition holds,
+// the way macros judge them.
 func (rt *Runtime) macroConditionsHold(conditions string) bool {
-	unit := "target"
-	for _, condition := range strings.Split(conditions, ",") {
-		condition = strings.ToLower(strings.TrimSpace(condition))
-		switch {
-		case condition == "":
-			continue
-		case strings.HasPrefix(condition, "@"):
-			unit = condition[1:]
-			continue
-		case strings.HasPrefix(condition, "target="):
-			unit = strings.TrimPrefix(condition, "target=")
-			continue
-		}
-		if !rt.macroCondition(condition, unit) {
-			return false
-		}
-	}
-	return true
-}
-
-func (rt *Runtime) macroCondition(condition, unit string) bool {
-	negate := false
-	if strings.HasPrefix(condition, "no") && condition != "nomod" {
-		negate, condition = true, strings.TrimPrefix(condition, "no")
-	}
-	name, argument := condition, ""
-	if colon := strings.IndexByte(condition, ':'); colon >= 0 {
-		name, argument = condition[:colon], condition[colon+1:]
-	}
-	player := rt.unitInfo("player")
-	target := rt.unitInfo(unit)
-	known := target != nil && target.Exists
-	var holds bool
-	switch name {
-	case "exists":
-		holds = known
-	case "dead":
-		holds = known && target.Dead
-	case "help":
-		holds = known && target.Friendly
-	case "harm":
-		holds = known && target.Hostile
-	case "combat":
-		holds = player != nil && player.InCombat
-	case "mounted":
-		holds = player != nil && player.Mounted
-	case "bar", "actionbar":
-		page, _ := strconv.Atoi(argument)
-		holds = page == rt.gameplay.Page
-	default:
-		// vehicleui, bonusbar, stance, form, stealth, flying, swimming, mod and
-		// the rest: none holds here.
-	}
-	return holds != negate
+	held, _ := rt.conditionsHold(conditions)
+	return held
 }
 
 // runSecureSnippet runs a secure handler snippet against a frame: body is its

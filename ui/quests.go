@@ -446,7 +446,6 @@ func registerQuestAPI(rt *Runtime) {
 		L.Push(lua.LFalse)
 		return 3
 	})
-	reg("IsActiveQuestTrivial", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
 	reg("SelectAvailableQuest", func(L *lua.LState) int {
 		quests := rt.greetingQuests(false)
 		if index := L.CheckInt(1); index >= 1 && index <= len(quests) {
@@ -504,7 +503,6 @@ func registerQuestAPI(rt *Runtime) {
 		rt.ShowInfoMessage(rt.globalString("ERR_QUEST_MUST_CHOOSE", "You must choose a reward."))
 		return 0
 	})
-	reg("GetQuestBackgroundMaterial", func(L *lua.LState) int { return 0 })
 	reg("GetMaterialTextColors", func(L *lua.LState) int { return 0 })
 	// The quest log.
 	reg("GetNumQuestLogEntries", func(L *lua.LState) int {
@@ -622,18 +620,6 @@ func registerQuestAPI(rt *Runtime) {
 		L.Push(lua.LBool(objectives[index-1].finished))
 		return 3
 	})
-	reg("GetQuestLogRewardMoney", func(L *lua.LState) int {
-		if slot, ok := selectedSlot(); ok {
-			L.Push(lua.LNumber(rt.quests.info[slot.ID].RewardMoney))
-			return 1
-		}
-		L.Push(lua.LNumber(0))
-		return 1
-	})
-	reg("GetQuestLogRequiredMoney", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("GetQuestLogRewardXP", func(L *lua.LState) int { L.Push(lua.LNumber(0)); return 1 })
-	reg("GetQuestLogRewardSpell", func(L *lua.LState) int { return 0 })
-	reg("GetQuestLogTimeLeft", func(L *lua.LState) int { return 0 })
 	reg("GetQuestLogGroupNum", func(L *lua.LState) int {
 		if slot, ok := selectedSlot(); ok {
 			L.Push(lua.LNumber(rt.quests.info[slot.ID].SuggestedSize))
@@ -773,8 +759,6 @@ func registerQuestAPI(rt *Runtime) {
 		L.Push(lua.LBool(ok && slot.State&questStateFailed != 0))
 		return 1
 	})
-	reg("GetQuestLogPushable", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
-	reg("QuestLogPushQuest", func(L *lua.LState) int { return 0 })
 	// The objectives tracker.
 	reg("IsQuestWatched", func(L *lua.LState) int {
 		rows := rt.questRows()

@@ -12,6 +12,9 @@ import (
 
 func (eng *UIEngine) LoadWorldUI() error {
 	eng.Rt.onMinimapZoom = eng.applyMinimapZoom
+	if !eng.worldUIReady {
+		eng.Rt.loadCVarFiles()
+	}
 	if eng.worldUIReady {
 		return nil
 	}
@@ -106,7 +109,12 @@ end
 		return fmt.Errorf("initialize minimap: %v", eng.Rt.ScriptErrors())
 
 	}
+	eng.Rt.loadCVarFiles()
+	eng.Rt.loadBlizzardVariables()
+	eng.Rt.loadBindingFiles()
+	eng.Rt.loadChatCache()
 	eng.Rt.FireEvent("VARIABLES_LOADED")
+	eng.Rt.loadLayoutFile()
 	eng.Rt.loggedIn = true
 	eng.Rt.FireEvent("PLAYER_LOGIN")
 	eng.Rt.FireEvent("PLAYER_ENTERING_WORLD")
@@ -180,7 +188,11 @@ func (eng *UIEngine) loadAddOn(name string) (bool, string) {
 			return false, "ADDON_DEP_" + strings.ToUpper(reason)
 		}
 	}
-	if err := eng.AssetLoader.LoadTOC(toc, nil); err != nil {
+	eng.Rt.loadAddOnVariables(strings.TrimSpace(name), data)
+	heapBefore := heapInUse()
+	err = eng.AssetLoader.LoadTOC(toc, nil)
+	eng.Rt.noteAddOnMemory(name, heapBefore)
+	if err != nil {
 	log.Printf("add-on %s: %v", name, err)
 	return false, "ADDON_LOAD_FAILED"
 	}
@@ -354,6 +366,7 @@ func (rt *Runtime) completeLogout() {
 	rt.quitPending = false
 	rt.logoutRemaining = 0
 	rt.hideLogoutPopup("CAMP")
+	rt.FireEvent("PLAYER_LOGOUT")
 	if host, ok := rt.Host.(LogoutHost); ok {
 		host.Logout()
 	}
@@ -367,6 +380,7 @@ func (rt *Runtime) completeQuit() {
 	rt.quitPending = false
 	rt.logoutRemaining = 0
 	rt.hideLogoutPopup("QUIT")
+	rt.FireEvent("PLAYER_LOGOUT")
 	if rt.Host != nil {
 		rt.Host.Quit(false)
 	}

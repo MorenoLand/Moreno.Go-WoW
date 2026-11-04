@@ -522,3 +522,24 @@ func (rt *Runtime) rangedDamageSchool() int {
 // SetSkillValues keeps the value of every skill line the character has, the
 // ones the skill window hides too: (rank, maximum, temporary, permanent).
 func (rt *Runtime) SetSkillValues(values map[uint32][4]int) { rt.skillValues = values }
+
+// weaponSkillRatingBonus is the ranks of a weapon skill the weapon skill
+// ratings give: the general rating and the one of each slot holding a weapon of
+// that skill.
+func (rt *Runtime) weaponSkillRatingBonus(skill uint32) int {
+	for slot, equip := range []int{equipSlotMainHand, equipSlotOffHand, equipSlotRanged} {
+		template := rt.equippedTemplate(equip)
+		var line uint32
+		switch {
+		case template == nil:
+			line = skillUnarmed
+		case template.Class == 2:
+			line = weaponSkillLine[template.SubClass]
+		}
+		if line != skill {
+			continue
+		}
+		return int(math.RoundToEven(rt.ratingBonus(0)-0.5)) + int(math.RoundToEven(rt.ratingBonus(20+slot)-0.5))
+	}
+	return 0
+}

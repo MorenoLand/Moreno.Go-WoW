@@ -125,6 +125,7 @@ func (rt *Runtime) SetItemTemplate(template world.ItemTemplate) {
 	rt.RefreshGuildBank()
 	rt.refreshTradeSkill()
 	rt.refreshAuction()
+	rt.requestRefundInfo()
 	if rt.merchant.open {
 		rt.FireEvent("MERCHANT_UPDATE")
 	}
@@ -146,13 +147,20 @@ func (rt *Runtime) SetInventory(slots [invSlotCount]uint64, items map[uint64]*It
 		switch {
 		case slot >= invEquipStart && slot < invEquipEnd, slot >= invBagStart && slot < invBagEnd:
 			rt.FireEvent("UNIT_INVENTORY_CHANGED", stringValue("player"))
+			if slot < invEquipEnd {
+				if after != 0 {
+					rt.FireEvent("PLAYER_EQUIPMENT_CHANGED", numberValue(slot+1), numberValue(1))
+				} else {
+					rt.FireEvent("PLAYER_EQUIPMENT_CHANGED", numberValue(slot+1))
+				}
+			}
 		case slot >= invPackStart && slot < invPackEnd:
 			changedBags[0] = true
 		case slot >= invBankStart && slot < invBankEnd:
 			changedBags[-1] = true
 			rt.FireEvent("PLAYERBANKSLOTS_CHANGED", numberValue(slot-invBankStart+1))
 		case slot >= invBankBagStart && slot < invBankBagEnd:
-			rt.FireEvent("PLAYERBANKBAGSLOTS_CHANGED", numberValue(slot-invBankBagStart+1))
+			rt.FireEvent("PLAYERBANKSLOTS_CHANGED", numberValue(slot-invBankStart+1))
 		case slot >= invBuybackStart && slot < invBuybackEnd:
 			if rt.merchant.open {
 				rt.FireEvent("MERCHANT_UPDATE")
@@ -195,6 +203,8 @@ func (rt *Runtime) SetInventory(slots [invSlotCount]uint64, items map[uint64]*It
 		rt.FireEvent("PLAYER_MONEY")
 	}
 	rt.requestMissingTemplates()
+	rt.requestRefundInfo()
+	rt.refreshInventoryAlerts()
 }
 
 func itemsSame(a, b *ItemInstance) bool {

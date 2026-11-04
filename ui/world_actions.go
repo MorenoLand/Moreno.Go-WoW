@@ -292,8 +292,36 @@ func registerWorldActionAPI(rt *Runtime) {
 		if L.Get(1) != lua.LNil && L.Get(1) != lua.LFalse && L.Get(1) != lua.LNumber(0) {
 			optOut = 1
 		}
+		rt.optOutOfLoot = optOut != 0
 		rt.send(clientOptOutOfLoot, []byte{optOut, 0, 0, 0})
 		return 0
+	})
+	reg("GetOptOutOfLoot", func(L *lua.LState) int {
+		if rt.optOutOfLoot {
+			L.Push(lua.LNumber(1))
+		} else {
+			L.Push(lua.LNil)
+		}
+		return 1
+	})
+	reg("IsReferAFriendLinked", func(L *lua.LState) int {
+		if rafLinked(rt.unitInfo(L.OptString(1, ""))) {
+			L.Push(lua.LNumber(1))
+		} else {
+			L.Push(lua.LNil)
+		}
+		return 1
+	})
+	// The quests done today fill the daily quest fields of the player.
+	reg("GetDailyQuestsCompleted", func(L *lua.LState) int {
+		done := 0
+		for index := 0; index < dailyQuestFields; index++ {
+			if rt.field(dailyQuestFirstField+index) != 0 {
+				done++
+			}
+		}
+		L.Push(lua.LNumber(done))
+		return 1
 	})
 	reg("SetPVP", func(L *lua.LState) int {
 		rt.send(clientTogglePVP, nil)
@@ -311,7 +339,7 @@ func registerWorldActionAPI(rt *Runtime) {
 		rt.FireEvent("PLAYER_LOGOUT")
 		return 0
 	})
-	reg("GetRealmName", func(L *lua.LState) int { return push(L, lua.LString(rt.realmName)) })
+	reg("GetRealmName", func(L *lua.LState) int { return push(L, lua.LString(rt.currentRealm())) })
 	reg("GetRealZoneText", func(L *lua.LState) int {
 		if catalog := rt.worldMap.catalog; catalog != nil && rt.worldMap.hasPlayer {
 			for _, page := range catalog.Pages {
@@ -342,6 +370,9 @@ func registerWorldActionAPI(rt *Runtime) {
 const (
 	clientSetSelection world.ClientOpcode = 0x013D
 	clientOptOutOfLoot world.ClientOpcode = 0x0409
+	// PLAYER_FIELD_DAILY_QUESTS_1 and how many follow it.
+	dailyQuestFirstField = 1280
+	dailyQuestFields     = 25
 	clientTogglePVP    world.ClientOpcode = 0x0253
 )
 

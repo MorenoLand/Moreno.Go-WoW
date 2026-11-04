@@ -25,6 +25,7 @@ type Connection struct {
 	streamMu  sync.Mutex
 	stream    chan PacketEvent
 	pending   []Packet
+	cache     *QueryCache
 }
 
 func Open(address, account string, realmID uint8, sessionKey [auth.SessionKeyLen]byte, timeout time.Duration) (*Connection, error) {
@@ -32,7 +33,7 @@ func Open(address, account string, realmID uint8, sessionKey [auth.SessionKeyLen
 	if err != nil {
 		return nil, fmt.Errorf("could not reach world server at %s: %w", address, err)
 	}
-	connection := &Connection{conn: conn, timeout: timeout, started: time.Now()}
+	connection := &Connection{conn: conn, timeout: timeout, started: time.Now(), cache: openQueryCache()}
 	if err := connection.handshake(account, uint32(realmID), sessionKey); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -40,7 +41,12 @@ func Open(address, account string, realmID uint8, sessionKey [auth.SessionKeyLen
 	return connection, nil
 }
 
-func (c *Connection) Close() error { return c.conn.Close() }
+func (c *Connection) Close() error {
+	if c.cache != nil {
+		c.cache.close()
+	}
+	return c.conn.Close()
+}
 
 func (c *Connection) Expansion() uint8 { return c.expansion }
 
@@ -157,6 +163,9 @@ func (c *Connection) StartPackets() <-chan PacketEvent {
 				stream <- PacketEvent{Err: err}
 				return
 			}
+			if c.cache != nil {
+				c.cache.remember(packet)
+			}
 			stream <- PacketEvent{Packet: packet}
 		}
 	}()
@@ -207,7 +216,27 @@ type Packet struct {
 	Body   []byte
 }
 
+// deliver hands a packet to the reader as if the server had sent it.
+func (c *Connection) deliver(packet Packet) bool {
+	c.streamMu.Lock()
+	stream := c.stream
+	c.streamMu.Unlock()
+	if stream == nil {
+		return false
+	}
+	go func() {
+		defer func() { _ = recover() }()
+		stream <- PacketEvent{Packet: packet}
+	}()
+	return true
+}
+
 func (c *Connection) send(opcode ClientOpcode, body []byte) error {
+	if c.cache != nil {
+		if reply, ok := c.cache.answer(opcode, body); ok && c.deliver(reply) {
+			return nil
+		}
+	}
 	packet, err := BuildClientPacket(opcode, body)
 	if err != nil {
 		return err

@@ -80,6 +80,10 @@ func installTemplateFactory(l *Loader) {
 				w.points = append(w.points, parseAnchors(group, w.parentName())...)
 			case "Backdrop":
 				w.backdrop = parseBackdrop(group)
+			case "ClampRectInsets":
+				if inset := group.child("AbsInset"); inset != nil {
+					w.clampInsets = [4]float64{attrFloat(inset, "left", 0), attrFloat(inset, "right", 0), attrFloat(inset, "top", 0), attrFloat(inset, "bottom", 0)}
+				}
 			case "HitRectInsets":
 				if inset := group.child("AbsInset"); inset != nil {
 					w.hitInsetL = attrFloat(inset, "left", 0)
@@ -719,6 +723,10 @@ func (l *Loader) buildWidget(node *xmlNode, parent *widget, interfacePath string
 				w.textInsetB = attrFloat(inset, "bottom", 0)
 				w.textInsetsSet = true
 			}
+		case "ClampRectInsets":
+			if inset := group.child("AbsInset"); inset != nil {
+				w.clampInsets = [4]float64{attrFloat(inset, "left", 0), attrFloat(inset, "right", 0), attrFloat(inset, "top", 0), attrFloat(inset, "bottom", 0)}
+			}
 		case "HitRectInsets":
 			if inset := group.child("AbsInset"); inset != nil {
 				w.hitInsetL = attrFloat(inset, "left", 0)
@@ -1241,7 +1249,7 @@ func mergeTemplate(l *Loader, tpl, instance *xmlNode) *xmlNode {
 		merged.attrs[k] = v
 	}
 	replaced := map[string]bool{}
-	for _, group := range []string{"Size", "Anchors", "Backdrop", "TexCoords", "Color", "ButtonText", "NormalFont", "HighlightFont", "DisabledFont", "CheckedFont", "NormalTexture", "PushedTexture", "DisabledTexture", "HighlightTexture", "CheckedTexture", "DisabledCheckedTexture", "ThumbTexture", "TextInsets", "HitRectInsets"} {
+	for _, group := range []string{"Size", "Anchors", "Backdrop", "TexCoords", "Color", "ButtonText", "NormalFont", "HighlightFont", "DisabledFont", "CheckedFont", "NormalTexture", "PushedTexture", "DisabledTexture", "HighlightTexture", "CheckedTexture", "DisabledCheckedTexture", "ThumbTexture", "TextInsets", "HitRectInsets", "ClampRectInsets"} {
 		if instance.child(group) != nil {
 			replaced[group] = true
 		}

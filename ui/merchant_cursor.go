@@ -42,6 +42,12 @@ func (rt *Runtime) canBuyVendorItem(entry, price, extendedCost uint32) bool {
 			return false
 		}
 	}
+	return rt.arenaRatingMet(cost)
+}
+
+// arenaRatingMet is whether a team of the character's has the rating a price
+// asks for; a price that asks for none is always met.
+func (rt *Runtime) arenaRatingMet(cost ExtendedCost) bool {
 	if cost.Rating != 0 && cost.Bracket < uint32(len(arenaBracketSize)) {
 		met := false
 		for slot := 0; slot < arenaTeamSlots; slot++ {

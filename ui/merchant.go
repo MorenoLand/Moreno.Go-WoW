@@ -92,8 +92,20 @@ func registerMerchantAPI(rt *Runtime) {
 		L.Push(lua.LNumber(item.Price))
 		L.Push(lua.LNumber(quantity))
 		L.Push(lua.LNumber(item.Available))
-		L.Push(lua.LTrue)
-		L.Push(lua.LBool(item.ExtendedCost != 0))
+		usable := rt.arenaRatingMet(rt.extendedCosts[item.ExtendedCost])
+		if template := rt.itemTemplateIfKnown(item.Entry); template != nil && !rt.meetsItemRequirements(template) {
+			usable = false
+		}
+		if usable {
+			L.Push(lua.LTrue)
+		} else {
+			L.Push(lua.LNil)
+		}
+		if item.ExtendedCost != 0 {
+			L.Push(lua.LNumber(1))
+		} else {
+			L.Push(lua.LNil)
+		}
 		return 7
 	})
 	reg("GetMerchantItemLink", func(L *lua.LState) int {

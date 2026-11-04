@@ -211,6 +211,7 @@ func registerSkillAPI(rt *Runtime) {
 		entry := row.entry
 		pending := rt.skills.pending[entry.ID]
 		rank, maximum := skillCurrent(entry)
+		rank += rt.weaponSkillRatingBonus(entry.ID)
 		if entry.Flags&skillFlagSingle != 0 {
 			maximum = 1
 			if rank > 1 {

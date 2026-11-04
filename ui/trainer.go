@@ -246,6 +246,17 @@ func registerTrainerAPI(rt *Runtime) {
 		}
 		return 0
 	})
+	// The step a spell asks for is a field the server's list never fills, so the
+	// answer is always no step and nothing in the way.
+	reg("GetTrainerServiceStepReq", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTNumber {
+			L.RaiseError("Usage: GetTrainerServiceStepReq(index)")
+			return 0
+		}
+		L.Push(lua.LNil)
+		L.Push(lua.LNumber(1))
+		return 2
+	})
 	reg("GetTrainerServiceNumAbilityReq", func(L *lua.LState) int {
 		spell, ok := rowAt(L.CheckInt(1))
 		count := 0
@@ -272,8 +283,22 @@ func registerTrainerAPI(rt *Runtime) {
 			}
 			count++
 			if count == want {
-				L.Push(lua.LString(rt.gameplay.Catalog[chain].Name))
-				L.Push(lua.LBool(rt.gameplay.Known[chain]))
+				info, found := rt.gameplay.Catalog[chain]
+				name := info.Name
+				if info.Rank != "" {
+					name += " (" + info.Rank + ")"
+				}
+				if name == "" {
+					L.Push(lua.LNil)
+				} else {
+					L.Push(lua.LString(name))
+				}
+				// A requirement is met by the spell itself or by a later rank of it.
+				if !found || rt.gameplay.Known[chain] || rt.hasHigherKnownRank(chain, info) {
+					L.Push(lua.LNumber(1))
+				} else {
+					L.Push(lua.LNil)
+				}
 				return 2
 			}
 		}
@@ -348,5 +373,12 @@ func registerTrainerAPI(rt *Runtime) {
 		L.Push(lua.LBool(rt.trainer.filter[L.CheckString(1)]))
 		return 1
 	})
-	reg("CheckTalentMasterDist", func(L *lua.LState) int { L.Push(lua.LTrue); return 1 })
+	reg("CheckTalentMasterDist", func(L *lua.LState) int {
+		if rt.nearNPC(rt.serverText.trainer) {
+			L.Push(lua.LNumber(1))
+		} else {
+			L.Push(lua.LNil)
+		}
+		return 1
+	})
 }

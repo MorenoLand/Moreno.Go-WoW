@@ -9,8 +9,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	rdebug "runtime/debug"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -248,6 +248,9 @@ func (h *clientHost) CancelCast(id uint32) error {
 }
 
 func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, lastCharacter, configPath string, savedOptions config.Options, debug, rememberMe bool) {
+	if dataPath != "" {
+		world.ConfigureQueryCache(filepath.Dir(dataPath), clientConfig.Locale)
+	}
 	startWidth, startHeight := savedOptions.WindowSize()
 	window.MultisampleSamples = savedOptions.MultisampleSamples()
 	if err := window.Init(startWidth, startHeight, "MorenoWoW"); err != nil {
@@ -673,6 +676,9 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 		uiEngine.UserAddOns = savedOptions.Addons
 		defer uiEngine.Close()
 		uiEngine.Rt.Host = host
+		if wtf := config.ConfigWTFPath(dataPath); wtf != "" {
+			uiEngine.Rt.SetWTFRoot(filepath.Dir(wtf))
+		}
 		uiEngine.Rt.PortraitSource = worldPortraitState.source
 		if audio, audioErr := newAudioManager(uiEngine.AssetLoader, debug); audioErr != nil {
 			if debug {
@@ -1500,9 +1506,10 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 				if own := worldEntities[worldCharacter.GUID]; own != nil && worldStreamer != nil {
 					flags := own.movement.MovementFlags
 					uiEngine.Rt.SetPlayerMotion(ui.PlayerMotion{
-						Swimming: flags&world.MovementFlagSwimming != 0,
-						Flying:   flags&world.MovementFlagFlying != 0,
-						Indoors:  worldStreamer.collision.indoorAt(worldCamera.position[0], worldCamera.position[1], worldCamera.position[2]),
+						Swimming:     flags&world.MovementFlagSwimming != 0,
+						Flying:       flags&world.MovementFlagFlying != 0,
+						WaterWalking: flags&0x10000000 != 0,
+						Indoors:      worldStreamer.collision.indoorAt(worldCamera.position[0], worldCamera.position[1], worldCamera.position[2]),
 					})
 				}
 				worldLightChecksLeft, worldSkinBudget = 6, 24
@@ -1855,8 +1862,14 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					uiEngine.Rt.SetSpellIcons(loadSpellIcons(uiEngine.AssetLoader))
 					uiEngine.Rt.SetEnchantNames(loadEnchantNames(uiEngine.AssetLoader))
 					uiEngine.Rt.SetSoulboundEnchants(loadSoulboundEnchants(uiEngine.AssetLoader))
+					uiEngine.Rt.SetEnchantGems(loadEnchantGems(uiEngine.AssetLoader))
 					uiEngine.Rt.SetExtendedCosts(loadExtendedCosts(uiEngine.AssetLoader))
 					uiEngine.Rt.SetMapIconScales(loadMapIconScales(uiEngine.AssetLoader))
+					uiEngine.Rt.SetAreaPOIs(loadAreaPOIs(uiEngine.AssetLoader))
+					uiEngine.Rt.SetShapeshiftBars(loadShapeshiftBars(uiEngine.AssetLoader))
+					uiEngine.Rt.SetSkillAbilities(loadSkillAbilities(uiEngine.AssetLoader))
+					uiEngine.Rt.SetRelicClasses(loadRelicClasses(uiEngine.AssetLoader))
+					uiEngine.Rt.SetUnitRelations(&worldRelations{rt: uiEngine.Rt, entities: func() map[uint64]*worldEntity { return worldEntities }, factions: func() *worldFactions { return worldFactionState }, names: func() *worldNames { return worldNameState }, own: func() uint64 { return worldCharacter.GUID }})
 					uiEngine.Rt.SetBarberTables(loadBarberTables(uiEngine.AssetLoader))
 					uiEngine.Rt.SetStationery(loadStationery(uiEngine.AssetLoader))
 					uiEngine.Rt.SetCalendarHolidays(loadCalendarHolidays(uiEngine.AssetLoader))
@@ -1882,6 +1895,14 @@ func Run(clientConfig network.Config, dataPath, interfacePath, backgroundPath, l
 					uiEngine.Rt.SetVehicleTables(loadVehicleTables(uiEngine.AssetLoader))
 					uiEngine.Rt.SetSocketTables(loadSocketTables(uiEngine.AssetLoader))
 					uiEngine.Rt.SetPageMaterials(loadPageMaterials(uiEngine.AssetLoader))
+					uiEngine.Rt.SetObjectInfo(func(guid uint64) (uint8, [24]uint32, bool) {
+						entity := worldEntities[guid]
+						if entity == nil {
+							return 0, [24]uint32{}, false
+						}
+						data, found := worldNameState.objectData[entity.fields[objectEntryField]]
+						return uint8(entity.fields[gameObjectBytes1Field] >> 8), data, found
+					})
 					uiEngine.Rt.SetGameObjectText(func(guid uint64) (uint32, uint32, string, bool) {
 						entity := worldEntities[guid]
 						if entity == nil {

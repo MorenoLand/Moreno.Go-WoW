@@ -199,6 +199,8 @@ func (rt *Runtime) handleArenaPacket(packet world.Packet) bool {
 	switch packet.Opcode {
 	case world.ArenaTeamQueryResponse:
 		if info, err := world.ParseArenaTeamQuery(packet.Body); err == nil {
+			rt.rememberArenaTeam(info)
+			rt.FireEvent("INSPECT_HONOR_UPDATE")
 			if slot := rt.arenaSlotOf(info.ID); slot >= 0 {
 				a.teams[slot].info, a.teams[slot].known = info, true
 				rt.FireEvent("ARENA_TEAM_UPDATE")

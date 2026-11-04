@@ -24,28 +24,43 @@ func (e ScriptError) Error() string { return e.Source + ": " + e.Message }
 type Runtime struct {
 	// PortraitSource returns the portrait rendered from a creature display's model,
 	// or nil while it is not ready (asking for it queues it).
-	PortraitSource   func(displayID uint32) image.Image
-	area             areaState
-	skills           skillState
-	factions         factionState
-	social           socialState
-	recentTalk       []string
-	arenaOpponents   int
-	creatureFlags    map[uint32]uint32
+	PortraitSource    func(displayID uint32) image.Image
+	area              areaState
+	skills            skillState
+	factions          factionState
+	social            socialState
+	recentTalk        []string
+	arenaOpponents    int
+	creatureFlags     map[uint32]uint32
 	soulboundEnchants map[uint32]bool
+	enchantGems       map[uint32]uint32
+	areaPOIs          []AreaPOI
+	optOutOfLoot      bool
+	alerts            [12]int
+	shapeshiftBars    map[uint32]ShapeshiftBar
+	relations         UnitRelations
+	diff              difficultyState
+	relicClasses      map[uint32]bool
+	inspectPVP        inspectPVPState
+	objectInfo        func(guid uint64) (uint8, [24]uint32, bool)
+	skillAbilities    map[uint32][]SkillAbility
+	saved             savedVariables
+	forcedReactions   map[uint32]int
 	mapIconScales     map[uint32]float32
-	multiSell        multiSell
-	talents          talentState
-	loot             lootState
-	death            deathState
-	gossip           gossipState
-	merchant         merchantState
-	mail             mailState
-	guildBank        guildBankState
-	macroIcons       []string
+	refund            refundState
+	mailLock          bool
+	multiSell         multiSell
+	talents           talentState
+	loot              lootState
+	death             deathState
+	gossip            gossipState
+	merchant          merchantState
+	mail              mailState
+	guildBank         guildBankState
+	macroIcons        []string
 	// stubAPI names the C-API functions that only answer as the client does with
 	// none of the feature behind them.
-	stubAPI map[string]bool
+	stubAPI          map[string]bool
 	unitDistance     func(guid uint64) (float64, bool)
 	tradeSkill       tradeSkillState
 	auction          auctionState
@@ -121,8 +136,8 @@ type Runtime struct {
 	pvpTimerAt time.Time
 	// UnitRaceOfGUID gives the race of a player the world has loaded.
 	UnitRaceOfGUID func(guid uint64) (race uint8, ok bool)
-	cursorMoney      moneyCursor
-	instanceLock     instanceLock
+	cursorMoney    moneyCursor
+	instanceLock   instanceLock
 	// CreatureFamilyOf looks up the beast family of a creature entry in the
 	// creature cache, asking the server for it the first time.
 	CreatureFamilyOf func(entry uint32) (family uint32, ok bool)
@@ -221,12 +236,19 @@ type Runtime struct {
 	measureText func(w *widget)
 	// layoutOf resolves a widget's rectangle in UI units on demand.
 	layoutOf func(w *widget) (Rect, bool)
+	// cursorUnits is where the cursor is, in UI units from the bottom left.
+	cursorUnits func() (x, y float64)
+	frameDrag   frameDrag
+	widgetSeq   int
 
 	// validateMovie probes a cinematic path the way native StartMovie does.
 	validateMovie func(file string, volume float64) bool
 
-	loadAddOn    func(name string) (bool, string)
-	loadedAddOns map[string]bool
+	loadAddOn       func(name string) (bool, string)
+	loadedAddOns    map[string]bool
+	addonMemory     map[string]float64
+	cinematicStopAt time.Time
+	hasControl bool
 
 	traceInvocations []string
 
@@ -437,6 +459,31 @@ func NewRuntime(host Host) *Runtime {
 	registerAuctionSellAPI(rt)
 	registerMerchantCursorAPI(rt)
 	registerMapIconScaleAPI(rt)
+	registerRefundAPI(rt)
+	registerQuestLogRewardsAPI(rt)
+	registerQuestDropsAPI(rt)
+	registerDeathExtraAPI(rt)
+	registerSpellBenefitAPI(rt)
+	registerGemsAPI(rt)
+	registerLandmarkAPI(rt)
+	registerClickLandmarkAPI(rt)
+	registerSavedVariablesAPI(rt)
+	registerBindingFilesAPI(rt)
+	registerAddOnUsageAPI(rt)
+	registerVoiceOffAPI(rt)
+	registerVideoDefaultsAPI(rt)
+	registerCinematicAPI(rt)
+	registerMiniWorldMapArrow(rt)
+	registerMailInvoiceAPI(rt)
+	registerQuestShareAPI(rt)
+	registerBonusBarAPI(rt)
+	registerRelationsAPI(rt)
+	registerBattlegroundUnitAPI(rt)
+	registerDifficultyAPI(rt)
+	registerEquipSlotsAPI(rt)
+	registerInspectPVPAPI(rt)
+	registerQuestMaterialAPI(rt)
+	registerSpellCanTargetItemAPI(rt)
 	registerBarberAPI(rt)
 	registerTabardAPI(rt)
 	registerEquipmentCursorAPI(rt)
@@ -535,31 +582,31 @@ func (rt *Runtime) setText(w *widget, text string) {
 	w.selectionAnchor = w.cursor
 	rt.fireCursorChanged(w)
 	rt.fire(w, "OnTextChanged", []lua.LValue{w.luaValue(rt.L), lua.LBool(true)})
-	}
+}
 
-	// editLineHeight is the height of a line of an edit box, in its units.
-	const editLineHeight = 14
+// editLineHeight is the height of a line of an edit box, in its units.
+const editLineHeight = 14
 
-	// fireCursorChanged tells an edit box's script where its cursor is: the
-	// offset from the top left (up is positive, so lines below are negative) and
-	// the size of the cursor.
-	func (rt *Runtime) fireCursorChanged(w *widget) {
-		if w.kind != kindEditBox {
-			return
-		}
-		text := []rune(w.text)
-		cursor := min(max(w.cursor, 0), len(text))
-		line, lineStart := 0, 0
-		for index := 0; index < cursor; index++ {
-			if text[index] == '\n' {
-				line++
-				lineStart = index + 1
-			}
-		}
-		x := float64(cursor-lineStart) * editLineHeight / 2
-		y := -float64(line) * editLineHeight
-		rt.fire(w, "OnCursorChanged", []lua.LValue{w.luaValue(rt.L), lua.LNumber(x), lua.LNumber(y), lua.LNumber(0), lua.LNumber(editLineHeight)})
+// fireCursorChanged tells an edit box's script where its cursor is: the
+// offset from the top left (up is positive, so lines below are negative) and
+// the size of the cursor.
+func (rt *Runtime) fireCursorChanged(w *widget) {
+	if w.kind != kindEditBox {
+		return
 	}
+	text := []rune(w.text)
+	cursor := min(max(w.cursor, 0), len(text))
+	line, lineStart := 0, 0
+	for index := 0; index < cursor; index++ {
+		if text[index] == '\n' {
+			line++
+			lineStart = index + 1
+		}
+	}
+	x := float64(cursor-lineStart) * editLineHeight / 2
+	y := -float64(line) * editLineHeight
+	rt.fire(w, "OnCursorChanged", []lua.LValue{w.luaValue(rt.L), lua.LNumber(x), lua.LNumber(y), lua.LNumber(0), lua.LNumber(editLineHeight)})
+}
 
 // ScriptErrors returns the script failures recorded so far.
 func (rt *Runtime) ScriptErrors() []ScriptError { return rt.scriptErrors }
@@ -573,6 +620,10 @@ func (rt *Runtime) lookup(name string) *widget { return rt.widgets[name] }
 
 func (rt *Runtime) register(w *widget) {
 	if w.name != "" {
+		if w.seq == 0 {
+			rt.widgetSeq++
+			w.seq = rt.widgetSeq
+		}
 		rt.widgets[w.name] = w
 		if w.luaObj == nil {
 			rt.L.SetGlobal(w.name, w.luaValue(rt.L))
@@ -747,6 +798,9 @@ func (rt *Runtime) unregisterEventWidget(event string, w *widget) {
 // event name and payload after the widget argument, matching the OnEvent
 // calling convention the interface scripts expect.
 func (rt *Runtime) FireEvent(event string, payload ...lua.LValue) int {
+	if event == "PLAYER_LOGOUT" {
+		defer rt.saveVariables()
+	}
 	count := 0
 	for _, w := range append([]*widget(nil), rt.events[event]...) {
 		args := make([]lua.LValue, 0, len(payload)+2)

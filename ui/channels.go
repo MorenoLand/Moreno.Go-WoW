@@ -47,6 +47,8 @@ type channelState struct {
 	slots    [maxChatChannels]*chatChannel
 	started  bool
 	selected int
+	// collapsed is which of the groups of the channel pane are closed.
+	collapsed [3]bool
 	lineID   int
 	// defaults is the bit mask of the rows joined on entering the world.
 	defaults uint32

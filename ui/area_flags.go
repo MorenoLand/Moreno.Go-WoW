@@ -8,6 +8,23 @@ const (
 	areaFlagHearthResurrect = 0x8000000
 )
 
+// areaFlagFlyable and areaFlagNoFlying are the area flags that decide whether
+// the character may fly where they stand.
+const (
+	areaFlagFlyable  = 0x400
+	areaFlagNoFlying = 0x20000000
+)
+
+// flyableArea is whether flying is allowed in the zone, or the sub zone when the
+// zone says nothing.
+func (rt *Runtime) flyableArea() bool {
+	flags := rt.area.zoneFlags
+	if flags == 0 {
+		flags = rt.area.subZoneFlags
+	}
+	return flags&areaFlagFlyable != 0 && flags&areaFlagNoFlying == 0
+}
+
 // SetAreaFlags records the AreaTable flags of the zone and the sub zone the
 // player is in.
 func (rt *Runtime) SetAreaFlags(zone, subZone uint32) {

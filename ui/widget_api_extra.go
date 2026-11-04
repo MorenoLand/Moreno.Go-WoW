@@ -169,10 +169,14 @@ func (rt *Runtime) extraWidgetMethods() map[string]func(L *lua.LState, w *widget
 			return 0
 		},
 		"GetClampRectInsets": func(L *lua.LState, w *widget) int {
-			for range 4 {
-				L.Push(lua.LNumber(0))
+			for _, inset := range w.clampInsets {
+				L.Push(lua.LNumber(inset))
 			}
 			return 4
+		},
+		"SetClampRectInsets": func(L *lua.LState, w *widget) int {
+			w.clampInsets = [4]float64{float64(L.CheckNumber(2)), float64(L.CheckNumber(3)), float64(L.CheckNumber(4)), float64(L.CheckNumber(5))}
+			return 0
 		},
 		"Lower": func(L *lua.LState, w *widget) int {
 			if w.parent != nil {
@@ -207,7 +211,6 @@ func (rt *Runtime) extraWidgetMethods() map[string]func(L *lua.LState, w *widget
 			_, ok := w.scripts[L.CheckString(2)]
 			return pushBool(L, ok)
 		},
-		"StartSizing":       noop,
 		"EnableDrawLayer":   noop,
 		"DisableDrawLayer":  noop,
 		"CreateTitleRegion": func(L *lua.LState, w *widget) int { return pushWidget(L, newWidget(kindFrame, "")) },

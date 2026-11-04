@@ -21,15 +21,37 @@ func readWorldMapCatalog(loader *ui.Loader) (*ui.MapCatalog, error) {
 	catalog := &ui.MapCatalog{AreaNames: make(map[uint32]string), AreaBits: make(map[uint32]uint32)}
 	for row := 0; row < pages.records; row++ {
 		catalog.Pages = append(catalog.Pages, ui.MapPage{
-			ID:        pages.value(row, 0),
-			MapID:     pages.value(row, 1),
-			AreaID:    pages.value(row, 2),
-			Directory: pages.string(row, 3),
-			YMax:      math.Float32frombits(pages.value(row, 4)),
-			YMin:      math.Float32frombits(pages.value(row, 5)),
-			XMax:      math.Float32frombits(pages.value(row, 6)),
-			XMin:      math.Float32frombits(pages.value(row, 7)),
+			ID:           pages.value(row, 0),
+			MapID:        pages.value(row, 1),
+			AreaID:       pages.value(row, 2),
+			Directory:    pages.string(row, 3),
+			DisplayMapID: displayMap(pages, row),
+			DefaultFloor: defaultFloor(pages, row),
+			YMax:         math.Float32frombits(pages.value(row, 4)),
+			YMin:         math.Float32frombits(pages.value(row, 5)),
+			XMax:         math.Float32frombits(pages.value(row, 6)),
+			XMin:         math.Float32frombits(pages.value(row, 7)),
 		})
+	}
+	catalog.ContinentPlaces = make(map[uint32]ui.ContinentPlace)
+	if places, err := loadCharacterDBC(loader, `DBFilesClient\WorldMapContinent.dbc`); err == nil && places.fields >= 9 {
+		for row := 0; row < places.records; row++ {
+			catalog.ContinentPlaces[places.value(row, 1)] = ui.ContinentPlace{
+				OffsetX: math.Float32frombits(places.value(row, 6)), OffsetY: math.Float32frombits(places.value(row, 7)), Scale: math.Float32frombits(places.value(row, 8))}
+		}
+	}
+	if moves, err := loadCharacterDBC(loader, `DBFilesClient\WorldMapTransforms.dbc`); err == nil && moves.fields >= 9 {
+		for row := 0; row < moves.records; row++ {
+			catalog.Transforms = append(catalog.Transforms, ui.MapTransform{
+				MapID: moves.value(row, 1), MinX: math.Float32frombits(moves.value(row, 2)), MinY: math.Float32frombits(moves.value(row, 3)),
+				MaxX: math.Float32frombits(moves.value(row, 4)), MaxY: math.Float32frombits(moves.value(row, 5)), NewMapID: moves.value(row, 6),
+				OffsetX: math.Float32frombits(moves.value(row, 7)), OffsetY: math.Float32frombits(moves.value(row, 8))})
+		}
+	}
+	if floors, err := loadCharacterDBC(loader, `DBFilesClient\DungeonMap.dbc`); err == nil && floors.fields >= 3 {
+		for row := 0; row < floors.records; row++ {
+			catalog.DungeonFloors = append(catalog.DungeonFloors, ui.DungeonFloor{ID: floors.value(row, 0), MapID: floors.value(row, 1), Floor: int(floors.value(row, 2))})
+		}
 	}
 	if overlays, err := loadCharacterDBC(loader, `DBFilesClient\WorldMapOverlay.dbc`); err == nil && overlays.fields >= 17 {
 		for row := 0; row < overlays.records; row++ {
@@ -64,8 +86,10 @@ func readWorldMapCatalog(loader *ui.Loader) (*ui.MapCatalog, error) {
 		names := make(map[uint32]string)
 		catalog.MapNames = names
 		catalog.MapTypes = make(map[uint32]uint32)
+		catalog.MapFlags = make(map[uint32]uint32)
 		for row := 0; row < maps.records; row++ {
 			catalog.MapTypes[maps.value(row, 0)] = maps.value(row, 2)
+			catalog.MapFlags[maps.value(row, 0)] = maps.value(row, 3)
 		}
 		for row := 0; row < maps.records; row++ {
 			names[maps.value(row, 0)] = maps.string(row, 5)
@@ -76,4 +100,23 @@ func readWorldMapCatalog(loader *ui.Loader) (*ui.MapCatalog, error) {
 		}
 	}
 	return catalog, nil
+}
+
+// displayMap is the display map of a world map page, all ones when the table
+// has no such column.
+func displayMap(table charSectionsTable, row int) uint32 {
+	if table.fields > 8 {
+		return table.value(row, 8)
+	}
+	return 0xFFFFFFFF
+}
+
+// defaultFloor is the floor map a world map page shows first.
+func defaultFloor(table charSectionsTable, row int) uint32 {
+	if table.fields > 9 {
+		if floor := int32(table.value(row, 9)); floor > 0 {
+			return uint32(floor)
+		}
+	}
+	return 0
 }

@@ -37,39 +37,76 @@ var channelOnlyCommands = []struct {
 	{"DeclineInvite", 0x0410},
 }
 
-// channelDisplay is one line of the list the channel pane shows: a header, or
-// a channel of the character's.
+// What a line of the channel pane stands for.
+const (
+	channelLineChannel = iota
+	channelLineParty
+	channelLineRaid
+	channelLineBattleground
+)
+
+// The three groups of channels the pane lists.
+const (
+	channelCategoryGroup = iota
+	channelCategoryWorld
+	channelCategoryCustom
+)
+
+var channelCategoryNames = [...]string{"CHANNEL_CATEGORY_GROUP", "CHANNEL_CATEGORY_WORLD", "CHANNEL_CATEGORY_CUSTOM"}
+
+// channelDisplay is one line of the list the channel pane shows: a header, a
+// line of the group chats, or a channel of the character's.
 type channelDisplay struct {
 	header   bool
-	category string
+	category int
+	kind     int
 	channel  *chatChannel
+	// count is how many lines a header holds, or members a group chat has.
+	count int
+	world bool
 }
 
-// displayChannels builds the lines of the channel pane: the channels of the
-// world, then the ones the character made.
+// displayChannels builds the lines of the channel pane: the group chats, the
+// channels of the world, then the ones the character made.
 func (rt *Runtime) displayChannels() []channelDisplay {
-	var world, custom []*chatChannel
-	for _, channel := range rt.channels.slots {
-		if channel == nil || !channel.joined || channel.left {
-			continue
-		}
-		if channel.id != 0 {
-			world = append(world, channel)
-		} else {
-			custom = append(custom, channel)
-		}
-	}
+	collapsed := &rt.channels.collapsed
+	party := rt.group.in && len(rt.group.members) > 0 && !rt.isRaid()
+	raid := rt.isRaid()
+	battleground := raid && rt.inPVPInstance()
 	var lines []channelDisplay
-	if len(world) > 0 {
-		lines = append(lines, channelDisplay{header: true, category: "CHANNEL_CATEGORY_WORLD"})
-		for _, channel := range world {
-			lines = append(lines, channelDisplay{channel: channel})
-		}
+	group := channelDisplay{header: true, category: channelCategoryGroup}
+	var groupLines []channelDisplay
+	switch {
+	case raid:
+		groupLines = append(groupLines, channelDisplay{kind: channelLineRaid, category: channelCategoryGroup, count: len(rt.group.members) + 1})
+	case party:
+		groupLines = append(groupLines, channelDisplay{kind: channelLineParty, category: channelCategoryGroup, count: len(rt.group.members) + 1})
 	}
-	if len(custom) > 0 {
-		lines = append(lines, channelDisplay{header: true, category: "CHANNEL_CATEGORY_CUSTOM"})
-		for _, channel := range custom {
-			lines = append(lines, channelDisplay{channel: channel})
+	if battleground {
+		groupLines = append(groupLines, channelDisplay{kind: channelLineBattleground, category: channelCategoryGroup, count: len(rt.group.members) + 1})
+	}
+	group.count = len(groupLines)
+	lines = append(lines, group)
+	if !collapsed[channelCategoryGroup] {
+		lines = append(lines, groupLines...)
+	}
+	for category := channelCategoryWorld; category <= channelCategoryCustom; category++ {
+		header := channelDisplay{header: true, category: category}
+		var children []channelDisplay
+		for _, channel := range rt.channels.slots {
+			if channel == nil || !channel.joined || channel.left {
+				continue
+			}
+			isWorld := channel.id != 0
+			if isWorld != (category == channelCategoryWorld) {
+				continue
+			}
+			children = append(children, channelDisplay{channel: channel, category: category, world: isWorld, count: len(channel.members)})
+		}
+		header.count = len(children)
+		lines = append(lines, header)
+		if !collapsed[category] {
+			lines = append(lines, children...)
 		}
 	}
 	return lines
@@ -211,20 +248,51 @@ func registerChannelAPI(rt *Runtime) {
 		return 1
 	})
 	reg("GetChannelDisplayInfo", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTNumber {
+			L.RaiseError("Usage: GetChannelDisplayInfo(index)")
+			return 0
+		}
 		lines := rt.displayChannels()
 		index := L.CheckInt(1)
 		if index < 1 || index > len(lines) {
 			return 0
 		}
 		line := lines[index-1]
+		counted := func() lua.LValue {
+			if line.count == 0 {
+				return lua.LNil
+			}
+			return lua.LNumber(line.count)
+		}
+		yes := func(held bool) lua.LValue {
+			if held {
+				return lua.LNumber(1)
+			}
+			return lua.LNil
+		}
 		if line.header {
-			L.Push(lua.LString(rt.globalString(line.category, line.category)))
+			L.Push(lua.LString(rt.globalString(channelCategoryNames[line.category], channelCategoryNames[line.category])))
 			L.Push(lua.LNumber(1))
+			L.Push(yes(rt.channels.collapsed[line.category]))
 			L.Push(lua.LNil)
-			L.Push(lua.LNil)
-			for range 5 {
+			L.Push(counted())
+			for range 4 {
 				L.Push(lua.LNil)
 			}
+			return 9
+		}
+		selected := index == rt.channels.selected
+		if line.kind != channelLineChannel {
+			name := map[int]string{channelLineParty: "CHAT_MSG_PARTY", channelLineRaid: "CHAT_MSG_RAID", channelLineBattleground: "CHAT_MSG_BATTLEGROUND"}[line.kind]
+			L.Push(lua.LString(rt.globalString(name, name)))
+			L.Push(lua.LNil)
+			L.Push(lua.LNil)
+			L.Push(lua.LNil)
+			L.Push(counted())
+			L.Push(yes(true))
+			L.Push(lua.LString(rt.globalString(channelCategoryNames[channelCategoryGroup], channelCategoryNames[channelCategoryGroup])))
+			L.Push(yes(false))
+			L.Push(yes(selected))
 			return 9
 		}
 		channel := line.channel
@@ -232,11 +300,11 @@ func registerChannelAPI(rt *Runtime) {
 		L.Push(lua.LNil)
 		L.Push(lua.LNil)
 		L.Push(lua.LNumber(channel.index))
-		L.Push(lua.LNil)
-		L.Push(lua.LNil)
-		L.Push(lua.LNil)
-		L.Push(lua.LNil)
-		L.Push(lua.LNil)
+		L.Push(counted())
+		L.Push(yes(true))
+		L.Push(lua.LString(rt.globalString(channelCategoryNames[line.category], channelCategoryNames[line.category])))
+		L.Push(yes(channel.voice))
+		L.Push(yes(selected))
 		return 9
 	})
 	reg("SetSelectedDisplayChannel", func(L *lua.LState) int {
@@ -316,8 +384,22 @@ func registerChannelAPI(rt *Runtime) {
 		L.Push(lua.LNil)
 		return 1
 	})
-	reg("ExpandChannelHeader", func(L *lua.LState) int { return 0 })
-	reg("CollapseChannelHeader", func(L *lua.LState) int { return 0 })
+	// Opening or closing the header of a group of channels.
+	fold := func(name string, collapse bool) {
+		reg(name, func(L *lua.LState) int {
+			if L.Get(1).Type() != lua.LTNumber {
+				return 0
+			}
+			lines := rt.displayChannels()
+			if index := L.CheckInt(1); index >= 1 && index <= len(lines) && lines[index-1].header {
+				rt.channels.collapsed[lines[index-1].category] = collapse
+				rt.FireEvent("CHANNEL_UI_UPDATE")
+			}
+			return 0
+		})
+	}
+	fold("ExpandChannelHeader", false)
+	fold("CollapseChannelHeader", true)
 }
 
 // playerName is the character's name.

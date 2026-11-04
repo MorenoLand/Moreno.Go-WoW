@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"encoding/binary"
 
 	lua "github.com/yuin/gopher-lua"
 )
@@ -107,24 +106,6 @@ func registerEnchantConfirmAPI(rt *Runtime) {
 		if value, ok := L.Get(1).(lua.LNumber); ok && value == 1 {
 			rt.pendingEnchant = nil
 		}
-		return 0
-	})
-	reg("ContainerRefundItemPurchase", func(L *lua.LState) int {
-		if L.Get(1).Type() != lua.LTNumber || L.Get(2).Type() != lua.LTNumber {
-			L.RaiseError("Usage: ContainerRefundItemPurchase(index, slot[, isEquipped])")
-			return 0
-		}
-		var item *ItemInstance
-		if L.OptInt(3, 0) != 0 {
-			item = rt.equippedItem(L.CheckInt(2))
-		} else {
-			item = rt.bagItem(L.CheckInt(1), L.CheckInt(2))
-		}
-		if item == nil || !rt.merchant.open {
-			rt.ShowGameError(0xc)
-			return 0
-		}
-		rt.send(refundOpcode, binary.LittleEndian.AppendUint64(nil, item.GUID))
 		return 0
 	})
 }

@@ -23,9 +23,13 @@ type lootSlot struct {
 	cleared bool
 }
 
+// lootKindFishing is the kind of loot a fishing line brings in.
+const lootKindFishing = 3
+
 type lootState struct {
 	open  bool
 	guid  uint64
+	kind  uint8
 	slots []lootSlot
 }
 
@@ -34,7 +38,7 @@ func (rt *Runtime) OpenLoot(loot world.LootContents) {
 	if rt == nil {
 		return
 	}
-	rt.loot = lootState{open: true, guid: loot.GUID}
+	rt.loot = lootState{open: true, guid: loot.GUID, kind: loot.Kind}
 	if loot.Money > 0 {
 		rt.loot.slots = append(rt.loot.slots, lootSlot{coin: true, money: loot.Money})
 	}
@@ -200,6 +204,13 @@ func registerLootAPI(rt *Runtime) {
 		}
 		return 0
 	})
-	reg("IsFishingLoot", func(L *lua.LState) int { L.Push(lua.LFalse); return 1 })
+	reg("IsFishingLoot", func(L *lua.LState) int {
+		if rt.loot.kind == lootKindFishing {
+			L.Push(lua.LNumber(1))
+		} else {
+			L.Push(lua.LNil)
+		}
+		return 1
+	})
 	reg("ConfirmLootSlot", func(L *lua.LState) int { return 0 })
 }

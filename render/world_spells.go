@@ -84,8 +84,8 @@ func readWorldSpellCatalog(loader *ui.Loader) (map[uint32]ui.SpellInfo, map[uint
 	type spellAbility struct{ min, low, high, superseded uint32 }
 	spellAbilities := make(map[uint32]spellAbility)
 	for row := 0; row < abilities.records; row++ {
-	spellSkills[abilities.value(row, 2)] = abilities.value(row, 1)
-	spellAbilities[abilities.value(row, 2)] = spellAbility{min: abilities.value(row, 7), superseded: abilities.value(row, 8), high: abilities.value(row, 10), low: abilities.value(row, 11)}
+		spellSkills[abilities.value(row, 2)] = abilities.value(row, 1)
+		spellAbilities[abilities.value(row, 2)] = spellAbility{min: abilities.value(row, 7), superseded: abilities.value(row, 8), high: abilities.value(row, 10), low: abilities.value(row, 11)}
 	}
 	catalog := make(map[uint32]ui.SpellInfo, spells.records)
 	for row := 0; row < spells.records; row++ {
@@ -116,6 +116,8 @@ func readWorldSpellCatalog(loader *ui.Loader) (map[uint32]ui.SpellInfo, map[uint
 			info.School = spells.value(row, 225)
 		}
 		info.TargetMask = spells.value(row, 18)
+		info.Word16 = spells.value(row, 16)
+		info.EquipClass, info.EquipSubClassMask, info.EquipInvMask = int32(spells.value(row, 68)), spells.value(row, 69), spells.value(row, 70)
 		info.CategoryCooldownMS = int(spells.value(row, 30))
 		for effect := 0; effect < 3; effect++ {
 			info.Effects[effect] = ui.SpellEffectInfo{
@@ -134,10 +136,10 @@ func readWorldSpellCatalog(loader *ui.Loader) (map[uint32]ui.SpellInfo, map[uint
 			}
 		}
 		for reagent := 0; reagent < 8; reagent++ {
-		info.Reagents[reagent] = ui.SpellReagent{Item: spells.value(row, 52+reagent), Count: spells.value(row, 60+reagent)}
+			info.Reagents[reagent] = ui.SpellReagent{Item: spells.value(row, 52+reagent), Count: spells.value(row, 60+reagent)}
 		}
 		for effect := 0; effect < 3; effect++ {
-		info.Created[effect] = spells.value(row, 107+effect)
+			info.Created[effect] = spells.value(row, 107+effect)
 		}
 		info.Tools = [2]uint32{spells.value(row, 50), spells.value(row, 51)}
 		ability := spellAbilities[id]
@@ -187,17 +189,61 @@ func applyWorldSpellPacket(rt *ui.Runtime, packet world.Packet, playerGUID uint6
 			if packet.Opcode == world.SpellStart {
 				rt.StartSpellCast(cast)
 			} else {
-				rt.StopSpellCast(cast.SpellID, cast.Count, false)
+				rt.StopSpellCast(cast.SpellID, cast.Count, false, 0)
 			}
 		}
 	case world.CastFailed:
 		if len(packet.Body) < 6 {
 			return true, fmt.Errorf("SMSG_CAST_FAILED is truncated")
 		}
-		rt.StopSpellCast(binary.LittleEndian.Uint32(packet.Body[1:5]), packet.Body[0], true)
+		rt.StopSpellCast(binary.LittleEndian.Uint32(packet.Body[1:5]), packet.Body[0], true, packet.Body[5])
 		if len(packet.Body) > 5 {
 			rt.ShowSpellFailure(packet.Body[5], rt.UnitPowerToken("player"))
 		}
+	case spellFailurePacket:
+		r := world.NewReader(packet.Body, "SMSG_SPELL_FAILURE")
+		guid, err := world.ReadPackedGUID(r)
+		if err != nil || guid != playerGUID {
+			return false, nil
+		}
+		count, err := r.U8()
+		if err != nil {
+			return false, nil
+		}
+		spell, err := r.U32()
+		if err != nil {
+			return false, nil
+		}
+		reason, err := r.U8()
+		if err != nil {
+			return false, nil
+		}
+		rt.StopSpellCast(spell, count, true, reason)
+		return false, nil
+	case clientControlPacket:
+		r := world.NewReader(packet.Body, "SMSG_CLIENT_CONTROL_UPDATE")
+		guid, err := world.ReadPackedGUID(r)
+		if err != nil || guid != playerGUID {
+			return false, nil
+		}
+		allowed, err := r.U8()
+		if err != nil {
+			return false, nil
+		}
+		rt.SetPlayerControl(allowed != 0)
+		return false, nil
+	case spellDelayedPacket:
+		r := world.NewReader(packet.Body, "SMSG_SPELL_DELAYED")
+		guid, err := world.ReadPackedGUID(r)
+		if err != nil || guid != playerGUID {
+			return false, nil
+		}
+		delay, err := r.U32()
+		if err != nil {
+			return false, nil
+		}
+		rt.DelaySpellCast(delay)
+		return false, nil
 	case world.InitialSpells:
 		initial, err := world.ParseInitialSpells(packet.Body)
 		if err != nil {
@@ -229,3 +275,10 @@ func applyWorldSpellPacket(rt *ui.Runtime, packet world.Packet, playerGUID uint6
 	}
 	return true, nil
 }
+
+// The answers to a cast of the player that was stopped or pushed back.
+const (
+	spellFailurePacket  uint16 = 0x0133
+	spellDelayedPacket  uint16 = 0x01E2
+	clientControlPacket uint16 = 0x0159
+)

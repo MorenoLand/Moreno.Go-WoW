@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"strconv"
 	"strings"
 )
 
@@ -116,6 +115,37 @@ func (rt *Runtime) unitFor(token string) *UnitInfo {
 	return rt.unitInfo(token)
 }
 
+// argumentNumber is the number an argument starts with, as the original reads
+// the digits of the first word.
+func argumentNumber(argument string) int {
+	number := 0
+	for _, r := range argument {
+		if r < '0' || r > '9' {
+			break
+		}
+		number = number*10 + int(r-'0')
+	}
+	return number
+}
+
+// flagCondition answers a plain yes or no condition: with no argument it is
+// whether the thing holds, with one it is whether that equals the number given.
+func flagCondition(held bool, argument string) bool {
+	if argument == "" {
+		return held
+	}
+	want := 0
+	if held {
+		want = 1
+	}
+	return want == argumentNumber(argument)
+}
+
+// numberIn is whether one of the slash separated numbers is the value.
+func numberIn(argument string, value int) bool {
+	return listHas(argument, func(item string) bool { return argumentNumber(item) == value })
+}
+
 // condition evaluates one macro condition; known is false for a name that is not
 // one.
 func (rt *Runtime) condition(name, argument, target string) (held bool, known bool) {
@@ -123,23 +153,23 @@ func (rt *Runtime) condition(name, argument, target string) (held bool, known bo
 	unit := rt.unitFor(target)
 	switch name {
 	case "exists":
-		return unit != nil && unit.Exists, true
+		return flagCondition(unit != nil && unit.Exists, argument), true
 	case "dead":
-		return unit != nil && unit.Exists && unit.Dead, true
+		return flagCondition(rt.unitSeenDead(unit, player), argument), true
 	case "harm":
-		return unit != nil && unit.Exists && unit.Hostile, true
+		return flagCondition(rt.macroRelation(player, unit, true), argument), true
 	case "help":
-		return unit != nil && unit.Exists && !unit.Hostile, true
+		return flagCondition(rt.macroRelation(player, unit, false), argument), true
 	case "party":
-		return unit != nil && unit.Exists && rt.inPartyUnit(unit), true
+		return flagCondition(unit != nil && unit.Exists && rt.inPartyUnit(unit), argument), true
 	case "raid":
-		return unit != nil && unit.Exists && rt.inRaidUnit(unit), true
+		return flagCondition(unit != nil && unit.Exists && (rt.inPartyUnit(unit) || rt.inRaidUnit(unit)), argument), true
 	case "combat":
-		return player != nil && player.InCombat, true
+		return flagCondition((player != nil && player.InCombat) || (unit != nil && unit.Exists && unit.InCombat), argument), true
 	case "mounted":
-		return player != nil && player.Mounted, true
+		return flagCondition(player != nil && player.Mounted && !rt.motion.WaterWalking, argument), true
 	case "stealth":
-		return rt.playerHasAuraType(16), true
+		return flagCondition(rt.playerHasAuraType(16), argument), true
 	case "swimming", "flying", "indoors", "outdoors", "flyable":
 		swimming, flying, indoors := false, false, false
 		if host := rt.controls(); host != nil {
@@ -147,23 +177,29 @@ func (rt *Runtime) condition(name, argument, target string) (held bool, known bo
 		}
 		switch name {
 		case "swimming":
-			return swimming, true
+			return flagCondition(swimming, argument), true
 		case "flying":
-			return flying, true
+			return flagCondition(flying, argument), true
 		case "indoors":
-			return indoors, true
+			return flagCondition(indoors, argument), true
 		case "outdoors":
-			return !indoors, true
+			return flagCondition(!indoors, argument), true
 		}
-		return !indoors, true
+		return flagCondition(rt.flyableArea(), argument), true
 	case "group":
-		switch strings.ToLower(argument) {
-		case "party":
-			return rt.group.in && !rt.isRaid(), true
-		case "raid":
-			return rt.isRaid(), true
+		inParty := rt.group.in && !rt.isRaid()
+		if argument == "" {
+			return rt.group.in, true
 		}
-		return rt.group.in, true
+		return listHas(argument, func(item string) bool {
+			switch strings.ToLower(item) {
+			case "party":
+				return inParty
+			case "raid":
+				return rt.isRaid()
+			}
+			return false
+		}), true
 	case "modifier", "mod":
 		if argument == "" {
 			return rt.modifierDown("SHIFT") || rt.modifierDown("CTRL") || rt.modifierDown("ALT"), true
@@ -178,28 +214,26 @@ func (rt *Runtime) condition(name, argument, target string) (held bool, known bo
 			return true
 		}), true
 	case "button", "btn":
+		if argument == "" {
+			return false, true
+		}
 		button := rt.lastButton
 		numbers := map[string]string{"LeftButton": "1", "RightButton": "2", "MiddleButton": "3", "Button4": "4", "Button5": "5"}
 		return listHas(argument, func(item string) bool {
 			return strings.EqualFold(item, "any") || item == numbers[button]
 		}), true
 	case "actionbar", "bar":
-		number, err := strconv.Atoi(strings.TrimSpace(argument))
-		return err == nil && rt.gameplay.Page == number, true
+		return argument != "" && numberIn(argument, rt.gameplay.Page), true
+	case "bonusbar":
+		return argument != "" && numberIn(argument, rt.bonusBarOffset()), true
 	case "stance", "form":
 		form := rt.shapeshiftForm()
 		if argument == "" {
 			return form != 0, true
 		}
-		return listHas(argument, func(item string) bool {
-			number, err := strconv.Atoi(item)
-			return err == nil && number == form
-		}), true
+		return numberIn(argument, form), true
 	case "spec":
-		return listHas(argument, func(item string) bool {
-			number, err := strconv.Atoi(item)
-			return err == nil && number-1 == rt.talents.active
-		}), true
+		return argument != "" && numberIn(argument, rt.talents.active+1), true
 	case "pet":
 		pet := rt.unitInfo("pet")
 		if pet == nil || !pet.Exists {
@@ -219,11 +253,66 @@ func (rt *Runtime) condition(name, argument, target string) (held bool, known bo
 	case "equipped", "worn":
 		return listHas(argument, rt.equippedType), true
 	case "vehicleui", "unithasvehicleui":
-		return unit != nil && unit.Exists && false, true
-	case "canexitvehicle":
-		return false, true
+		return rt.vehicleUIShown(unit), true
+	case "cursor":
+		kind := rt.cursorKind()
+		if kind == "" {
+			return false, true
+		}
+		return argument == "" || listHas(argument, func(item string) bool {
+			return item != "" && strings.HasPrefix(strings.ToLower(kind), strings.ToLower(item))
+		}), true
 	}
 	return false, false
+}
+
+// unitSeenDead is whether a unit counts as dead: it has no health, or the
+// dead flag is set on a unit that is not the character, or the character is a
+// ghost looking at a player.
+func (rt *Runtime) unitSeenDead(unit, player *UnitInfo) bool {
+	if unit == nil || !unit.Exists {
+		return false
+	}
+	if unit.Health < 1 || unit.Dead {
+		return true
+	}
+	if unit.DynamicFlags&dynamicFlagDead != 0 && unit.GUID != rt.playerGUID() {
+		return true
+	}
+	return unit.Player && player != nil && player.Ghost
+}
+
+// dynamicFlagDead is the dynamic flag of a unit that looks dead.
+const dynamicFlagDead = 0x20
+
+// vehicleUIShown is whether the unit rides a vehicle that comes with its own
+// interface.
+func (rt *Runtime) vehicleUIShown(unit *UnitInfo) bool {
+	if unit == nil || !unit.Exists || unit.GUID != rt.playerGUID() {
+		return false
+	}
+	row := rt.vehicleRowOf(rt.playerVehicle())
+	return row != nil && row.Flags&vehicleFlagUI != 0
+}
+
+// vehicleFlagUI is the vehicle flag that gives the rider the vehicle interface.
+const vehicleFlagUI = 0x20000000
+
+// cursorKind names what the cursor holds, for the cursor condition.
+func (rt *Runtime) cursorKind() string {
+	switch {
+	case rt.inventory.cursor.active:
+		return "item"
+	case rt.gameplay.Cursor.ID != 0 && rt.gameplay.Cursor.Type == actionTypeEquipmentSet:
+		return "equipmentset"
+	case rt.gameplay.Cursor.ID != 0 && rt.gameplay.Cursor.Type == 0:
+		return "spell"
+	case rt.gameplay.Cursor.ID != 0 && rt.gameplay.Cursor.Type == 128:
+		return "item"
+	case rt.gameplay.Cursor.ID != 0 && rt.gameplay.Cursor.Type == 1:
+		return "macro"
+	}
+	return ""
 }
 
 func (rt *Runtime) inPartyUnit(unit *UnitInfo) bool {
@@ -282,4 +371,22 @@ func (rt *Runtime) equippedType(want string) bool {
 		}
 	}
 	return false
+}
+
+// macroRelation is whether the character can attack (or help) a unit, by the
+// objects when they are known and by what the interface was told otherwise.
+func (rt *Runtime) macroRelation(player, unit *UnitInfo, attack bool) bool {
+	if player == nil || unit == nil || !unit.Exists {
+		return false
+	}
+	if rt.relations != nil && player.GUID != 0 && unit.GUID != 0 {
+		if attack {
+			return rt.relations.CanAttack(player.GUID, unit.GUID)
+		}
+		return rt.relations.CanAssist(player.GUID, unit.GUID)
+	}
+	if attack {
+		return unit.Hostile
+	}
+	return !unit.Hostile
 }

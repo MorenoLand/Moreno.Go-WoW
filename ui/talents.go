@@ -273,7 +273,20 @@ func registerTalentAPI(rt *Runtime) {
 	L.Push(lua.LNumber(rt.talents.active + 1))
 	return 1
 	})
-	reg("SetActiveTalentGroup", func(L *lua.LState) int { return 0 })
+	// Switching groups casts the spell that activates the other one.
+	reg("SetActiveTalentGroup", func(L *lua.LState) int {
+		if L.Get(1).Type() != lua.LTNumber {
+			L.RaiseError("Usage: SetActiveTalentGroup(groupIndex)")
+			return 0
+		}
+		group := L.CheckInt(1) - 1
+		if group != rt.talents.active && group >= 0 && group < len(rt.talents.specs) && group < len(talentGroupSpells) {
+			if host, ok := rt.Host.(WorldSpellHost); ok {
+				_ = host.CastSpell(talentGroupSpells[group], 0)
+			}
+		}
+		return 0
+	})
 	reg("UnitCharacterPoints", func(L *lua.LState) int {
 	if unit := L.OptString(1, "player"); !strings.EqualFold(unit, "player") && rt.UnitGUID(unit) == rt.talents.inspectedGUID && rt.talents.inspectedGUID != 0 {
 		L.Push(lua.LNumber(rt.talents.inspectedUnspent))
@@ -351,3 +364,6 @@ func registerTalentAPI(rt *Runtime) {
 		return 1
 	})
 }
+
+// talentGroupSpells are the spells that activate the first and the second talent group.
+var talentGroupSpells = [...]uint32{63645, 63644}

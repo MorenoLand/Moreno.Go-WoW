@@ -114,7 +114,7 @@ func registerWorldAPIDefaults(rt *Runtime) {
 		"CloseGuildRegistrar", "ClosePetition", "ClosePetitionVendor", "CloseItemText", "CloseTaxiMap", "ClickTradeButton",
 		"ClickTargetTradeButton", "ClickStablePet", "PickupStablePet", "PickupMerchantItem", "RepairAllItems", "ShowRepairCursor",
 		"HideRepairCursor", "BuybackItem", "BuyGuildCharter", "BuyPetition", "AcceptTrade", "DropCursorMoney",
-		"ItemTextNextPage", "ItemTextPrevPage", "TakeTaxiNode", "QuestLogPushQuest", "RollOnLoot")
+		"ItemTextNextPage", "ItemTextPrevPage", "TakeTaxiNode", "RollOnLoot")
 
 	// Pets, companions, runes and totems.
 	returns("GetCompanionInfo", lua.LNil)
@@ -303,7 +303,7 @@ func registerWorldMapDefaults(rt *Runtime) {
 		}
 	}
 	for _, name := range []string{"CreateWorldMapArrowFrame", "ShowWorldMapArrowFrame", "PositionWorldMapArrowFrame", "UpdateWorldMapArrowFrames",
-		"InitWorldMapPing", "ClickLandmark", "TeleportToDebugObject", "QuestMapUpdateAllQuests", "QuestPOIUpdateIcons",
+		"InitWorldMapPing", "TeleportToDebugObject", "QuestMapUpdateAllQuests", "QuestPOIUpdateIcons",
 		"GetMapDebugObjectInfo"} {
 		define(name, func(L *lua.LState) int { return 0 })
 	}

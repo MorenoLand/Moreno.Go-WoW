@@ -219,6 +219,7 @@ const (
 	mailErrConjured = 377
 	mailErrBag      = 378
 	mailErrNoSlot   = 584
+	mailErrLocked   = 136
 	mailErrLimited  = 678
 	// templateAccountBound is the item flag that lets a bound item be mailed.
 	templateAccountBound = 0x08000000
@@ -230,6 +231,9 @@ func (rt *Runtime) mailItemError(item *ItemInstance) int {
 	template := rt.itemTemplate(item.Entry)
 	if template == nil {
 		return auctionErrNotFound
+	}
+	if rt.mailLock {
+		return mailErrLocked
 	}
 	if rt.itemBoundToOwner(item, template) {
 		if template.Bonding == itemBondingQuest {
@@ -374,7 +378,6 @@ func registerMailAPI(rt *Runtime) {
 		L.Push(lua.LBool(mail.Kind == world.MailFromAuction))
 		return 4
 	})
-	reg("GetInboxInvoiceInfo", func(L *lua.LState) int { return 0 })
 	reg("GetInboxItem", func(L *lua.LState) int {
 		mail := rt.mailAt(L.CheckInt(1))
 		if mail == nil {
@@ -581,14 +584,32 @@ func registerMailAPI(rt *Runtime) {
 		if rt.clearItemCursor != nil {
 			rt.clearItemCursor()
 		}
+		// An item that can still be taken back to the vendor asks first.
+		if info := rt.refund.info[item.GUID]; info != nil && rt.refundLeft(info) > 0 && !rt.itemHasEnchants(item) {
+			rt.mailLock = true
+			rt.FireEvent("MAIL_LOCK_SEND_ITEMS", numberValue(slot+1), lua.LString(rt.itemLinkFor(item.Entry, 0)))
+		}
 		rt.FireEvent("MAIL_SEND_INFO_UPDATE")
 		return 0
 	})
-	// Answering the question a sent item may raise; nothing raises it yet.
+	// Answering the question an item that could be taken back may raise: keep it
+	// in the mail, or take it out.
 	reg("RespondMailLockSendItem", func(L *lua.LState) int {
 		if L.Get(1).Type() != lua.LTNumber {
 			L.RaiseError("Usage: RespondMailLockSendItem(slot, keepItem)")
+			return 0
 		}
+		if !rt.mailLock {
+			return 0
+		}
+		rt.mailLock = false
+		if !L.ToBool(2) {
+			if slot := L.CheckInt(1) - 1; slot >= 0 && slot < mailAttachmentSlots {
+				state.attached[slot] = mailAttachment{}
+			}
+			rt.FireEvent("MAIL_SEND_INFO_UPDATE")
+		}
+		rt.FireEvent("MAIL_UNLOCK_SEND_ITEMS")
 		return 0
 	})
 	reg("GetSendMailMoney", func(L *lua.LState) int { L.Push(lua.LNumber(state.money)); return 1 })

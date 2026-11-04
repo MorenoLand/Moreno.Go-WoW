@@ -139,3 +139,17 @@ func registerSpellTargetingAPI(rt *Runtime) {
 	reg("SpellIsTargeting", func(L *lua.LState) int { L.Push(lua.LBool(rt.targetingSpell != 0)); return 1 })
 	reg("SpellStopTargeting", func(L *lua.LState) int { rt.StopTargeting(); return 0 })
 }
+
+// spellTargetItemMask is what a spell that waits for an item asks for.
+const spellTargetItemMask = 0x4010
+
+func registerSpellCanTargetItemAPI(rt *Runtime) {
+	rt.L.SetGlobal("SpellCanTargetItem", rt.L.NewFunction(func(L *lua.LState) int {
+		if id := rt.targetingSpell; id != 0 && rt.gameplay.Catalog[id].TargetMask&spellTargetItemMask != 0 {
+			L.Push(lua.LNumber(1))
+		} else {
+			L.Push(lua.LNil)
+		}
+		return 1
+	}))
+}

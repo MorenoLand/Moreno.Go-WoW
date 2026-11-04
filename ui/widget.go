@@ -138,9 +138,13 @@ type widget struct {
 	shown                                bool
 	topLevel                             bool
 	movable                              bool
+	userPlaced                           bool
+	dontSavePosition                     bool
+	seq                                  int
 	enableMouse                          bool
 	enableKeyboard                       bool
 	clampedToScreen                      bool
+	clampInsets                          [4]float64
 	frameStrata                          int
 	frameLevel                           int
 	layerLevel                           int
@@ -1367,13 +1371,8 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 			L.Push(lua.LString(""))
 			return 3
 		},
-		"SetClampRectInsets": func(L *lua.LState, w *widget) int { return 0 },
 		"SetMinResize":       func(L *lua.LState, w *widget) int { return 0 },
 		"SetResizable":       func(L *lua.LState, w *widget) int { return 0 },
-		"StartMoving":        func(L *lua.LState, w *widget) int { return 0 },
-		"StopMovingOrSizing": func(L *lua.LState, w *widget) int { return 0 },
-		"SetUserPlaced":      func(L *lua.LState, w *widget) int { return 0 },
-		"IsUserPlaced":       func(L *lua.LState, w *widget) int { L.Push(lua.LFalse); return 1 },
 		"SetAttribute": func(L *lua.LState, w *widget) int {
 			attribute := L.CheckString(2)
 			value := L.Get(3)
@@ -1780,6 +1779,9 @@ func registerWidgetMethods(L *lua.LState, rt *Runtime) {
 		methods[name] = fn
 	}
 	for name, fn := range rt.tabardMethods() {
+		methods[name] = fn
+	}
+	for name, fn := range rt.layoutMethods() {
 		methods[name] = fn
 	}
 	tooltipMethods := rt.tooltipMethods()
